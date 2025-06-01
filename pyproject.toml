@@ -46,7 +46,7 @@ pypdf2 = "^3.0.0"
 python-docx = "^1.1.0"
 
 # Scientific computing - Compatible with Gradio
-numpy = "^1.0,<3.0"  # Match Gradio's requirement
+numpy = ">=2.0.0,<3.0.0"  # Match Gradio's requirement
 matplotlib = "^3.7.0"
 scipy = "^1.11.0"
 
@@ -63,8 +63,11 @@ openai = {version = "^1.0.0", optional = true}
 anthropic = {version = "^0.7.0", optional = true}
 seaborn = "^0.13.2"
 nbstripout = "^0.8.1"
-faiss-cpu = "^1.11.0"
 sentence-transformers = "^4.1.0"
+weaviate-client = "^4.14.4"
+langchain-weaviate = "^0.0.5"
+langchain-community = "^0.3.24"
+langchain-huggingface = "^0.2.0"
 
 [tool.poetry.group.dev.dependencies]
 # Testing
