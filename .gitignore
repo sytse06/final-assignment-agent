@@ -12,3 +12,7 @@ __pycache__/
 /tests
 /examples
 metadata.json
+# Weaviate embedded files
+weaviate_binary/
+weaviate_data/
+

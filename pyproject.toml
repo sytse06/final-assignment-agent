@@ -27,7 +27,7 @@ python = "^3.10"
 # Core application dependencies
 gradio = "^5.13.2"
 requests = "^2.32.3"
-pandas = "^1.0,<3.0"  # Match Gradio's requirement
+pandas = "^2.0.0"
 python-dotenv = "^1.0.0"
 
 # AI/ML framework - Compatible versions for Gradio 5.x
