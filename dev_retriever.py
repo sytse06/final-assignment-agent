@@ -105,6 +105,16 @@ class DevelopmentGAIARetriever:
                 return None
                 
         except Exception as e:
+            if "already listening" in str(e):
+                print("⚠️  Weaviate already running, connecting to existing instance...")
+                try:
+                    client = weaviate.connect_to_local(port=8080, grpc_port=50051)
+                    if client.is_ready():
+                        print("✅ Connected to existing Weaviate instance")
+                        return client
+                except:
+                    pass
+            
             print(f"❌ Embedded Weaviate error: {e}")
             return None
     
@@ -122,9 +132,9 @@ class DevelopmentGAIARetriever:
             return False
     
     def _load_csv_data(self) -> bool:
-        """Load CSV data into Weaviate"""
+        """Load optimized CSV data into Weaviate"""
         try:
-            print("📂 Loading CSV data...")
+            print("📂 Loading optimized CSV data...")
             
             # Create collection
             if self.client.collections.exists(COLLECTION_NAME):
@@ -140,19 +150,31 @@ class DevelopmentGAIARetriever:
                 vector_index_config=wvcc.Configure.VectorIndex.hnsw(),
             )
             
-            # Load CSV
+            # Load optimized CSV
             df = pd.read_csv(self.csv_file)
             print(f"  ├── Loading {len(df)} documents...")
             
+            import base64
+            import numpy as np
+            
             with collection.batch.dynamic() as batch:
                 for _, row in df.iterrows():
-                    metadata = json.loads(row['metadata'])
-                    embedding_vector = json.loads(row['embedding'])
+                    # Handle both old and new CSV formats
+                    if 'embedding_b64' in row:
+                        # New optimized format
+                        embedding_bytes = base64.b64decode(row['embedding_b64'])
+                        embedding_vector = np.frombuffer(embedding_bytes, dtype=np.float32).tolist()
+                        source = row['source']
+                    else:
+                        # Old format fallback
+                        embedding_vector = json.loads(row['embedding'])
+                        metadata = json.loads(row['metadata'])
+                        source = metadata['source']
                     
                     batch.add_object(
                         properties={
                             "content": row['content'],
-                            "source": metadata['source']
+                            "source": source
                         },
                         vector=embedding_vector
                     )
@@ -163,6 +185,8 @@ class DevelopmentGAIARetriever:
             
         except Exception as e:
             print(f"❌ Failed to load CSV: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def is_ready(self) -> bool:
