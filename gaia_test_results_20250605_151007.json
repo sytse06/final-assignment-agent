@@ -1,0 +1,60 @@
+{
+  "timestamp": "20250605_151007",
+  "single_question_tests": [
+    {
+      "complexity": "Simple",
+      "question": "What is 25 + 17?",
+      "answer": "42",
+      "strategy_used": "smolag_agent",
+      "expected_strategy": "direct_llm",
+      "strategy_correct": false,
+      "execution_time": 8.637998,
+      "similar_examples": 2
+    },
+    {
+      "complexity": "Moderate",
+      "question": "Calculate the compound interest on $1000 at 5% annually for 3 years",
+      "answer": "157.63",
+      "strategy_used": "smolag_agent",
+      "expected_strategy": "smolag_agent",
+      "strategy_correct": true,
+      "execution_time": 13.888595,
+      "similar_examples": 2
+    },
+    {
+      "complexity": "Complex",
+      "question": "Analyze the correlation between these datasets: [1,2,3,4,5] and [2,4,6,8,10]",
+      "answer": "1",
+      "strategy_used": "direct_llm",
+      "expected_strategy": "smolag_agent",
+      "strategy_correct": false,
+      "execution_time": 19.877116,
+      "similar_examples": 2
+    }
+  ],
+  "model_comparison": {},
+  "rag_effectiveness": {
+    "rag_1": {
+      "examples_count": 1,
+      "answer": "7.2",
+      "similar_examples_found": 1,
+      "execution_time": 29.930159,
+      "strategy": "smolag_agent"
+    },
+    "rag_3": {
+      "examples_count": 3,
+      "answer": "7.2",
+      "similar_examples_found": 3,
+      "execution_time": 12.3627,
+      "strategy": "smolag_agent"
+    },
+    "rag_5": {
+      "examples_count": 5,
+      "answer": "7.2",
+      "similar_examples_found": 5,
+      "execution_time": 20.58669,
+      "strategy": "smolag_agent"
+    }
+  },
+  "batch_evaluation": {}
+}

@@ -12,6 +12,7 @@ __pycache__/
 /tests
 /examples
 metadata.json
+/gaia_results
 # Weaviate embedded files
 weaviate_binary/
 weaviate_data/
