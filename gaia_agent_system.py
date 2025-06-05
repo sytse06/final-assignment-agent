@@ -383,6 +383,23 @@ class AgentManager:
         available_tools = []
         
         try:
+            from tools import GetAttachmentTool, ContentRetrieverTool
+            enhanced_tools = [
+                GetAttachmentTool(),
+                ContentRetrieverTool()
+            ]
+            available_tools.extend(enhanced_tools)
+            print("✅ Enhanced GAIA tools loaded successfully")
+            print(f"  ├── GetAttachmentTool: Ready for GAIA file access")
+            print(f"  └── ContentRetrieverTool: Ready for document processing")
+            
+        except ImportError as e:
+            print("⚠️  Enhanced GAIA tools not available - using base tools only")
+            print(f"  └── Error: {e}")
+            print("  └── Install with: pip install docling sentence-transformers")
+            # Continue with base tools - no system failure
+        
+        try:
             # Add native SmolagAgents web tools - prioritize one to avoid duplicates
             web_search_added = False
             
@@ -432,7 +449,15 @@ class AgentManager:
         # Debug: Print available tool information
         if self.config.debug_mode:
             tool_names = [getattr(tool, 'name', str(type(tool).__name__)) for tool in available_tools]
-            print(f"🔧 Native tools loaded: {tool_names}")
+            print(f"🔧 All tools loaded: {tool_names}")
+            print(f"🔧 Total tools available: {len(available_tools)}")
+            
+            # Categorize tools
+            gaia_tools = [name for name in tool_names if name in ['get_attachment', 'retrieve_content']]
+            native_tools = [name for name in tool_names if name not in gaia_tools]
+            
+            print(f"  ├── GAIA-specific tools: {len(gaia_tools)} - {gaia_tools}")
+            print(f"  └── Native SmolagAgent tools: {len(native_tools)} - {native_tools}")
             
             # Check for duplicates
             if len(tool_names) != len(set(tool_names)):
@@ -1068,6 +1093,17 @@ class GAIAAgent:
         agent_name = state["selected_agent"]
         context = state.get("retriever_context", "")
         retry_count = state.get("retry_count", 0)
+        
+        # Set task_id to use in GetAttachmentTool
+        task_id = state.get("task_id")
+        if task_id and agent_name in self.agents:
+            agent = self.agents[agent_name]
+            if hasattr(agent, 'tools'):
+                for tool in agent.tools:
+                    if hasattr(tool, 'attachment_for'):
+                        tool.attachment_for(task_id)
+                        if self.config.debug_mode:
+                            print(f"🔗 Set task_id '{task_id}' for {tool.name}")
         
         if self.config.debug_mode:
             print(f"🤖 SmolagAgent execution: {agent_name} (attempt {retry_count + 1})")
@@ -3524,36 +3560,58 @@ class ModelConfigs:
 # CONVENIENCE FUNCTIONS
 # ============================================================================
 
-def create_gaia_agent(config_overrides: Union[str, Dict] = None) -> GAIAAgent:
-    """Factory function for creating GAIA agent"""
+def create_gaia_agent(config_overrides: Union[str, Dict, GAIAConfig] = None) -> GAIAAgent:
+    """Factory function for creating GAIA agent with enhanced config handling"""
     config = GAIAConfig()
     
     if config_overrides:
         if isinstance(config_overrides, str):
+            # String config name
             model_configs = ModelConfigs.get_all_configs()
             if config_overrides in model_configs:
                 config_dict = model_configs[config_overrides]
                 print(f"📋 Using config: {config_overrides}")
             else:
                 raise ValueError(f"Unknown config: {config_overrides}")
-        else:
+        elif isinstance(config_overrides, GAIAConfig):
+            # GAIAConfig object - use directly
+            print(f"📋 Using GAIAConfig object")
+            return GAIAAgent(config_overrides)
+        elif isinstance(config_overrides, dict):
+            # Dictionary config
             config_dict = config_overrides
+        else:
+            raise ValueError(f"config_overrides must be str, dict, or GAIAConfig, got {type(config_overrides)}")
         
-        # Apply overrides
-        for key, value in config_dict.items():
-            setattr(config, key, value)
+        # Apply overrides for string/dict configs
+        if not isinstance(config_overrides, GAIAConfig):
+            for key, value in config_dict.items():
+                if hasattr(config, key):
+                    setattr(config, key, value)
+                else:
+                    print(f"⚠️  Unknown config key: {key}")
     
     return GAIAAgent(config)
 
 def create_production_gaia_agent(
-    model_config: Union[str, Dict] = "qwen_coder",
+    model_config: Union[str, Dict, GAIAConfig] = "qwen2.5_coder",
     enable_logging: bool = True,
     performance_tracking: bool = True,
     max_retries: int = 2
 ) -> GAIAAgent:
-    """Create production-ready GAIA agent"""
+    """Create production-ready GAIA agent with enhanced config handling"""
     
-    if isinstance(model_config, str):
+    if isinstance(model_config, GAIAConfig):
+        # GAIAConfig object - enhance with production settings
+        model_config.debug_mode = enable_logging
+        model_config.save_intermediate_results = performance_tracking
+        model_config.max_retries = max_retries
+        model_config.enable_graceful_degradation = True
+        model_config.gaia_formatting_strict = True
+        model_config.enable_confidence_scoring = True
+        return GAIAAgent(model_config)
+    
+    elif isinstance(model_config, str):
         model_configs = ModelConfigs.get_all_configs()
         if model_config not in model_configs:
             raise ValueError(f"Unknown model config: {model_config}")
@@ -3573,16 +3631,17 @@ def create_production_gaia_agent(
     
     config = GAIAConfig()
     for key, value in config_dict.items():
-        setattr(config, key, value)
+        if hasattr(config, key):
+            setattr(config, key, value)
     
     agent = GAIAAgent(config)
     return agent
 
 def quick_test(
     question: str = "Calculate 15% of 1000", 
-    config_name: str = "qwen_coder"
+    config_name: str = "qwen2.5_coder"
 ) -> Dict:
-    """Quick test with error handling"""
+    """Quick test with enhanced error handling"""
     try:
         agent = create_gaia_agent(config_name)
         result = agent.run_single_question(question)
@@ -3603,6 +3662,8 @@ def quick_test(
         
     except Exception as e:
         print(f"❌ Test failed: {e}")
+        import traceback
+        traceback.print_exc()
         return {"error": str(e)}
 
 def compare_configs(

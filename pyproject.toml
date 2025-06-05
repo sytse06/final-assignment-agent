@@ -75,6 +75,7 @@ langchain-ollama = "^0.3.3"
 langchain-groq = "^0.3.2"
 langchain-google-genai = "^2.1.5"
 duckduckgo-search = "^8.0.2"
+docling = "^2.36.1"
 
 [tool.poetry.group.dev.dependencies]
 # Testing
