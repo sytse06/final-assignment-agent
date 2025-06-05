@@ -248,15 +248,13 @@ class GAIAState(TypedDict):
     debug_info: Dict[str, Any]
 
 # ============================================================================
-# CUSTOM TOOLS - REMOVED: Using native SmolagAgents tools instead
+# CUSTOM TOOLS - Using native SmolagAgents tools instead
 # ============================================================================
 
-# No custom tools - we'll use native SmolagAgents tools:
-# - Built-in calculator
-# - Built-in file processing capabilities  
-# - GoogleSearchTool
-# - VisitWebpageTool
-# - Any other native tools available in SmolagAgents
+# Custom tools are in /tools:
+# - Content retriever
+# - Get attachment  
+# - Langchain loaders Wikipedia and Arxiv
 
 # ============================================================================
 # AGENT MANAGER
@@ -398,6 +396,21 @@ class AgentManager:
             print(f"  └── Error: {e}")
             print("  └── Install with: pip install docling sentence-transformers")
             # Continue with base tools - no system failure
+        
+                # Additional research tools (LangChain-based)
+        try:
+            from tools.langchain_tools import search_wikipedia, search_arxiv
+            research_tools = [search_wikipedia, search_arxiv]
+            available_tools.extend(research_tools)
+            print("✅ Research tools loaded successfully")
+            print(f"  ├── search_wikipedia: Knowledge search")
+            print(f"  └── search_arxiv: Scientific papers")
+            
+        except ImportError as e:
+            print("⚠️  Research tools not available - Wikipedia/ArXiv search disabled")
+            print(f"  └── Error: {e}")
+            print("  └── Install with: pip install langchain-community")
+            # Continue without research tools - no system failure
         
         try:
             # Add native SmolagAgents web tools - prioritize one to avoid duplicates
@@ -1096,17 +1109,18 @@ class GAIAAgent:
         
         # Set task_id to use in GetAttachmentTool
         task_id = state.get("task_id")
-        if task_id and agent_name in self.agents:
-            agent = self.agents[agent_name]
-            if hasattr(agent, 'tools'):
+        if task_id:
+            # Set task ID for GetAttachmentTool (custom tools)
+            agent = self.agents.get(agent_name)
+            if agent and hasattr(agent, 'tools'):
                 for tool in agent.tools:
                     if hasattr(tool, 'attachment_for'):
                         tool.attachment_for(task_id)
                         if self.config.debug_mode:
                             print(f"🔗 Set task_id '{task_id}' for {tool.name}")
-        
-        if self.config.debug_mode:
-            print(f"🤖 SmolagAgent execution: {agent_name} (attempt {retry_count + 1})")
+            
+            if self.config.debug_mode and task_id:
+                print(f"🔗 Task ID '{task_id}' configured for file access")
         
         try:
             # Execute with SmolagAgent
