@@ -1,8 +1,9 @@
 # agent_logic.py
-# Core GAIA Agent System using SmolagAgents + LangGraph
+# GAIA Agent System using SmolagAgents Manager Pattern
 
 import os
 import uuid
+import re
 import backoff
 from typing import TypedDict, Optional, List, Dict
 from dataclasses import dataclass
@@ -18,9 +19,6 @@ from smolagents import (
     LiteLLMModel,
     GoogleSearchTool,
     VisitWebpageTool,
-    tool,
-    AgentLogger,
-    LogLevel,
 )
 
 # Import retriever system
@@ -45,10 +43,14 @@ import openai
 
 @dataclass
 class GAIAConfig:
-    """Simple configuration for GAIA agent"""
+    """Configuration for GAIA agent"""
     model_provider: str = "groq"
     model_name: str = "qwen-qwq-32b"
     temperature: float = 0.3
+    
+    # For testing with Ollama
+    api_base: Optional[str] = None
+    num_ctx: int = 32768
     
     # Retriever settings
     csv_file: str = "gaia_embeddings.csv"
@@ -56,6 +58,7 @@ class GAIAConfig:
     
     # Agent settings
     max_agent_steps: int = 15
+    planning_interval: int = 3
     
     # Logging
     enable_csv_logging: bool = True
@@ -68,7 +71,7 @@ class GAIAConfig:
 # ============================================================================
 
 class GAIAState(TypedDict):
-    """Simple state for GAIA workflow"""
+    """State for GAIA workflow"""
     task_id: Optional[str]
     question: str
     steps: List[str]
@@ -82,15 +85,30 @@ class GAIAState(TypedDict):
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError, max_time=60, max_tries=3)
 def llm_invoke_with_retry(llm, messages):
-    """Simple retry logic for LLM calls"""
+    """Retry logic for LLM calls"""
     return llm.invoke(messages)
+
+# ============================================================================
+# GAIA FORMATTING VALIDATION
+# ============================================================================
+
+def validate_gaia_format(answer: str) -> bool:
+    """Check if answer meets GAIA requirements"""
+    if not answer or len(answer.strip()) == 0:
+        return False
+    
+    # Check for FINAL ANSWER pattern
+    if "FINAL ANSWER:" not in answer.upper():
+        return False
+    
+    return True
 
 # ============================================================================
 # MAIN GAIA AGENT
 # ============================================================================
 
 class GAIAAgent:
-    """Simple GAIA agent using SmolagAgents + LangGraph"""
+    """GAIA agent using SmolagAgents manager pattern"""
     
     def __init__(self, config: GAIAConfig = None):
         if config is None:
@@ -110,10 +128,16 @@ class GAIAAgent:
         else:
             self.logging = None
         
+        # Create specialist agents
+        self.specialists = self._create_specialist_agents()
+        
+        # Create manager agent
+        self.manager = self._create_manager_agent()
+        
         # Build workflow
         self.workflow = self._build_workflow()
         
-        print("🚀 Simple GAIA Agent initialized!")
+        print("🚀 GAIA Manager Agent initialized!")
     
     def _initialize_retriever(self):
         """Initialize retriever"""
@@ -139,6 +163,13 @@ class GAIAAgent:
             elif self.config.model_provider == "openrouter":
                 model_id = f"openrouter/{self.config.model_name}"
                 api_key = os.getenv("OPENROUTER_API_KEY")
+            elif self.config.model_provider == "ollama":
+                model_id = f"ollama_chat/{self.config.model_name}"
+                return LiteLLMModel(
+                    model_id=model_id,
+                    api_base=self.config.api_base or "http://localhost:11434",
+                    num_ctx=self.config.num_ctx,
+                    temperature=self.config.temperature)
             elif self.config.model_provider == "google":
                 model_id = f"gemini/{self.config.model_name}"
                 api_key = os.getenv("GOOGLE_API_KEY")
@@ -155,46 +186,131 @@ class GAIAAgent:
             print(f"❌ Error initializing model: {e}")
             raise
     
-    def _setup_tools(self):
-        """Setup available tools"""
-        tools = []
+    def _create_specialist_agents(self):
+        """Create specialist agents"""
+        env_tools = []
         
         # Add custom GAIA tools if available
         if CUSTOM_TOOLS_AVAILABLE:
-            tools.extend([
+            env_tools.extend([
                 GetAttachmentTool(),
                 ContentRetrieverTool()
             ])
-            print("✅ Custom GAIA tools loaded")
         
-        # Add web search tools
+        # Setup logging callbacks
+        step_callbacks = []
+        logger = None
+        if self.logging:
+            step_callbacks = [self.logging.capture_step_log]
+            logger = self.logging.logger
+        
+        specialists = {}
+        
+        # Data Analyst - CodeAgent for calculations and data processing
+        specialists["data_analyst"] = CodeAgent(
+            name="data_analyst",
+            description="Data analyst with Python skills for calculations, statistics, and data processing",
+            tools=env_tools,
+            additional_authorized_imports=[
+                "numpy", "pandas", "matplotlib", "seaborn", "scipy", 
+                "json", "csv", "statistics", "math", "re"
+            ],
+            model=self.model,
+            max_steps=self.config.max_agent_steps,
+            logger=logger,
+            step_callbacks=step_callbacks
+        )
+        
+        # Web Researcher - ToolCallingAgent for search and current information
+        web_tools = env_tools.copy()
         try:
-            tools.append(GoogleSearchTool())
-            print("✅ GoogleSearchTool added")
+            web_tools.append(GoogleSearchTool())
+            print("✅ GoogleSearchTool added to web_researcher")
         except Exception:
             print("⚠️  GoogleSearchTool not available")
         
         try:
-            tools.append(VisitWebpageTool())
-            print("✅ VisitWebpageTool added")
+            web_tools.append(VisitWebpageTool())
+            print("✅ VisitWebpageTool added to web_researcher")
         except Exception:
             print("⚠️  VisitWebpageTool not available")
         
-        return tools
+        specialists["web_researcher"] = ToolCallingAgent(
+            name="web_researcher",
+            description="Web researcher for finding current information and verifying facts",
+            tools=web_tools,
+            model=self.model,
+            max_steps=self.config.max_agent_steps,
+            planning_interval=self.config.planning_interval,
+            logger=logger,
+            step_callbacks=step_callbacks
+        )
+        
+        # Document Processor - ToolCallingAgent for file and multimedia processing
+        specialists["document_processor"] = ToolCallingAgent(
+            name="document_processor",
+            description="Document processor for analyzing files, images, and multimedia content",
+            tools=env_tools,
+            add_base_tools=True,  # Includes transcriber for audio
+            model=self.model,
+            max_steps=self.config.max_agent_steps,
+            logger=logger,
+            step_callbacks=step_callbacks
+        )
+        
+        print(f"✅ Created {len(specialists)} specialist agents")
+        return specialists
+    
+    def _create_manager_agent(self):
+        """Create manager agent with specialist coordination"""
+        manager_tools = []
+        
+        # Manager gets context tools
+        if CUSTOM_TOOLS_AVAILABLE:
+            manager_tools.extend([
+                GetAttachmentTool(),
+                ContentRetrieverTool()
+            ])
+        
+        # Setup logging
+        step_callbacks = []
+        logger = None
+        if self.logging:
+            step_callbacks = [self.logging.capture_step_log]
+            logger = self.logging.logger
+        
+        manager = CodeAgent(
+            name="gaia_manager",
+            description="GAIA task coordinator that manages specialist agents and ensures answer formatting",
+            model=self.model,
+            tools=manager_tools,
+            managed_agents=list(self.specialists.values()),
+            additional_authorized_imports=[
+                "re", "json", "pandas", "numpy"
+            ],
+            planning_interval=self.config.planning_interval,
+            max_steps=self.config.max_agent_steps,
+            final_answer_checks=[validate_gaia_format],
+            logger=logger,
+            step_callbacks=step_callbacks
+        )
+        
+        print("✅ Manager agent created with specialist coordination")
+        return manager
     
     def _build_workflow(self):
-        """Build simple LangGraph workflow"""
+        """Build LangGraph workflow"""
         builder = StateGraph(GAIAState)
         
         # Add nodes
         builder.add_node("read_question", self._read_question_node)
-        builder.add_node("agent_execution", self._agent_execution_node)
+        builder.add_node("manager_execution", self._manager_execution_node)
         builder.add_node("format_answer", self._format_answer_node)
         
-        # Simple linear flow
+        # Linear flow
         builder.add_edge(START, "read_question")
-        builder.add_edge("read_question", "agent_execution")
-        builder.add_edge("agent_execution", "format_answer")
+        builder.add_edge("read_question", "manager_execution")
+        builder.add_edge("manager_execution", "format_answer")
         builder.add_edge("format_answer", END)
         
         return builder.compile()
@@ -204,14 +320,15 @@ class GAIAAgent:
     # ============================================================================
     
     def _read_question_node(self, state: GAIAState):
-        """Read and setup question with RAG context"""
+        """Read question and get RAG context"""
         if self.logging:
             self.logging.logger.log_task(
                 content=state["question"].strip(),
-                title="GAIA Question Processing"
+                title="GAIA Question Processing",
+                subtitle="Question Analysis and RAG Retrieval"
             )
         
-        # RAG retrieval - find similar examples
+        # RAG retrieval
         try:
             similar_docs = self.retriever.search(state["question"], k=self.config.rag_examples_count)
             similar_examples = []
@@ -239,41 +356,24 @@ class GAIAAgent:
             "steps": state["steps"] + ["Question setup and RAG retrieval complete"]
         }
     
-    def _agent_execution_node(self, state: GAIAState):
-        """Execute SmolagAgent with tools"""
+    def _manager_execution_node(self, state: GAIAState):
+        """Execute manager agent with specialist coordination"""
         task_id = state.get("task_id", str(uuid.uuid4()))
         
         # Start logging for this task
         if self.logging:
             self.logging.start_task(task_id)
         
-        # Setup tools
-        tools = self._setup_tools()
-        
-        # Create SmolagAgent
-        step_callbacks = [self.logging.capture_step_log] if self.logging else []
-        logger = self.logging.logger if self.logging else None
-        
-        agent = ToolCallingAgent(
-            name="gaia_agent",
-            model=self.model,
-            tools=tools,
-            add_base_tools=True,  # Includes Python interpreter, web search, transcriber
-            max_steps=self.config.max_agent_steps,
-            logger=logger,
-            step_callbacks=step_callbacks
-        )
-        
-        # Prepare question with RAG context
-        question_with_context = self._prepare_question_context(
-            state["question"], 
-            state.get("similar_examples", [])
+        # Prepare manager context
+        manager_context = self._prepare_manager_context(
+            question=state["question"],
+            rag_examples=state.get("similar_examples", []),
+            task_id=task_id
         )
         
         try:
-            # Execute agent
-            print(f"🤖 Executing SmolagAgent (max {self.config.max_agent_steps} steps)")
-            result = agent.run(question_with_context)
+            print(f"🤖 Executing manager agent with {len(self.specialists)} specialists")
+            result = self.manager.run(manager_context)
             
             # Get step count
             step_count = self.logging.step_counter if self.logging else 0
@@ -281,12 +381,12 @@ class GAIAAgent:
             return {
                 "raw_answer": str(result),
                 "steps": state["steps"] + [
-                    f"Agent execution complete - {step_count} steps"
+                    f"Manager coordination complete - {step_count} steps"
                 ]
             }
             
         except Exception as e:
-            error_msg = f"Agent execution failed: {str(e)}"
+            error_msg = f"Manager execution failed: {str(e)}"
             print(f"❌ {error_msg}")
             
             return {
@@ -294,47 +394,73 @@ class GAIAAgent:
                 "steps": state["steps"] + [error_msg]
             }
     
-    def _prepare_question_context(self, question: str, similar_examples: List[Dict]) -> str:
-        """Prepare question with RAG context"""
-        if not similar_examples:
-            return question
-        
+    def _prepare_manager_context(self, question: str, rag_examples: List[Dict], task_id: str) -> str:
+        """Prepare context for manager agent"""
         context_parts = [
-            "Here are similar GAIA examples to guide your approach:",
+            "You are coordinating a GAIA benchmark question. You have access to specialist agents:",
+            "",
+            "Available specialists:",
+            "- data_analyst: Python code execution, calculations, statistics, data processing",
+            "- web_researcher: Web search, current information, fact verification",  
+            "- document_processor: File analysis, multimedia processing, transcription",
+            "",
+            f"Question: {question}",
             ""
         ]
         
-        for i, example in enumerate(similar_examples[:2], 1):  # Limit to 2 examples
+        # Add RAG examples if available
+        if rag_examples:
             context_parts.extend([
-                f"Example {i}:",
-                f"Question: {example['question']}",
-                f"Answer: {example['answer']}",
+                "Similar examples from GAIA database:",
+                ""
+            ])
+            for i, example in enumerate(rag_examples[:2], 1):
+                context_parts.extend([
+                    f"Example {i}:",
+                    f"Q: {example['question']}",
+                    f"A: {example['answer']}",
+                    ""
+                ])
+        
+        # Add file context if available
+        if task_id:
+            context_parts.extend([
+                f"Task ID: {task_id}",
+                "Use GetAttachmentTool to access any uploaded files if needed.",
                 ""
             ])
         
+        # Add coordination instructions
         context_parts.extend([
-            "Now solve this question following GAIA format requirements:",
-            f"Question: {question}",
+            "Coordination instructions:",
+            "1. Analyze the question to determine which specialist(s) to use",
+            "2. For web searches, provide focused search queries to avoid broad searches",
+            "3. Delegate to appropriate specialist(s) with clear instructions",
+            "4. Review specialist responses for relevance and completeness",
+            "5. Format final answer according to GAIA requirements",
             "",
-            "Provide your final answer in the format: FINAL ANSWER: [YOUR ANSWER]"
+            "FINAL ANSWER format requirements:",
+            "- Should be a number OR as few words as possible OR comma separated list",
+            "- Numbers: no commas, no units ($ %) unless specified",
+            "- Strings: no articles (the, a, an), no abbreviations, digits as text unless specified",
+            "- Lists: apply above rules to each element",
+            "",
+            "Provide your final answer in format: FINAL ANSWER: [YOUR ANSWER]"
         ])
         
         return "\n".join(context_parts)
     
     def _format_answer_node(self, state: GAIAState):
-        """Format answer according to GAIA rules"""
+        """Final answer formatting and validation"""
         raw_answer = state.get("raw_answer", "")
         
         try:
-            # Extract FINAL ANSWER
             formatted_answer = self._extract_final_answer(raw_answer)
-            
-            # Apply GAIA formatting rules
             formatted_answer = self._apply_gaia_formatting(formatted_answer)
             
             return {
                 "final_answer": formatted_answer,
-                "steps": state["steps"] + ["Answer formatted according to GAIA rules"]
+                "steps": state["steps"] + ["Final answer formatting applied"]
             }
             
         except Exception as e:
@@ -345,18 +471,15 @@ class GAIAAgent:
             }
     
     def _extract_final_answer(self, raw_answer: str) -> str:
-        """Extract final answer from agent response"""
+        """Extract final answer from manager response"""
         if not raw_answer:
             return "No answer"
-        
-        import re
         
         # Try to find FINAL ANSWER pattern
         patterns = [
             r"FINAL ANSWER:\s*(.+?)(?:\n|$)",
             r"Final Answer:\s*(.+?)(?:\n|$)",
-            r"Answer:\s*(.+?)(?:\n|$)",
-            r"The answer is:\s*(.+?)(?:\n|$)"
+            r"Answer:\s*(.+?)(?:\n|$)"
         ]
         
         for pattern in patterns:
@@ -364,12 +487,12 @@ class GAIAAgent:
             if match:
                 return match.group(1).strip()
         
-        # If no pattern found, return last line
+        # Fallback to last line
         lines = raw_answer.strip().split('\n')
         return lines[-1].strip() if lines else "No answer"
     
     def _apply_gaia_formatting(self, answer: str) -> str:
-        """Apply GAIA benchmark formatting rules"""
+        """Apply GAIA formatting rules"""
         if not answer:
             return "No answer"
         
@@ -401,7 +524,7 @@ class GAIAAgent:
     # ============================================================================
     
     def run_single_question(self, question: str, task_id: str = None) -> Dict:
-        """Execute single question"""
+        """Execute single question using manager agent"""
         if task_id is None:
             task_id = str(uuid.uuid4())
         
@@ -449,10 +572,10 @@ class GAIAAgent:
             }
 
 # ============================================================================
-# MAIN EXECUTION (Basic Test Only)
+# MAIN EXECUTION
 # ============================================================================
 
 if __name__ == "__main__":
-    print("🚀 Core GAIA Agent Module")
+    print("🚀 GAIA Manager Agent Module")
     print("=" * 30)
-    print("Use gaia_interface.py for full testing capabilities")
+    print("Use gaia_interface.py for testing capabilities")

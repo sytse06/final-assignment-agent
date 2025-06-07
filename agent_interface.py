@@ -41,6 +41,15 @@ def quick_test(question: str = "Calculate 15% of 1000",
         print(f"❌ Test failed: {e}")
         return {"error": str(e)}
 
+def test_specialist_coordination():
+    """Test that manager properly delegates to specialists"""
+    questions = [
+        "Calculate 25% of 400",           # Should use data_analyst
+        "What is current population of Tokyo?", # Should use web_researcher  
+        "Process attached Excel file"     # Should use document_processor
+    ]
+    return test_multiple_questions(questions)
+
 def test_multiple_questions(questions: List[str], 
                            config_overrides: Dict = None) -> List[Dict]:
     """Test multiple questions with same agent"""
@@ -81,6 +90,16 @@ def get_openrouter_config(model_name: str = "qwen/qwen-2.5-coder-32b-instruct:fr
         "model_name": model_name,
         "temperature": 0.3,
         "max_agent_steps": 20
+    }
+
+def get_ollama_config(model_name: str = "qwen3:14b", num_ctx: int = 32768) -> Dict:
+    """Get Ollama configuration"""
+    return {
+        "model_provider": "ollama",
+        "model_name": model_name,
+        "temperature": 0.3,
+        "num_ctx": num_ctx,
+        "max_agent_steps": 15
     }
 
 def get_google_config(model_name: str = "gemini-2.0-flash-preview") -> Dict:
