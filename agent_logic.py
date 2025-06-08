@@ -59,6 +59,10 @@ class GAIAConfig:
     # Agent settings
     max_agent_steps: int = 15
     planning_interval: int = 3
+        
+    # Routing settings
+    enable_smart_routing: bool = True
+    skip_rag_for_simple: bool = True
     
     # Logging
     enable_csv_logging: bool = True
@@ -78,6 +82,7 @@ class GAIAState(TypedDict):
     raw_answer: Optional[str]
     final_answer: Optional[str]
     similar_examples: Optional[List[Dict]]
+    complexity: Optional[str]
 
 # ============================================================================
 # LLM RETRY LOGIC
@@ -87,6 +92,60 @@ class GAIAState(TypedDict):
 def llm_invoke_with_retry(llm, messages):
     """Retry logic for LLM calls"""
     return llm.invoke(messages)
+
+# ============================================================================
+# COMPLEXITY DETECTION HELPERS
+# ============================================================================
+
+def is_simple_math(question: str) -> bool:
+    """Check if question is simple arithmetic"""
+    question_lower = question.lower()
+    
+    # Math operation keywords
+    math_keywords = ['calculate', 'what is', '%', 'percent', 'multiply', 'divide', 'add', 'subtract']
+    has_math_keyword = any(keyword in question_lower for keyword in math_keywords)
+    
+    # Simple patterns
+    simple_patterns = [
+        r'\d+\s*%\s*of\s*\d+',  # "15% of 200"
+        r'what\s+is\s+\d+.*\d+',  # "what is 15 * 23"
+        r'calculate\s+\d+.*\d+',   # "calculate 15 + 23"
+    ]
+    
+    has_simple_pattern = any(re.search(pattern, question_lower) for pattern in simple_patterns)
+    
+    return has_math_keyword and has_simple_pattern and len(question.split()) < 10
+
+def is_simple_fact(question: str) -> bool:
+    """Check if question is a simple factual query"""
+    question_lower = question.lower()
+    
+    simple_fact_patterns = [
+        r'what\s+are?\s+the\s+primary\s+colors?',
+        r'what\s+is\s+the\s+capital\s+of',
+        r'when\s+was.*born',
+        r'how\s+many.*in',
+    ]
+    
+    return any(re.search(pattern, question_lower) for pattern in simple_fact_patterns)
+
+def has_attachments(task_id: str) -> bool:
+    """Check if task has file attachments (placeholder)"""
+    # This would check for actual attachments in a real implementation
+    # For now, return False as we don't have attachment detection
+    return False
+
+def needs_web_search(question: str) -> bool:
+    """Check if question needs current information"""
+    question_lower = question.lower()
+    
+    web_keywords = [
+        'current', 'latest', 'recent', 'today', 'now', 'this year',
+        'population of', 'price of', 'stock price', 'weather',
+        'who won', 'election results'
+    ]
+    
+    return any(keyword in question_lower for keyword in web_keywords)
 
 # ============================================================================
 # GAIA FORMATTING VALIDATION
@@ -108,7 +167,7 @@ def validate_gaia_format(answer: str) -> bool:
 # ============================================================================
 
 class GAIAAgent:
-    """GAIA agent using SmolagAgents manager pattern"""
+    """GAIA agent using SmolagAgents manager pattern with complexity check"""
     
     def __init__(self, config: GAIAConfig = None):
         if config is None:
@@ -262,7 +321,7 @@ class GAIAAgent:
         return specialists
     
     def _create_manager_agent(self):
-        """Create manager agent with specialist coordination"""
+        """Create manager agent with specialist coordination using ToolCallingAgent"""
         manager_tools = []
         
         # Manager gets context tools
@@ -279,39 +338,62 @@ class GAIAAgent:
             step_callbacks = [self.logging.capture_step_log]
             logger = self.logging.logger
         
-        manager = CodeAgent(
+        # Switch from CodeAgent to ToolCallingAgent
+        manager = ToolCallingAgent(
             name="gaia_manager",
             description="GAIA task coordinator that manages specialist agents and ensures answer formatting",
             model=self.model,
             tools=manager_tools,
             managed_agents=list(self.specialists.values()),
-            additional_authorized_imports=[
-                "re", "json", "pandas", "numpy"
-            ],
             planning_interval=self.config.planning_interval,
             max_steps=self.config.max_agent_steps,
-            final_answer_checks=[validate_gaia_format],
             logger=logger,
             step_callbacks=step_callbacks
         )
         
-        print("✅ Manager agent created with specialist coordination")
+        print("✅ Manager agent created with ToolCallingAgent for better coordination")
         return manager
     
     def _build_workflow(self):
-        """Build LangGraph workflow"""
+        """Build LangGraph workflow with smart routing"""
         builder = StateGraph(GAIAState)
         
-        # Add nodes
-        builder.add_node("read_question", self._read_question_node)
-        builder.add_node("manager_execution", self._manager_execution_node)
-        builder.add_node("format_answer", self._format_answer_node)
-        
-        # Linear flow
-        builder.add_edge(START, "read_question")
-        builder.add_edge("read_question", "manager_execution")
-        builder.add_edge("manager_execution", "format_answer")
-        builder.add_edge("format_answer", END)
+        if self.config.enable_smart_routing:
+            # Smart routing workflow
+            builder.add_node("read_question", self._read_question_node)
+            builder.add_node("complexity_check", self._complexity_check_node)
+            builder.add_node("one_shot_answering", self._one_shot_answering_node)
+            builder.add_node("manager_execution", self._manager_execution_node)
+            builder.add_node("format_answer", self._format_answer_node)
+            
+            # Routing flow
+            builder.add_edge(START, "read_question")
+            builder.add_edge("read_question", "complexity_check")
+            
+            # Conditional routing based on complexity
+            builder.add_conditional_edges(
+                "complexity_check",
+                self._route_by_complexity,
+                {
+                    "simple": "one_shot_answering",
+                    "complex": "manager_execution"
+                }
+            )
+            
+            # Both paths converge to formatting
+            builder.add_edge("one_shot_answering", "format_answer")
+            builder.add_edge("manager_execution", "format_answer")
+            builder.add_edge("format_answer", END)
+        else:
+            # Original linear workflow
+            builder.add_node("read_question", self._read_question_node)
+            builder.add_node("manager_execution", self._manager_execution_node)
+            builder.add_node("format_answer", self._format_answer_node)
+            
+            builder.add_edge(START, "read_question")
+            builder.add_edge("read_question", "manager_execution")
+            builder.add_edge("manager_execution", "format_answer")
+            builder.add_edge("format_answer", END)
         
         return builder.compile()
     
@@ -320,41 +402,162 @@ class GAIAAgent:
     # ============================================================================
     
     def _read_question_node(self, state: GAIAState):
-        """Read question and get RAG context"""
+        """Read question and conditionally get RAG context"""
         if self.logging:
             self.logging.logger.log_task(
                 content=state["question"].strip(),
                 title="GAIA Question Processing",
-                subtitle="Question Analysis and RAG Retrieval"
+                subtitle="Question Analysis and Smart Routing"
             )
         
-        # RAG retrieval
-        try:
-            similar_docs = self.retriever.search(state["question"], k=self.config.rag_examples_count)
-            similar_examples = []
-            
-            for doc in similar_docs:
-                content = doc.page_content
-                if "Question :" in content and "Final answer :" in content:
-                    parts = content.split("Final answer :")
-                    if len(parts) == 2:
-                        q_part = parts[0].replace("Question :", "").strip()
-                        a_part = parts[1].strip()
-                        similar_examples.append({
-                            "question": q_part,
-                            "answer": a_part
-                        })
-            
-            print(f"📚 Found {len(similar_examples)} similar examples")
-            
-        except Exception as e:
-            print(f"⚠️  RAG retrieval error: {e}")
-            similar_examples = []
+        # Initialize similar_examples
+        similar_examples = []
+        
+        # Only do RAG retrieval for complex questions if smart routing is enabled
+        if not self.config.enable_smart_routing or not self.config.skip_rag_for_simple:
+            # Always do RAG (original behavior)
+            try:
+                similar_docs = self.retriever.search(state["question"], k=self.config.rag_examples_count)
+                
+                for doc in similar_docs:
+                    content = doc.page_content
+                    if "Question :" in content and "Final answer :" in content:
+                        parts = content.split("Final answer :")
+                        if len(parts) == 2:
+                            q_part = parts[0].replace("Question :", "").strip()
+                            a_part = parts[1].strip()
+                            similar_examples.append({
+                                "question": q_part,
+                                "answer": a_part
+                            })
+                
+                print(f"📚 Found {len(similar_examples)} similar examples")
+                
+            except Exception as e:
+                print(f"⚠️  RAG retrieval error: {e}")
+                similar_examples = []
+        else:
+            print("⚡ Skipping RAG for fast routing decision")
         
         return {
             "similar_examples": similar_examples,
-            "steps": state["steps"] + ["Question setup and RAG retrieval complete"]
+            "steps": state["steps"] + ["Question setup complete"]
         }
+    
+    def _complexity_check_node(self, state: GAIAState):
+        """Determine if question needs specialist coordination"""
+        question = state["question"]
+        task_id = state.get("task_id", "")
+        
+        print(f"🧠 Analyzing complexity for: {question[:50]}...")
+        
+        # Quick pattern matching first
+        if is_simple_math(question):
+            complexity = "simple"
+            reason = "Simple arithmetic detected"
+        elif is_simple_fact(question):
+            complexity = "simple" 
+            reason = "Simple factual query detected"
+        elif has_attachments(task_id):
+            complexity = "complex"
+            reason = "File attachments detected"
+        elif needs_web_search(question):
+            complexity = "complex"
+            reason = "Current information needed"
+        else:
+            # LLM decides for edge cases
+            complexity = self._llm_complexity_check(question)
+            reason = "LLM complexity assessment"
+        
+        print(f"📊 Complexity: {complexity} ({reason})")
+        
+        # If complex and we skipped RAG earlier, do it now
+        if complexity == "complex" and self.config.skip_rag_for_simple and not state.get("similar_examples"):
+            print("📚 Retrieving RAG examples for complex question...")
+            try:
+                similar_docs = self.retriever.search(question, k=self.config.rag_examples_count)
+                similar_examples = []
+                
+                for doc in similar_docs:
+                    content = doc.page_content
+                    if "Question :" in content and "Final answer :" in content:
+                        parts = content.split("Final answer :")
+                        if len(parts) == 2:
+                            q_part = parts[0].replace("Question :", "").strip()
+                            a_part = parts[1].strip()
+                            similar_examples.append({
+                                "question": q_part,
+                                "answer": a_part
+                            })
+                
+                print(f"📚 Found {len(similar_examples)} similar examples")
+            except Exception as e:
+                print(f"⚠️  RAG retrieval error: {e}")
+                similar_examples = state.get("similar_examples", [])
+        else:
+            similar_examples = state.get("similar_examples", [])
+        
+        return {
+            "complexity": complexity,
+            "similar_examples": similar_examples,
+            "steps": state["steps"] + [f"Complexity assessed: {complexity} ({reason})"]
+        }
+    
+    def _llm_complexity_check(self, question: str) -> str:
+        """Use LLM to determine complexity for edge cases"""
+        prompt = f"""Analyze this question and determine if it needs specialist tools or can be answered directly.
+
+        Question: {question}
+
+        Consider:
+        - Simple math/facts = "simple" 
+        - Needs file analysis, web search, or complex reasoning = "complex"
+
+        Respond with just "simple" or "complex":"""
+        
+        try:
+            response = llm_invoke_with_retry(self.model, [HumanMessage(content=prompt)])
+            result = response.content.strip().lower()
+            return "simple" if "simple" in result else "complex"
+        except Exception:
+            # Default to complex if LLM fails
+            return "complex"
+    
+    def _one_shot_answering_node(self, state: GAIAState):
+        """Direct LLM answering for simple questions"""
+        print("⚡ Using one-shot direct answering")
+        
+        # Simple prompt for direct answering
+        prompt = f"""You are a general AI assistant. Answer this question directly and concisely.
+
+        Question: {state["question"]}
+
+        Provide your answer in the format: FINAL ANSWER: [YOUR ANSWER]
+
+        Remember:
+        - Numbers: no commas, no units unless specified
+        - Strings: no articles (the, a, an), concise wording
+        - Keep it as brief as possible"""
+        
+        try:
+            response = llm_invoke_with_retry(self.model, [HumanMessage(content=prompt)])
+            
+            return {
+                "raw_answer": response.content,
+                "steps": state["steps"] + ["One-shot direct answering completed"]
+            }
+        except Exception as e:
+            error_msg = f"One-shot answering failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            
+            return {
+                "raw_answer": f"Error: {error_msg}",
+                "steps": state["steps"] + [error_msg]
+            }
+    
+    def _route_by_complexity(self, state: GAIAState) -> str:
+        """Routing function for conditional edges"""
+        return state.get("complexity", "complex")
     
     def _manager_execution_node(self, state: GAIAState):
         """Execute manager agent with specialist coordination"""
