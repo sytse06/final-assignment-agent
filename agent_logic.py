@@ -90,8 +90,15 @@ class GAIAState(TypedDict):
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError, max_time=60, max_tries=3)
 def llm_invoke_with_retry(llm, messages):
-    """Retry logic for LLM calls"""
-    return llm.invoke(messages)
+    """Retry logic for LLM calls - SmolagAgents compatible"""
+    # Convert LangChain messages to SmolagAgents format if needed
+    if messages and hasattr(messages[0], 'content'):
+        # LangChain format: [HumanMessage(content="...")]
+        formatted_messages = [{"role": "user", "content": messages[0].content}]
+    else:
+        formatted_messages = messages
+    
+    return llm(formatted_messages)
 
 # ============================================================================
 # COMPLEXITY DETECTION HELPERS
@@ -517,7 +524,7 @@ class GAIAAgent:
         
         try:
             response = llm_invoke_with_retry(self.model, [HumanMessage(content=prompt)])
-            result = response.content.strip().lower()
+            result = response.strip().lower()
             return "simple" if "simple" in result else "complex"
         except Exception:
             # Default to complex if LLM fails
@@ -543,7 +550,7 @@ class GAIAAgent:
             response = llm_invoke_with_retry(self.model, [HumanMessage(content=prompt)])
             
             return {
-                "raw_answer": response.content,
+                "raw_answer": response,
                 "steps": state["steps"] + ["One-shot direct answering completed"]
             }
         except Exception as e:
