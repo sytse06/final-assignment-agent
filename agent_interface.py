@@ -75,40 +75,48 @@ def test_multiple_questions(questions: List[str],
 # ============================================================================
 
 def get_groq_config(model_name: str = "qwen-qwq-32b") -> Dict:
-    """Get Groq configuration"""
+    """Get Groq configuration with smart routing"""
     return {
         "model_provider": "groq",
         "model_name": model_name,
         "temperature": 0.3,
-        "max_agent_steps": 15
+        "max_agent_steps": 15,
+        "enable_smart_routing": True,
+        "skip_rag_for_simple": True
     }
 
 def get_openrouter_config(model_name: str = "qwen/qwen-2.5-coder-32b-instruct:free") -> Dict:
-    """Get OpenRouter configuration"""
+    """Get OpenRouter configuration with smart routing"""
     return {
         "model_provider": "openrouter", 
         "model_name": model_name,
         "temperature": 0.3,
-        "max_agent_steps": 20
+        "max_agent_steps": 20,
+        "enable_smart_routing": True,
+        "skip_rag_for_simple": True
     }
 
 def get_ollama_config(model_name: str = "qwen3:14b", num_ctx: int = 32768) -> Dict:
-    """Get Ollama configuration"""
+    """Get Ollama configuration with smart routing"""
     return {
         "model_provider": "ollama",
         "model_name": model_name,
         "temperature": 0.3,
         "num_ctx": num_ctx,
-        "max_agent_steps": 15
+        "max_agent_steps": 15,
+        "enable_smart_routing": True,
+        "skip_rag_for_simple": True
     }
 
 def get_google_config(model_name: str = "gemini-2.0-flash-preview") -> Dict:
-    """Get Google configuration"""
+    """Get Google configuration with smart routing"""
     return {
         "model_provider": "google",
         "model_name": model_name,
         "temperature": 0.4,
-        "max_agent_steps": 15
+        "max_agent_steps": 15,
+        "enable_smart_routing": True,
+        "skip_rag_for_simple": True
     }
 
 def get_debug_config(enable_logging: bool = True) -> Dict:
@@ -116,7 +124,30 @@ def get_debug_config(enable_logging: bool = True) -> Dict:
     return {
         "debug_mode": enable_logging,
         "enable_csv_logging": enable_logging,
-        "max_agent_steps": 10  # Shorter for debugging
+        "max_agent_steps": 10,  # Shorter for debugging
+        "enable_smart_routing": False,  # Disable for predictable debugging
+        "skip_rag_for_simple": False
+    }
+
+def get_performance_config() -> Dict:
+    """Get performance-optimized configuration"""
+    return {
+        "enable_smart_routing": True,
+        "skip_rag_for_simple": True,
+        "max_agent_steps": 12,  # Optimized step count
+        "planning_interval": 2,  # More frequent planning
+        "temperature": 0.2  # Lower for consistency
+    }
+
+def get_accuracy_config() -> Dict:
+    """Get accuracy-focused configuration"""
+    return {
+        "enable_smart_routing": False,  # Always use full pipeline
+        "skip_rag_for_simple": False,   # Always use RAG
+        "max_agent_steps": 25,  # More steps for thoroughness
+        "planning_interval": 5,  # Less frequent planning
+        "rag_examples_count": 5,  # More examples
+        "temperature": 0.4  # Higher for creativity
     }
 
 # ============================================================================
@@ -150,6 +181,36 @@ def test_reasoning():
     ]
     return test_multiple_questions(questions)
 
+def test_routing_behavior():
+    """Test smart routing behavior"""
+    print("🧪 Testing routing behavior...")
+    
+    # Test simple questions (should use one-shot)
+    simple_config = get_groq_config()
+    simple_questions = [
+        "What is 25% of 400?",
+        "What are the primary colors?",
+        "Calculate 15 + 23"
+    ]
+    
+    print("\n📊 Testing simple questions with smart routing:")
+    simple_results = test_multiple_questions(simple_questions, simple_config)
+    
+    # Test complex questions (should use manager)
+    complex_questions = [
+        "What is the current population of Tokyo and how has it changed since 2020?",
+        "Analyze the attached spreadsheet and find the average",
+        "Search for recent AI developments and summarize key trends"
+    ]
+    
+    print("\n🧠 Testing complex questions with smart routing:")
+    complex_results = test_multiple_questions(complex_questions, simple_config)
+    
+    return {
+        "simple_results": simple_results,
+        "complex_results": complex_results
+    }
+
 # ============================================================================
 # MAIN TESTING INTERFACE
 # ============================================================================
@@ -164,6 +225,10 @@ def run_comprehensive_test(config_name: str = "groq") -> Dict:
         config = get_openrouter_config()
     elif config_name == "google":
         config = get_google_config()
+    elif config_name == "performance":
+        config = {**get_groq_config(), **get_performance_config()}
+    elif config_name == "accuracy":
+        config = {**get_groq_config(), **get_accuracy_config()}
     else:
         config = {}
     
@@ -175,6 +240,7 @@ def run_comprehensive_test(config_name: str = "groq") -> Dict:
         "basic_math": [],
         "web_search": [],
         "reasoning": [],
+        "routing_test": None,
         "summary": {}
     }
     
@@ -198,6 +264,11 @@ def run_comprehensive_test(config_name: str = "groq") -> Dict:
             "If a train travels 60 km/h for 2 hours, how far does it go?"
         ], config)
         
+        # Test routing if smart routing is enabled
+        if config.get("enable_smart_routing", False):
+            print("\n🔀 Testing smart routing...")
+            results["routing_test"] = test_routing_behavior()
+        
         # Calculate summary
         all_results = (results["basic_math"] + 
                       results["web_search"] + 
@@ -210,7 +281,8 @@ def run_comprehensive_test(config_name: str = "groq") -> Dict:
             "total_tests": total_tests,
             "successful_tests": successful_tests,
             "success_rate": successful_tests / total_tests if total_tests > 0 else 0,
-            "config_used": config
+            "config_used": config,
+            "smart_routing_enabled": config.get("enable_smart_routing", False)
         }
         
         print(f"\n📈 SUMMARY")
@@ -218,12 +290,13 @@ def run_comprehensive_test(config_name: str = "groq") -> Dict:
         print(f"Total tests: {total_tests}")
         print(f"Successful: {successful_tests}")
         print(f"Success rate: {results['summary']['success_rate']:.1%}")
+        print(f"Smart routing: {'✅' if config.get('enable_smart_routing') else '❌'}")
         
     except Exception as e:
         print(f"❌ Comprehensive test failed: {e}")
         results["error"] = str(e)
     
-    return results
+    return result
 
 # ============================================================================
 # COMMAND LINE INTERFACE
@@ -247,9 +320,11 @@ def main():
             test_web_search()
         elif command == "reasoning":
             test_reasoning()
+        elif command == "routing":
+            test_routing_behavior()
         else:
             print(f"Unknown command: {command}")
-            print("Available commands: test, comprehensive, math, web, reasoning")
+            print("Available commands: test, comprehensive, math, web, reasoning, routing")
     else:
         print("🚀 GAIA Agent Interface")
         print("=" * 30)
@@ -260,6 +335,9 @@ def main():
         print("- test_basic_math()")
         print("- test_web_search()")
         print("- test_reasoning()")
+        print("- test_routing_behavior()")
+        print("")
+        print("Available configs: groq, openrouter, google, performance, accuracy")
 
 if __name__ == "__main__":
     main()

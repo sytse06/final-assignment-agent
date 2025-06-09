@@ -11,6 +11,9 @@ from dataclasses import dataclass
 # Core dependencies
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
 from langgraph.graph import StateGraph, START, END
+from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 # SmolagAgents imports
 from smolagents import (
@@ -90,15 +93,8 @@ class GAIAState(TypedDict):
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError, max_time=60, max_tries=3)
 def llm_invoke_with_retry(llm, messages):
-    """Retry logic for LLM calls - SmolagAgents compatible"""
-    # Convert LangChain messages to SmolagAgents format if needed
-    if messages and hasattr(messages[0], 'content'):
-        # LangChain format: [HumanMessage(content="...")]
-        formatted_messages = [{"role": "user", "content": messages[0].content}]
-    else:
-        formatted_messages = messages
-    
-    return llm(formatted_messages)
+    """Retry logic for LangChain LLM calls"""
+    return llm.invoke(messages)
 
 # ============================================================================
 # COMPLEXITY DETECTION HELPERS
@@ -221,8 +217,47 @@ class GAIAAgent:
             raise
     
     def _initialize_model(self):
-        """Initialize LiteLLMModel"""
+        """Initialize both orchestration and specialist models"""
         try:
+            # Initialize orchestration model (LangChain)
+            if self.config.model_provider == "groq":
+                self.orchestration_model = ChatGroq(
+                    model=self.config.model_name,
+                    api_key=os.getenv("GROQ_API_KEY"),
+                    temperature=self.config.temperature
+                )
+            elif self.config.model_provider == "openrouter":
+                self.orchestration_model = ChatOpenAI(
+                    model=self.config.model_name,
+                    api_key=os.getenv("OPENROUTER_API_KEY"),
+                    base_url="https://openrouter.ai/api/v1",
+                    temperature=self.config.temperature
+                )
+            elif self.config.model_provider == "google":
+                self.orchestration_model = ChatGoogleGenerativeAI(
+                    model=self.config.model_name,
+                    google_api_key=os.getenv("GOOGLE_API_KEY"),
+                    temperature=self.config.temperature
+                )
+            elif self.config.model_provider == "ollama":
+                from langchain_ollama import ChatOllama
+                self.orchestration_model = ChatOllama(
+                    model=self.config.model_name,
+                    base_url=self.config.api_base or "http://localhost:11434",
+                    temperature=self.config.temperature
+                )
+            else:
+                # Fallback to Openrouter
+                self.orchestration_model = ChatOpenAI(
+                    model="qwen/qwen-2.5-coder-32b-instruct:free",
+                    api_key=os.getenv("OPENROUTER_API_KEY"),
+                    base_url="https://openrouter.ai/api/v1",
+                    temperature=self.config.temperature
+                )
+            
+            print(f"✅ Orchestration model: {getattr(self.orchestration_model, 'model_name', getattr(self.orchestration_model, 'model', 'Unknown'))}")
+            
+            # Initialize specialist model (SmolagAgents)
             if self.config.model_provider == "groq":
                 model_id = f"groq/{self.config.model_name}"
                 api_key = os.getenv("GROQ_API_KEY")
@@ -231,27 +266,32 @@ class GAIAAgent:
                 api_key = os.getenv("OPENROUTER_API_KEY")
             elif self.config.model_provider == "ollama":
                 model_id = f"ollama_chat/{self.config.model_name}"
-                return LiteLLMModel(
+                specialist_model = LiteLLMModel(
                     model_id=model_id,
                     api_base=self.config.api_base or "http://localhost:11434",
                     num_ctx=self.config.num_ctx,
                     temperature=self.config.temperature)
+                print(f"✅ Specialist model: {model_id}")
+                return specialist_model
             elif self.config.model_provider == "google":
                 model_id = f"gemini/{self.config.model_name}"
                 api_key = os.getenv("GOOGLE_API_KEY")
             else:
                 raise ValueError(f"Unknown provider: {self.config.model_provider}")
             
-            return LiteLLMModel(
+            specialist_model = LiteLLMModel(
                 model_id=model_id,
                 api_key=api_key,
                 temperature=self.config.temperature
             )
             
+            print(f"✅ Specialist model: {model_id}")
+            return specialist_model
+            
         except Exception as e:
-            print(f"❌ Error initializing model: {e}")
+            print(f"❌ Error initializing models: {e}")
             raise
-    
+            
     def _create_specialist_agents(self):
         """Create specialist agents"""
         env_tools = []
@@ -414,13 +454,13 @@ class GAIAAgent:
             self.logging.logger.log_task(
                 content=state["question"].strip(),
                 title="GAIA Question Processing",
-                subtitle="Question Analysis and Smart Routing"
+                subtitle="Question Analysis and Routing"
             )
         
         # Initialize similar_examples
         similar_examples = []
         
-        # Only do RAG retrieval for complex questions if smart routing is enabled
+        # Only do RAG retrieval for complex questions if routing is enabled
         if not self.config.enable_smart_routing or not self.config.skip_rag_for_simple:
             # Always do RAG (original behavior)
             try:
@@ -439,7 +479,9 @@ class GAIAAgent:
                             })
                 
                 print(f"📚 Found {len(similar_examples)} similar examples")
-                
+                if self.logging:
+                    self.logging.set_similar_examples_count(len(similar_examples))
+                                    
             except Exception as e:
                 print(f"⚠️  RAG retrieval error: {e}")
                 similar_examples = []
@@ -477,10 +519,13 @@ class GAIAAgent:
             reason = "LLM complexity assessment"
         
         print(f"📊 Complexity: {complexity} ({reason})")
+        if self.logging:
+            self.logging.set_complexity(complexity)
         
-        # If complex and we skipped RAG earlier, do it now
+        # If complex perform RAG search with retriever
         if complexity == "complex" and self.config.skip_rag_for_simple and not state.get("similar_examples"):
             print("📚 Retrieving RAG examples for complex question...")
+            
             try:
                 similar_docs = self.retriever.search(question, k=self.config.rag_examples_count)
                 similar_examples = []
@@ -497,7 +542,10 @@ class GAIAAgent:
                                 "answer": a_part
                             })
                 
-                print(f"📚 Found {len(similar_examples)} similar examples")
+                print(f"📚 Found {len(similar_examples)} similar examples")                            
+                if self.logging:
+                    self.logging.set_similar_examples_count(len(similar_examples))
+                    
             except Exception as e:
                 print(f"⚠️  RAG retrieval error: {e}")
                 similar_examples = state.get("similar_examples", [])
@@ -523,8 +571,8 @@ class GAIAAgent:
         Respond with just "simple" or "complex":"""
         
         try:
-            response = llm_invoke_with_retry(self.model, [HumanMessage(content=prompt)])
-            result = response.strip().lower()
+            response = llm_invoke_with_retry(self.orchestration_model, [HumanMessage(content=prompt)])
+            result = response.content.strip().lower()
             return "simple" if "simple" in result else "complex"
         except Exception:
             # Default to complex if LLM fails
@@ -533,6 +581,9 @@ class GAIAAgent:
     def _one_shot_answering_node(self, state: GAIAState):
         """Direct LLM answering for simple questions"""
         print("⚡ Using one-shot direct answering")
+        
+        if self.logging:
+            self.logging.set_routing_path("one_shot_llm")
         
         # Simple prompt for direct answering
         prompt = f"""You are a general AI assistant. Answer this question directly and concisely.
@@ -547,10 +598,10 @@ class GAIAAgent:
         - Keep it as brief as possible"""
         
         try:
-            response = llm_invoke_with_retry(self.model, [HumanMessage(content=prompt)])
+            response = llm_invoke_with_retry(self.orchestration_model, [HumanMessage(content=prompt)])
             
             return {
-                "raw_answer": response,
+                "raw_answer": response.content,
                 "steps": state["steps"] + ["One-shot direct answering completed"]
             }
         except Exception as e:
@@ -573,6 +624,7 @@ class GAIAAgent:
         # Start logging for this task
         if self.logging:
             self.logging.start_task(task_id)
+            self.logging.set_routing_path("manager_coordination")
         
         # Prepare manager context
         manager_context = self._prepare_manager_context(
@@ -618,7 +670,7 @@ class GAIAAgent:
             ""
         ]
         
-        # Add RAG examples if available
+        # Add RAG examples
         if rag_examples:
             context_parts.extend([
                 "Similar examples from GAIA database:",
@@ -788,4 +840,4 @@ class GAIAAgent:
 if __name__ == "__main__":
     print("🚀 GAIA Manager Agent Module")
     print("=" * 30)
-    print("Use gaia_interface.py for testing capabilities")
+    print("Use gaia_interface.py for testing")
