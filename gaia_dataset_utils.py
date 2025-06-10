@@ -59,18 +59,88 @@ class GAIADatasetManager:
         
         try:
             with open(metadata_file, 'r') as f:
-                self.metadata = json.load(f)
+                raw_metadata = json.load(f)
+            
+            # Handle GAIA dataset structure: {'validation': [...], 'test': [...], 'stats': {...}}
+            if isinstance(raw_metadata, dict) and 'validation' in raw_metadata:
+                print(f"📊 GAIA Dataset Structure Detected:")
+                print(f"  Validation set: {len(raw_metadata.get('validation', []))} questions")
+                print(f"  Test set: {len(raw_metadata.get('test', []))} questions")
+                
+                # Use validation set for testing (test set typically doesn't have answers)
+                self.metadata = raw_metadata['validation']
+                
+                # Also store test set if needed
+                self.test_metadata = raw_metadata.get('test', [])
+                
+            elif isinstance(raw_metadata, list):
+                self.metadata = raw_metadata
+                
+            elif isinstance(raw_metadata, dict):
+                # Handle other dict structures
+                if 'questions' in raw_metadata:
+                    self.metadata = raw_metadata['questions']
+                elif 'data' in raw_metadata:
+                    self.metadata = raw_metadata['data']
+                else:
+                    # Assume the dict values are the questions
+                    self.metadata = list(raw_metadata.values())
+            else:
+                print(f"❌ Unexpected metadata structure: {type(raw_metadata)}")
+                return
             
             # Index questions by task_id for quick lookup
+            self.file_questions = {}
             for item in self.metadata:
-                if 'file_name' in item:
-                    self.file_questions[item['task_id']] = item
+                if isinstance(item, dict):
+                    # Check for file references
+                    if ('file_name' in item and item['file_name']) or ('file_path' in item and item['file_path']):
+                        self.file_questions[item['task_id']] = item
             
             print(f"✅ Loaded {len(self.metadata)} GAIA questions")
             print(f"📁 Found {len(self.file_questions)} questions with files")
             
+            # Show distribution by level
+            level_dist = {}
+            for item in self.metadata:
+                level = item.get('Level', 'Unknown')
+                level_dist[level] = level_dist.get(level, 0) + 1
+            
+            print(f"📊 Level distribution:", end=" ")
+            for level in sorted(level_dist.keys()):
+                print(f"L{level}: {level_dist[level]}", end="  ")
+            print()
+            
         except Exception as e:
             print(f"❌ Error loading metadata: {e}")
+            print(f"💡 Check that {metadata_file} contains valid JSON")
+
+    def get_dataset_info(self) -> dict:
+        """Get comprehensive dataset information"""
+        if not self.metadata:
+            return {"error": "No metadata loaded"}
+        
+        info = {
+            "total_questions": len(self.metadata),
+            "questions_with_files": len(self.file_questions),
+            "level_distribution": {},
+            "file_type_distribution": {},
+            "has_test_set": hasattr(self, 'test_metadata') and self.test_metadata
+        }
+        
+        # Level distribution
+        for item in self.metadata:
+            level = item.get('Level', 'Unknown')
+            info["level_distribution"][level] = info["level_distribution"].get(level, 0) + 1
+        
+        # File type distribution
+        for question in self.file_questions.values():
+            file_name = question.get('file_name', '')
+            if file_name:
+                ext = file_name.split('.')[-1].lower()
+                info["file_type_distribution"][ext] = info["file_type_distribution"].get(ext, 0) + 1
+        
+        return info
     
     def get_questions_with_files(self, level: int = None, file_type: str = None) -> List[Dict]:
         """
@@ -666,66 +736,128 @@ def quick_dataset_check(dataset_path: str = "./tests/gaia_data"):
         return False
     
     print(f"\n📊 Local GAIA Dataset Check")
-    print("=" * 40)
-    print(f"Dataset path: {manager.dataset_path}")
-    print(f"Total questions: {len(manager.metadata)}")
-    print(f"Questions with files: {len(manager.file_questions)}")
+    print("=" * 60)
+    print(f"🔍 Checking metadata file: {os.path.join(manager.dataset_path, 'metadata.json')}")
+    print(f"📁 Scanning data directory: {manager.dataset_path}")
+    print(f"✅ Successfully loaded GAIA dataset from: {manager.dataset_path}")
+    
+    # Handle both list and dict metadata structures
+    if isinstance(manager.metadata, list):
+        print(f"📋 Total questions in metadata.json: {len(manager.metadata)}")
+        print(f"📎 Questions with file attachments: {len(manager.file_questions)}")
+        sample_question = manager.metadata[0] if manager.metadata else None
+    elif isinstance(manager.metadata, dict):
+        print(f"📋 Total questions in metadata.json: {len(manager.metadata)}")
+        print(f"📎 Questions with file attachments: {len(manager.file_questions)}")
+        # Get first item from dict
+        sample_question = next(iter(manager.metadata.values())) if manager.metadata else None
+    else:
+        print(f"❌ Unexpected metadata structure: {type(manager.metadata)}")
+        return False
     
     # Validate metadata structure
-    if manager.metadata and len(manager.metadata) > 0:
-        sample_question = manager.metadata[0]
-        print(f"\nMetadata structure (sample):")
-        print(f"  Required fields present:")
+    if sample_question:
+        print(f"\n📝 Metadata Structure Analysis (from metadata.json):")
+        print(f"  Required GAIA fields present in metadata.json:")
         required_fields = ['task_id', 'Question', 'Level', 'Final answer']
         for field in required_fields:
             present = field in sample_question
-            print(f"    {field}: {'✅' if present else '❌'}")
+            print(f"    ✅ {field}: Found" if present else f"    ❌ {field}: Missing")
+        
+        # Show additional fields found
+        additional_fields = [k for k in sample_question.keys() if k not in required_fields]
+        if additional_fields:
+            print(f"  Additional fields in metadata.json: {', '.join(additional_fields)}")
+        
+        # Show sample question structure
+        print(f"\n  📄 Sample question from metadata.json:")
+        print(f"    Task ID: {sample_question.get('task_id', 'Not found')}")
+        print(f"    Level: {sample_question.get('Level', 'Not found')}")
+        print(f"    Question preview: {sample_question.get('Question', 'Not found')[:80]}...")
+        
+        if 'file_name' in sample_question:
+            print(f"    Associated file: {sample_question.get('file_name', 'None')}")
     else:
-        print(f"\n❌ No metadata loaded or empty metadata")
+        print(f"\n❌ No sample question available from metadata.json")
     
-    # Check file references in metadata
+    # Check file references in metadata vs actual files in directory
     file_ref_stats = {
         'has_file_name': 0,
         'has_file_path': 0,
-        'file_found': 0,
-        'file_missing': 0
+        'file_found_in_directory': 0,
+        'file_missing_from_directory': 0
     }
     
     print(f"\n📁 File Reference Analysis:")
+    print(f"   Comparing metadata.json file references with actual files in {manager.dataset_path}")
     
     # Check first 10 file questions for detailed analysis
     sample_file_questions = list(manager.file_questions.items())[:10]
     
-    for task_id, question in sample_file_questions:
-        file_name = question.get('file_name', '')
-        file_path = question.get('file_path', '')
+    if not sample_file_questions:
+        print(f"  ⚠️  No file references found in metadata.json")
+        print(f"  💡 This could mean:")
+        print(f"     - Your dataset contains only text-based questions (no files needed)")
+        print(f"     - File references use different field names")
         
-        if file_name:
-            file_ref_stats['has_file_name'] += 1
-        if file_path:
-            file_ref_stats['has_file_path'] += 1
+        # Check if ANY questions have file-related fields
+        all_questions = manager.metadata if isinstance(manager.metadata, list) else list(manager.metadata.values())
         
-        # Try to locate the actual file
-        actual_file_path = manager.setup_test_file(task_id)
-        if actual_file_path:
-            file_ref_stats['file_found'] += 1
-        else:
-            file_ref_stats['file_missing'] += 1
+        file_related_fields = ['file_name', 'file_path', 'Attachments', 'Files']
+        questions_with_files = []
+        
+        print(f"  🔍 Searching metadata.json for file-related fields...")
+        for question in all_questions[:5]:  # Check first 5
+            has_file_field = any(field in question for field in file_related_fields)
+            if has_file_field:
+                questions_with_files.append(question)
+                print(f"    ✅ Found file fields in task: {question.get('task_id', 'unknown')}")
+                for field in file_related_fields:
+                    if field in question:
+                        print(f"      {field}: {question[field]}")
+        
+        if not questions_with_files:
+            print(f"  ❓ No file-related fields found in metadata.json sample")
+            print(f"  📋 Available fields in metadata.json: {list(sample_question.keys()) if sample_question else 'None'}")
+    else:
+        print(f"  📋 Found {len(sample_file_questions)} questions with file references in metadata.json")
+        print(f"  🔍 Checking if referenced files exist in directory {manager.dataset_path}...")
+        
+        for task_id, question in sample_file_questions:
+            file_name = question.get('file_name', '')
+            file_path = question.get('file_path', '')
+            
+            if file_name:
+                file_ref_stats['has_file_name'] += 1
+            if file_path:
+                file_ref_stats['has_file_path'] += 1
+            
+            # Try to locate the actual file in the directory
+            actual_file_path = manager.setup_test_file(task_id)
+            if actual_file_path:
+                file_ref_stats['file_found_in_directory'] += 1
+                print(f"    ✅ {file_name} -> Found in directory")
+            else:
+                file_ref_stats['file_missing_from_directory'] += 1
+                print(f"    ❌ {file_name} -> Not found in directory")
+        
+        print(f"\n  📊 File Reference Summary:")
+        print(f"    Questions with 'file_name' in metadata.json: {file_ref_stats['has_file_name']}")
+        print(f"    Questions with 'file_path' in metadata.json: {file_ref_stats['has_file_path']}")
+        print(f"    Files actually found in {manager.dataset_path}: {file_ref_stats['file_found_in_directory']}")
+        print(f"    Files missing from {manager.dataset_path}: {file_ref_stats['file_missing_from_directory']}")
     
-    print(f"  Sample of {len(sample_file_questions)} file questions:")
-    print(f"    Have file_name: {file_ref_stats['has_file_name']}")
-    print(f"    Have file_path: {file_ref_stats['has_file_path']}")
-    print(f"    Files found: {file_ref_stats['file_found']}")
-    print(f"    Files missing: {file_ref_stats['file_missing']}")
+    # Show actual files present in the directory
+    print(f"\n📂 Directory Contents Analysis:")
+    print(f"   Scanning actual files in directory: {manager.dataset_path}")
     
-    # Show actual files in directory
     if os.path.exists(manager.dataset_path):
         actual_files = [f for f in os.listdir(manager.dataset_path) 
                        if os.path.isfile(os.path.join(manager.dataset_path, f))
                        and not f.startswith('.')]
         
-        print(f"\n📂 Files in dataset directory:")
-        print(f"  Total files found: {len(actual_files)}")
+        print(f"  📊 Files found in {manager.dataset_path}:")
+        print(f"    Total files: {len(actual_files)}")
         
         # Show file types in directory
         file_types_in_dir = {}
@@ -733,65 +865,96 @@ def quick_dataset_check(dataset_path: str = "./tests/gaia_data"):
             ext = file.split('.')[-1].lower() if '.' in file else 'no_ext'
             file_types_in_dir[ext] = file_types_in_dir.get(ext, 0) + 1
         
-        print(f"  File types in directory:")
+        print(f"    File types found in directory:")
         for ext, count in sorted(file_types_in_dir.items(), key=lambda x: x[1], reverse=True):
-            print(f"    .{ext}: {count} files")
+            print(f"      .{ext}: {count} files")
         
-        # Show sample filenames
-        print(f"  Sample files:")
+        # Show sample filenames from directory
+        print(f"    Sample files in {manager.dataset_path}:")
         for file in actual_files[:5]:
-            print(f"    {file}")
+            print(f"      {file}")
         if len(actual_files) > 5:
-            print(f"    ... and {len(actual_files) - 5} more")
+            print(f"      ... and {len(actual_files) - 5} more files")
+        
+        # Special check for metadata.json
+        if 'metadata.json' in actual_files:
+            print(f"    ✅ metadata.json confirmed present in directory")
+        else:
+            print(f"    ⚠️  metadata.json not listed (but was loaded successfully)")
+    else:
+        print(f"  ❌ Directory {manager.dataset_path} not accessible")
     
     # Show file types expected from metadata
     file_types_expected = manager.get_file_types_distribution()
-    print(f"\n📋 File types expected from metadata:")
-    for file_type, count in sorted(file_types_expected.items(), key=lambda x: x[1], reverse=True)[:8]:
-        print(f"  .{file_type}: {count} questions")
+    if file_types_expected:
+        print(f"\n📋 File Types Expected (from metadata.json references):")
+        for file_type, count in sorted(file_types_expected.items(), key=lambda x: x[1], reverse=True)[:8]:
+            print(f"    .{file_type}: {count} questions expect this file type")
+    else:
+        print(f"\n📋 No specific file types referenced in metadata.json")
     
-    # Check if your file organization matches metadata expectations
+    # Detailed file organization analysis
     print(f"\n🔍 File Organization Analysis:")
+    print(f"   Comparing metadata.json expectations vs {manager.dataset_path} contents")
     
-    # Sample a few questions and show what files should exist
-    sample_questions = list(manager.file_questions.values())[:3]
+    # Sample a few questions and show what files should exist vs what's found
+    if sample_file_questions:
+        sample_questions = list(manager.file_questions.values())[:3]
+    else:
+        # If no file questions, show sample of all questions
+        all_questions = manager.metadata if isinstance(manager.metadata, list) else list(manager.metadata.values())
+        sample_questions = all_questions[:3]
+        print(f"  ⚠️  Using sample questions (no file questions found in metadata.json)")
+    
     for i, question in enumerate(sample_questions, 1):
         task_id = question['task_id']
-        expected_file = question.get('file_name', 'unknown')
-        metadata_path = question.get('file_path', 'not specified')
+        expected_file = question.get('file_name', 'no file specified in metadata.json')
+        metadata_path = question.get('file_path', 'not specified in metadata.json')
         
-        print(f"\n  Example {i}:")
+        print(f"\n  Example {i} (from metadata.json):")
         print(f"    Task ID: {task_id}")
-        print(f"    Expected filename: {expected_file}")
-        print(f"    Metadata file_path: {metadata_path}")
+        print(f"    Expected filename (per metadata.json): {expected_file}")
+        print(f"    Metadata file_path field: {metadata_path}")
         
-        # Try to find the file
-        found_path = manager.setup_test_file(task_id)
-        if found_path:
-            print(f"    ✅ Found at: {found_path}")
+        # Try to find the file if there's a file reference
+        if expected_file and expected_file != 'no file specified in metadata.json':
+            found_path = manager.setup_test_file(task_id)
+            if found_path:
+                print(f"    ✅ File found in directory: {found_path}")
+            else:
+                print(f"    ❌ File not found in directory: {manager.dataset_path}")
+                # Suggest possible file organization
+                if expected_file:
+                    possible_names = [
+                        expected_file,
+                        f"{task_id}.{expected_file.split('.')[-1]}",
+                        f"{task_id[:8]}.{expected_file.split('.')[-1]}"  # First part of UUID
+                    ]
+                    print(f"    💡 Searched for these names: {possible_names}")
         else:
-            print(f"    ❌ Not found")
-            # Suggest possible file organization
-            if expected_file:
-                possible_names = [
-                    expected_file,
-                    f"{task_id}.{expected_file.split('.')[-1]}",
-                    f"{task_id[:8]}.{expected_file.split('.')[-1]}"  # First part of UUID
-                ]
-                print(f"    💡 Expected one of: {possible_names}")
+            print(f"    📝 Text-only question: {question.get('Question', '')[:60]}...")
     
-    success_rate = file_ref_stats['file_found'] / len(sample_file_questions) if sample_file_questions else 0
-    print(f"\n📈 Dataset Readiness: {success_rate:.1%} of sample files found")
-    
-    if success_rate < 0.5:
-        print(f"\n💡 Suggestions for file organization:")
-        print(f"   1. Ensure files are copied to: {manager.dataset_path}")
-        print(f"   2. Use exact filenames from metadata.json 'file_name' field")
-        print(f"   3. Alternative: rename files to use task_id as filename")
-        print(f"   4. Check that metadata.json 'file_path' references are correct")
-    
-    return success_rate > 0.5
-
+    # Calculate success rate and provide summary
+    if sample_file_questions:
+        success_rate = file_ref_stats['file_found_in_directory'] / len(sample_file_questions) if sample_file_questions else 0
+        print(f"\n📈 Dataset Readiness Assessment:")
+        print(f"   File availability: {success_rate:.1%} of metadata.json file references found in {manager.dataset_path}")
+        
+        if success_rate < 0.5:
+            print(f"\n💡 Suggestions for improving file organization:")
+            print(f"   1. Copy missing files to directory: {manager.dataset_path}")
+            print(f"   2. Use exact filenames specified in metadata.json 'file_name' field")
+            print(f"   3. Alternative: rename files to use task_id as filename")
+            print(f"   4. Verify metadata.json 'file_path' references point to correct locations")
+        
+        print(f"\n✅ Summary: metadata.json loaded successfully, {len(manager.file_questions)} file references found")
+        return success_rate > 0.5
+    else:
+        print(f"\n📈 Dataset Readiness Assessment:")
+        print(f"   Text-only dataset: metadata.json loaded successfully with {len(manager.metadata)} questions")
+        print(f"   No file dependencies found - ready for text-based testing!")
+        return True  # Text-only datasets are valid
+        
 def run_quick_file_test(agent_config: str = "groq"):
     """
     Quick test with one file from your local dataset
