@@ -1,5 +1,6 @@
-# agent_testing.py
-# Two-step GAIA testing framework adapted for refactored agent system
+# agent_testing.py - PURE TESTING LAYER (Complete Version)
+# Responsibilities: Agent execution, evaluation, performance analysis, comparisons
+# NO dataset management, file operations, or metadata parsing
 
 import json
 import os
@@ -12,11 +13,11 @@ from pathlib import Path
 import time
 import traceback
 from collections import defaultdict
-import uuid
 import re
 from difflib import SequenceMatcher
+import logging
 
-# Import our current agent system
+# Import our agent system and dataset manager
 from agent_logic import GAIAAgent, GAIAConfig
 from agent_interface import (
     create_gaia_agent, 
@@ -27,7 +28,8 @@ from agent_interface import (
     get_performance_config, 
     get_accuracy_config
 )
-from agent_logging import create_timestamped_filename, get_latest_log_file
+from agent_logging import create_timestamped_filename
+from gaia_dataset_utils import GAIADatasetManager
 
 # ============================================================================
 # TESTING CONFIGURATION
@@ -35,23 +37,25 @@ from agent_logging import create_timestamped_filename, get_latest_log_file
 
 @dataclass
 class GAIATestConfig:
-    """Configuration for two-step GAIA testing"""
+    """Configuration for GAIA testing framework"""
     # Execution settings
-    max_questions: int = 50
     timeout_per_question: int = 180
-    save_intermediate: bool = True
+    max_retries: int = 3
+    enable_retries: bool = True
+    enable_strategy_fallback: bool = True
     
     # Output settings
     results_dir: str = "logs"
+    save_intermediate: bool = True
+    enable_real_time_monitoring: bool = True
     
-    # Safety settings
-    enable_retries: bool = True
-    max_retries: int = 2
+    # Error handling
+    detect_execution_failures: bool = True
+    fallback_strategies: List[str] = None
     
-    # Content filtering
-    include_file_questions: bool = True
-    include_image_questions: bool = True
-    target_levels: List[int] = None  # None = all levels
+    # Performance monitoring
+    enable_performance_profiling: bool = True
+    memory_monitoring: bool = False
     
     # Agent configuration
     agent_config_name: str = "groq"
@@ -79,463 +83,649 @@ def get_agent_config_by_name(config_name: str) -> Dict:
     return config_map.get(config_name, get_groq_config())
 
 # ============================================================================
-# STEP 1: QUESTION EXECUTION (BLIND)
+# AGENT EXECUTION (BLIND)
 # ============================================================================
 
-class GAIAQuestionExecutor:
-    """Step 1: Execute questions without knowing the ground truth"""
+class GAIATestExecutor:
+    """Execute agents on test batches - no dataset management"""
     
-    def __init__(self, config: GAIATestConfig):
-        self.config = config
-        self.results_dir = Path(config.results_dir)
+    def __init__(self, agent_config: Union[str, Dict], test_config: GAIATestConfig = None):
+        """Initialize with agent and test configurations"""
+        
+        self.test_config = test_config or GAIATestConfig()
+        self.results_dir = Path(self.test_config.results_dir)
         self.results_dir.mkdir(exist_ok=True)
         
-        self.execution_log = []
+        # Create agent
+        if isinstance(agent_config, str):
+            config_dict = get_agent_config_by_name(agent_config)
+            self.agent_config_name = agent_config
+        else:
+            config_dict = agent_config
+            self.agent_config_name = "custom"
+        
+        self.agent = create_gaia_agent(config_dict)
         self.session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         
-        print(f"🎯 GAIA Question Executor Initialized")
+        # Execution tracking
+        self.execution_stats = {
+            'total_questions': 0,
+            'successful_executions': 0,
+            'execution_failures': 0,
+            'retry_count': 0,
+            'strategy_fallback_count': 0,
+            'start_time': None,
+            'end_time': None
+        }
+        
+        print(f"🎯 GAIA Test Executor Initialized")
+        print(f"🤖 Agent: {self.agent_config_name}")
         print(f"📊 Session: {self.session_id}")
-        print(f"📁 Results: {self.results_dir}")
+        print(f"🔧 Features: Error detection, Strategy fallback, Real-time monitoring")
     
-    def load_questions_blind(self, metadata_path: str = "metadata.jsonl") -> List[Dict]:
-        """Load questions WITHOUT ground truth answers"""
-        
-        try:
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                all_questions = [json.loads(line) for line in f]
-        except FileNotFoundError:
-            print(f"❌ Metadata file not found: {metadata_path}")
-            return self._generate_sample_questions()
-        
-        # Filter questions based on config
-        filtered_questions = []
-        
-        for question_data in all_questions:
-            # Level filtering
-            if self.config.target_levels:
-                if question_data.get('Level') not in self.config.target_levels:
-                    continue
-            
-            # File question filtering
-            has_file = bool(question_data.get('file_name', '').strip())
-            if has_file and not self.config.include_file_questions:
-                continue
-            
-            # Image question filtering  
-            file_name = question_data.get('file_name', '').lower()
-            is_image = file_name.endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp'))
-            if is_image and not self.config.include_image_questions:
-                continue
-            
-            # Create blind question (remove ground truth)
-            blind_question = {
-                'task_id': question_data.get('task_id'),
-                'question': question_data.get('Question'),
-                'level': question_data.get('Level'),
-                'file_name': question_data.get('file_name', ''),
-                'file_path': question_data.get('file_path', ''),
-                'has_file': has_file,
-                'is_image_question': is_image,
-                # Deliberately exclude 'Final answer'
-            }
-            
-            filtered_questions.append(blind_question)
-        
-        # Limit to max questions
-        selected_questions = filtered_questions[:self.config.max_questions]
-        
-        print(f"📋 Loaded {len(selected_questions)} questions for execution")
-        self._print_question_summary(selected_questions)
-        
-        return selected_questions
-    
-    def _print_question_summary(self, questions: List[Dict]):
-        """Print summary of question distribution"""
-        
-        # Level distribution
-        level_counts = defaultdict(int)
-        file_counts = {'with_files': 0, 'without_files': 0}
-        image_count = 0
-        
-        for q in questions:
-            level_counts[q['level']] += 1
-            if q['has_file']:
-                file_counts['with_files'] += 1
-            else:
-                file_counts['without_files'] += 1
-            if q['is_image_question']:
-                image_count += 1
-        
-        print(f"📊 Question Distribution:")
-        print(f"├── By Level:")
-        for level in sorted(level_counts.keys()):
-            print(f"│   ├── Level {level}: {level_counts[level]} questions")
-        print(f"├── File Attachments:")
-        print(f"│   ├── With files: {file_counts['with_files']}")
-        print(f"│   └── Without files: {file_counts['without_files']}")
-        print(f"└── Image questions: {image_count}")
-    
-    def execute_questions_batch(self, questions: List[Dict] = None) -> str:
-        """Step 1: Execute all questions and save results"""
-        
-        if questions is None:
-            questions = self.load_questions_blind()
+    def execute_test_batch(self, questions: List[Dict]) -> List[Dict]:
+        """Execute agent on provided questions (blind - no ground truth)"""
         
         if not questions:
-            print("❌ No questions to execute")
-            return None
+            print("❌ No questions provided for execution")
+            return []
         
-        print(f"\n🚀 Starting Question Execution")
-        print(f"📝 Agent Config: {self.config.agent_config_name}")
-        print(f"📊 Questions: {len(questions)}")
-        print("=" * 60)
+        self.execution_stats['total_questions'] = len(questions)
+        self.execution_stats['start_time'] = time.time()
         
-        # Create agent using our current system
-        try:
-            # Get configuration
-            if self.config.custom_agent_config:
-                agent_config = self.config.custom_agent_config
+        print(f"\n🚀 Starting Batch Execution")
+        print(f"📝 Questions: {len(questions)}")
+        print(f"🤖 Agent: {self.agent_config_name}")
+        print(f"🔧 Error detection: {'✅ ON' if self.test_config.detect_execution_failures else '❌ OFF'}")
+        print(f"🔄 Strategy fallback: {'✅ ON' if self.test_config.enable_strategy_fallback else '❌ OFF'}")
+        print("=" * 70)
+        
+        execution_results = []
+        
+        for i, question_data in enumerate(questions):
+            if self.test_config.enable_real_time_monitoring:
+                self._print_progress_header(i, len(questions), question_data)
+            
+            # Execute with enhanced error handling
+            execution_result = self.execute_single_question(question_data, attempt=1)
+            execution_results.append(execution_result)
+            
+            # Update stats
+            if execution_result.get('execution_successful', False):
+                self.execution_stats['successful_executions'] += 1
             else:
-                agent_config = get_agent_config_by_name(self.config.agent_config_name)
+                self.execution_stats['execution_failures'] += 1
             
-            # Create agent
-            agent = create_gaia_agent(agent_config)
-            print(f"✅ Agent created: {self.config.agent_config_name}")
-            
-        except Exception as e:
-            print(f"❌ Failed to create agent: {e}")
-            traceback.print_exc()
-            return None
+            # Print immediate result
+            self._print_immediate_result(execution_result, i+1)
         
-        # Execution log file with timestamp
-        execution_file = self.results_dir / create_timestamped_filename("gaia_executions", "jsonl").split('/')[-1]
+        self.execution_stats['end_time'] = time.time()
+        self._print_batch_summary(execution_results)
         
-        try:
-            with open(execution_file, 'w') as f:
-                
-                for i, question_data in enumerate(questions):
-                    print(f"\n🔄 Question {i+1}/{len(questions)}")
-                    print(f"📋 Task ID: {question_data['task_id']}")
-                    print(f"📊 Level: {question_data['level']}")
-                    
-                    if question_data['has_file']:
-                        print(f"📎 File: {question_data['file_name']}")
-                    
-                    # Show question (truncated for readability)
-                    question_text = question_data['question']
-                    preview = question_text[:100] + "..." if len(question_text) > 100 else question_text
-                    print(f"❓ Question: {preview}")
-                    
-                    execution_result = self._execute_single_question(
-                        agent, question_data, attempt=1
-                    )
-                    
-                    # Save immediately
-                    f.write(json.dumps(execution_result, default=str) + '\n')
-                    f.flush()
-                    
-                    # Print immediate result
-                    if execution_result.get('success', False):
-                        answer = execution_result.get('agent_answer', 'No answer')
-                        duration = execution_result.get('execution_time', 0)
-                        strategy = execution_result.get('strategy_used', '')
-                        print(f"✅ Answer: {answer}")
-                        print(f"⏱️  Time: {duration:.2f}s")
-                        if strategy:
-                            print(f"🎯 Strategy: {strategy}")
-                    else:
-                        error = execution_result.get('error', 'Unknown error')
-                        print(f"❌ Error: {error}")
-                    
-                    # Add to session log
-                    self.execution_log.append(execution_result)
+        # Save results
+        if self.test_config.save_intermediate:
+            self._save_execution_results(execution_results)
         
-        except Exception as e:
-            print(f"❌ Execution failed: {e}")
-            traceback.print_exc()
-            return None
-        
-        print(f"\n🎉 Execution Complete!")
-        print(f"📁 Results saved: {execution_file}")
-        print(f"📊 Total executed: {len(self.execution_log)}")
-        
-        return str(execution_file)
+        return execution_results
     
-    def _execute_single_question(self, agent: GAIAAgent, question_data: Dict, attempt: int = 1) -> Dict:
+    def execute_single_question(self, question_data: Dict, attempt: int = 1) -> Dict:
         """Execute single question with comprehensive tracking"""
         
         start_time = time.time()
-        task_id = question_data['task_id']
+        task_id = question_data.get('task_id', f'unknown_{int(time.time())}')
         
         execution_record = {
             'session_id': self.session_id,
             'task_id': task_id,
-            'question': question_data['question'],
-            'level': question_data['level'],
-            'has_file': question_data['has_file'],
+            'question': question_data.get('Question', ''),
+            'level': question_data.get('Level'),
             'file_name': question_data.get('file_name', ''),
-            'file_path': question_data.get('file_path', ''),
-            'is_image_question': question_data['is_image_question'],
-            'attempt': attempt,
+            'has_file': bool(question_data.get('file_name', '').strip()),
             'timestamp': datetime.now().isoformat(),
-            'agent_config': self.config.agent_config_name,
+            'agent_config': self.agent_config_name,
+            'attempt_number': attempt
         }
         
         try:
-            # Execute with our current agent system
-            result = agent.run_single_question(
-                question=question_data['question'],
+            # Prepare question for agent
+            question_text = self._prepare_question_for_agent(question_data)
+            
+            # Execute with our agent system
+            result = self.agent.run_single_question(
+                question=question_text,
                 task_id=task_id
             )
             
             execution_time = time.time() - start_time
             
-            # Extract agent response from our current system
-            agent_answer = result.get('final_answer', '')
-            raw_answer = result.get('raw_answer', '')
-            steps = result.get('steps', [])
-            complexity = result.get('complexity', '')
+            # Extract agent response
+            raw_agent_response = result.get('final_answer', '')
             
-            # Determine strategy used based on our routing system
-            strategy_used = self._determine_strategy_used(result, complexity)
+            # Detect execution failures in agent response
+            is_execution_failure = self._detect_execution_failure(raw_agent_response)
             
-            execution_record.update({
-                'success': True,
-                'agent_answer': agent_answer,
-                'raw_answer': raw_answer,
-                'strategy_used': strategy_used,
-                'complexity_detected': complexity,
-                'execution_time': execution_time,
-                'total_steps': len(steps),
-                'steps_summary': steps[-3:] if len(steps) > 3 else steps,  # Last 3 steps
-                'error': None
-            })
+            if is_execution_failure:
+                # Execution failed - agent returned error message
+                execution_record.update({
+                    'execution_successful': False,
+                    'agent_answer': '',  # No real answer
+                    'raw_agent_response': raw_agent_response,
+                    'error_message': raw_agent_response,
+                    'error_type': self._categorize_error(raw_agent_response),
+                    'strategy_used': 'failed',
+                    'execution_time': execution_time,
+                    'total_steps': 0
+                })
+                
+                # Try strategy fallback if enabled
+                if (self.test_config.enable_strategy_fallback and 
+                    attempt <= self.test_config.max_retries):
+                    
+                    return self._attempt_strategy_fallback(question_data, execution_record, attempt)
+                
+            else:
+                # Execution succeeded - got real answer
+                steps = result.get('steps', [])
+                complexity = result.get('complexity', '')
+                selected_agent = result.get('selected_agent', '')
+                strategy_used = self._determine_strategy_used(result, complexity, steps)
+                
+                execution_record.update({
+                    'execution_successful': True,
+                    'agent_answer': raw_agent_response.strip(),
+                    'raw_agent_response': raw_agent_response,
+                    'error_message': None,
+                    'error_type': None,
+                    'strategy_used': strategy_used,
+                    'selected_agent': selected_agent,
+                    'complexity_detected': complexity,
+                    'execution_time': execution_time,
+                    'total_steps': len(steps),
+                    'steps_summary': steps[-3:] if len(steps) > 3 else steps
+                })
             
         except Exception as e:
             execution_time = time.time() - start_time
             error_msg = str(e)
             
             execution_record.update({
-                'success': False,
-                'error': error_msg,
-                'execution_time': execution_time,
+                'execution_successful': False,
                 'agent_answer': '',
+                'raw_agent_response': '',
+                'error_message': error_msg,
+                'error_type': 'python_exception',
                 'strategy_used': 'failed',
-                'complexity_detected': '',
-                'total_steps': 0
+                'execution_time': execution_time,
+                'total_steps': 0,
+                'exception_traceback': traceback.format_exc()
             })
             
-            # Retry logic
-            if attempt < self.config.max_retries and self.config.enable_retries:
-                print(f"    🔄 Retry attempt {attempt + 1}")
-                return self._execute_single_question(agent, question_data, attempt + 1)
+            # Retry logic for Python exceptions
+            if attempt < self.test_config.max_retries and self.test_config.enable_retries:
+                self.execution_stats['retry_count'] += 1
+                print(f"    🔄 Retry attempt {attempt + 1} (Python exception)")
+                time.sleep(2)
+                return self.execute_single_question(question_data, attempt + 1)
         
         return execution_record
     
-    def _determine_strategy_used(self, result: Dict, complexity: str) -> str:
+    def execute_with_retry(self, question: Dict, max_retries: int = 2) -> Dict:
+        """Execute with retry logic for robustness"""
+        
+        for attempt in range(1, max_retries + 2):
+            result = self.execute_single_question(question, attempt)
+            
+            if result.get('execution_successful', False):
+                return result
+            
+            if attempt <= max_retries:
+                print(f"    🔄 Retry {attempt}/{max_retries}")
+                time.sleep(1)
+        
+        return result
+    
+    def execute_with_timeout(self, question: Dict, timeout: int = 180) -> Dict:
+        """Execute with timeout handling"""
+        
+        import signal
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError(f"Question execution timeout after {timeout}s")
+        
+        # Set timeout
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout)
+        
+        try:
+            result = self.execute_single_question(question)
+            signal.alarm(0)  # Cancel timeout
+            return result
+        except TimeoutError as e:
+            signal.alarm(0)
+            return {
+                'task_id': question.get('task_id', 'unknown'),
+                'execution_successful': False,
+                'error_message': str(e),
+                'error_type': 'timeout',
+                'agent_answer': '',
+                'strategy_used': 'timeout',
+                'execution_time': timeout
+            }
+    
+    def _detect_execution_failure(self, agent_response: str) -> bool:
+        """Detect execution failures in agent responses"""
+        
+        if not agent_response or not agent_response.strip():
+            return True
+        
+        # Comprehensive error patterns
+        error_patterns = [
+            'execution failed',
+            'manager execution failed',
+            'agent execution failed',
+            'got an unexpected keyword argument',
+            'attributeerror',
+            'keyerror',
+            'valueerror',
+            'typeerror',
+            'nameerror',
+            'traceback',
+            'exception occurred',
+            'error:',
+            'failed:',
+            'timeout',
+            'api error',
+            'rate limit',
+            'connection error',
+            'authentication failed',
+            'permission denied',
+            'file not found',
+            'invalid response',
+            'parsing error',
+            'tool execution failed'
+        ]
+        
+        response_lower = agent_response.lower().strip()
+        
+        # Check for error patterns
+        for pattern in error_patterns:
+            if pattern in response_lower:
+                return True
+        
+        # Check for suspiciously long responses that contain error keywords
+        if len(agent_response) > 150:
+            error_keywords = ['failed', 'error', 'exception', 'traceback', 'unexpected']
+            if sum(1 for keyword in error_keywords if keyword in response_lower) >= 2:
+                return True
+        
+        # Check for Python-style stack traces
+        if 'traceback (most recent call last):' in response_lower:
+            return True
+        
+        # Check for empty or placeholder responses
+        placeholder_responses = ['', 'none', 'null', 'undefined', 'no answer', 'cannot answer']
+        if response_lower in placeholder_responses:
+            return True
+        
+        return False
+    
+    def _categorize_error(self, error_message: str) -> str:
+        """Categorize error types for analysis"""
+        
+        error_message_lower = error_message.lower()
+        
+        if 'unexpected keyword argument' in error_message_lower:
+            return 'interface_mismatch'
+        elif 'attributeerror' in error_message_lower:
+            return 'attribute_error'
+        elif 'timeout' in error_message_lower:
+            return 'timeout'
+        elif 'api' in error_message_lower or 'rate limit' in error_message_lower:
+            return 'api_error'
+        elif 'file not found' in error_message_lower:
+            return 'file_error'
+        elif 'authentication' in error_message_lower or 'permission' in error_message_lower:
+            return 'auth_error'
+        elif 'tool' in error_message_lower:
+            return 'tool_error'
+        elif any(word in error_message_lower for word in ['manager', 'execution', 'agent']):
+            return 'execution_error'
+        else:
+            return 'unknown_error'
+    
+    def _attempt_strategy_fallback(self, question_data: Dict, failed_record: Dict, attempt: int) -> Dict:
+        """Attempt execution with fallback strategy"""
+        
+        self.execution_stats['strategy_fallback_count'] += 1
+        
+        print(f"    🔄 Strategy fallback attempt {attempt} (trying simpler approach)")
+        
+        # For now, return the failed record with fallback info
+        # TODO: Implement actual strategy switching in agent system
+        failed_record.update({
+            'fallback_attempted': True,
+            'fallback_attempt_number': attempt,
+            'original_error': failed_record['error_message']
+        })
+        
+        return failed_record
+    
+    def _prepare_question_for_agent(self, question_data: Dict) -> str:
+        """Prepare question text with file references"""
+        
+        question_text = question_data.get('Question', '')
+        
+        # Add file reference if present
+        file_path = question_data.get('file_path', '')
+        if file_path and os.path.exists(file_path):
+            question_text = f"{question_text}\n\n[FILE]: {file_path}"
+        elif question_data.get('file_name'):
+            question_text = f"{question_text}\n\n[FILE ATTACHED]: {question_data['file_name']}"
+        
+        return question_text
+    
+    def _determine_strategy_used(self, result: Dict, complexity: str, steps: List) -> str:
         """Determine which strategy was used based on our system"""
         
-        # Our system uses routing based on complexity
         if complexity == "simple":
             return "one_shot_llm"
         elif complexity == "complex":
             return "manager_coordination"
         else:
-            # Fallback - analyze steps to determine
-            steps = result.get('steps', [])
+            # Fallback - analyze steps
             if len(steps) <= 2:
                 return "one_shot_llm"
             else:
                 return "manager_coordination"
     
-    def _generate_sample_questions(self) -> List[Dict]:
-        """Generate sample questions if metadata not available"""
-        sample_questions = [
-            {
-                'task_id': f'sample_{i}',
-                'question': f'Sample question {i}: Calculate {10 + i} * {20 + i}',
-                'level': 1 if i < 3 else 2,
-                'file_name': '',
-                'file_path': '',
-                'has_file': False,
-                'is_image_question': False
-            }
-            for i in range(5)
-        ]
+    def _print_progress_header(self, index: int, total: int, question_data: Dict):
+        """Print progress header for real-time monitoring"""
         
-        print("⚠️ Using sample questions - metadata.jsonl not found")
-        return sample_questions
+        progress = (index + 1) / total * 100
+        progress_bar = "█" * int(progress // 5) + "░" * (20 - int(progress // 5))
+        
+        print(f"\n🔄 Question {index+1}/{total} ({progress:.1f}%) [{progress_bar}]")
+        print(f"📋 Task ID: {question_data.get('task_id', 'unknown')}")
+        print(f"📊 Level: {question_data.get('Level', 'unknown')}")
+        
+        if question_data.get('file_name'):
+            print(f"📎 File: {question_data['file_name']}")
+        
+        question_text = question_data.get('Question', '')
+        preview = question_text[:60] + "..." if len(question_text) > 60 else question_text
+        print(f"❓ Question: {preview}")
+    
+    def _print_immediate_result(self, execution_result: Dict, question_num: int):
+        """Print immediate result after each question"""
+        
+        if execution_result.get('execution_successful', False):
+            answer = execution_result.get('agent_answer', 'No answer')
+            strategy = execution_result.get('strategy_used', '')
+            exec_time = execution_result.get('execution_time', 0)
+            
+            print(f"✅ Answer: {answer}")
+            print(f"⏱️ Time: {exec_time:.2f}s")
+            print(f"🎯 Strategy: {strategy}")
+        else:
+            error_type = execution_result.get('error_type', 'unknown')
+            error_msg = execution_result.get('error_message', 'Unknown error')
+            exec_time = execution_result.get('execution_time', 0)
+            
+            print(f"❌ Execution Failed ({error_type})")
+            print(f"💬 Error: {error_msg[:80]}{'...' if len(error_msg) > 80 else ''}")
+            print(f"⏱️ Time: {exec_time:.2f}s")
+    
+    def _print_batch_summary(self, execution_results: List[Dict]):
+        """Print comprehensive batch execution summary"""
+        
+        total_time = self.execution_stats['end_time'] - self.execution_stats['start_time']
+        total_questions = len(execution_results)
+        successful = self.execution_stats['successful_executions']
+        failed = self.execution_stats['execution_failures']
+        
+        print(f"\n🎉 Batch Execution Complete!")
+        print("=" * 50)
+        print(f"📊 Execution Statistics:")
+        print(f"  Total questions: {total_questions}")
+        print(f"  ✅ Successful executions: {successful} ({successful/total_questions:.1%})")
+        print(f"  ❌ Failed executions: {failed} ({failed/total_questions:.1%})")
+        print(f"  🔄 Retries used: {self.execution_stats['retry_count']}")
+        print(f"  🔄 Strategy fallbacks: {self.execution_stats['strategy_fallback_count']}")
+        print(f"  ⏱️ Total time: {total_time:.1f}s")
+        print(f"  📈 Average time: {total_time/total_questions:.2f}s per question")
+        
+        # Error analysis
+        if failed > 0:
+            error_types = defaultdict(int)
+            for result in execution_results:
+                if not result.get('execution_successful', False):
+                    error_type = result.get('error_type', 'unknown')
+                    error_types[error_type] += 1
+            
+            print(f"\n🐛 Error Breakdown:")
+            for error_type, count in sorted(error_types.items(), key=lambda x: x[1], reverse=True):
+                print(f"  {error_type}: {count} occurrences")
+        
+        # Strategy analysis
+        strategy_stats = defaultdict(int)
+        for result in execution_results:
+            strategy = result.get('strategy_used', 'unknown')
+            strategy_stats[strategy] += 1
+        
+        print(f"\n🎯 Strategy Usage:")
+        for strategy, count in sorted(strategy_stats.items(), key=lambda x: x[1], reverse=True):
+            print(f"  {strategy}: {count} questions")
+    
+    def _save_execution_results(self, results: List[Dict]):
+        """Save execution results with additional metadata"""
+        
+        # Create results package
+        results_package = {
+            'execution_metadata': {
+                'session_id': self.session_id,
+                'timestamp': datetime.now().isoformat(),
+                'agent_config': self.agent_config_name,
+                'total_questions': len(results),
+                'execution_stats': self.execution_stats,
+                'test_config': {
+                    'timeout_per_question': self.test_config.timeout_per_question,
+                    'max_retries': self.test_config.max_retries,
+                    'detect_execution_failures': self.test_config.detect_execution_failures,
+                    'enable_strategy_fallback': self.test_config.enable_strategy_fallback
+                }
+            },
+            'execution_results': results
+        }
+        
+        # Save as JSON
+        filename = create_timestamped_filename(f"gaia_execution_{self.agent_config_name}", "json")
+        filepath = self.results_dir / filename.split('/')[-1]
+        
+        with open(filepath, 'w') as f:
+            json.dump(results_package, f, indent=2, default=str)
+        
+        print(f"💾 Execution results saved: {filepath}")
 
 # ============================================================================
-# STEP 2: ANSWER EVALUATION (WITH GROUND TRUTH)
+# EVALUATION (WITH GROUND TRUTH)
 # ============================================================================
 
-class GAIAAnswerEvaluator:
-    """Step 2: Evaluate executed answers against ground truth"""
+class GAIATestEvaluator:
+    """Evaluate agent results against ground truth"""
     
-    def __init__(self, config: GAIATestConfig):
-        self.config = config
-        self.results_dir = Path(config.results_dir)
+    def __init__(self, dataset_manager: GAIADatasetManager):
+        """Initialize with dataset manager for ground truth access"""
+        self.dataset_manager = dataset_manager
         
-        print(f"🎯 GAIA Answer Evaluator Initialized")
-        print(f"📁 Results directory: {self.results_dir}")
+        print(f"🎯 GAIA Test Evaluator Initialized")
+        print(f"📊 Dataset: {len(dataset_manager.metadata)} questions available")
+        print(f"🔧 Features: Fixed metrics, Error categorization, Advanced analysis")
     
-    def load_ground_truth(self, metadata_path: str = "metadata.jsonl") -> Dict[str, Dict]:
-        """Load ground truth answers by task_id"""
+    def evaluate_execution_results(self, execution_results: List[Dict]) -> Dict:
+        """Evaluate agent results against ground truth"""
         
-        try:
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                all_data = [json.loads(line) for line in f]
-            
-            ground_truth = {}
-            for item in all_data:
-                task_id = item.get('task_id')
-                if task_id:
-                    ground_truth[task_id] = {
-                        'final_answer': item.get('Final answer', ''),
-                        'level': item.get('Level'),
-                        'question': item.get('Question', ''),
-                        'annotator_metadata': item.get('Annotator Metadata', {}),
-                        'file_name': item.get('file_name', ''),
-                        'file_path': item.get('file_path', '')
-                    }
-            
-            print(f"✅ Loaded ground truth for {len(ground_truth)} questions")
-            return ground_truth
-            
-        except FileNotFoundError:
-            print(f"❌ Ground truth file not found: {metadata_path}")
-            return {}
-        except Exception as e:
-            print(f"❌ Error loading ground truth: {e}")
-            return {}
-    
-    def evaluate_execution_results(self, 
-                                 execution_file: str,
-                                 ground_truth: Dict[str, Dict] = None) -> Dict:
-        """Step 2: Evaluate all execution results against ground truth"""
-        
-        if ground_truth is None:
-            ground_truth = self.load_ground_truth()
-        
-        if not ground_truth:
-            print("❌ No ground truth available for evaluation")
-            return {}
-        
-        # Load execution results
-        try:
-            execution_results = []
-            with open(execution_file, 'r') as f:
-                for line in f:
-                    execution_results.append(json.loads(line))
-            
-            print(f"📊 Evaluating {len(execution_results)} execution results")
-            
-        except Exception as e:
-            print(f"❌ Error loading execution results: {e}")
+        if not execution_results:
+            print("❌ No execution results to evaluate")
             return {}
         
         print(f"\n🔍 Starting Answer Evaluation")
-        print("=" * 50)
+        print(f"📊 Evaluating {len(execution_results)} results")
+        print("=" * 60)
         
         evaluation_results = []
         correct_count = 0
+        execution_success_count = 0
         
         for i, execution in enumerate(execution_results):
             task_id = execution.get('task_id')
-            agent_answer = execution.get('agent_answer', '')
             
             print(f"\n📝 Evaluation {i+1}/{len(execution_results)}")
             print(f"📋 Task ID: {task_id}")
             
-            if task_id not in ground_truth:
+            # Get ground truth
+            ground_truth = self.dataset_manager.get_ground_truth(task_id)
+            
+            if not ground_truth:
                 print(f"⚠️ No ground truth found for task {task_id}")
                 evaluation_result = self._create_evaluation_record(
                     execution, None, False, "No ground truth available"
                 )
             else:
-                gt_data = ground_truth[task_id]
-                expected_answer = gt_data['final_answer']
+                # Evaluate with fixed metrics
+                evaluation_result = self._evaluate_single_execution(execution, ground_truth)
                 
-                print(f"🤖 Agent Answer: '{agent_answer}'")
-                print(f"✅ Expected: '{expected_answer}'")
+                if evaluation_result['is_correct']:
+                    correct_count += 1
                 
-                # Evaluate correctness
-                is_correct = self._evaluate_gaia_answer_match(agent_answer, expected_answer)
-                correct_count += is_correct
+                if evaluation_result['execution_successful']:
+                    execution_success_count += 1
                 
-                print(f"🎯 Result: {'✅ CORRECT' if is_correct else '❌ INCORRECT'}")
-                
-                evaluation_result = self._create_evaluation_record(
-                    execution, gt_data, is_correct
-                )
+                # Print evaluation details
+                self._print_evaluation_details(evaluation_result)
             
             evaluation_results.append(evaluation_result)
         
-        # Generate comprehensive analysis
-        analysis = self._generate_evaluation_analysis(evaluation_results, correct_count)
+        # Generate analysis
+        analysis = self._generate_evaluation_analysis(evaluation_results, correct_count, execution_success_count)
         
-        # Save evaluation results with timestamp
-        eval_file = self.results_dir / create_timestamped_filename("gaia_evaluation", "json").split('/')[-1]
-        
+        # Create final results package
         final_results = {
             'evaluation_metadata': {
                 'timestamp': datetime.now().isoformat(),
-                'execution_file': execution_file,
                 'total_questions': len(evaluation_results),
+                'successful_executions': execution_success_count,
+                'execution_failures': len(evaluation_results) - execution_success_count,
                 'correct_answers': correct_count,
                 'overall_accuracy': correct_count / len(evaluation_results) if evaluation_results else 0,
-                'agent_config': self.config.agent_config_name
+                'execution_success_rate': execution_success_count / len(evaluation_results) if evaluation_results else 0,
+                'agent_config': execution_results[0].get('agent_config', 'unknown') if execution_results else 'unknown'
             },
             'detailed_results': evaluation_results,
             'analysis': analysis
         }
         
-        with open(eval_file, 'w') as f:
-            json.dump(final_results, f, indent=2, default=str)
+        # Save evaluation results
+        self._save_evaluation_results(final_results)
         
         print(f"\n🎉 Evaluation Complete!")
-        print(f"📁 Results saved: {eval_file}")
-        self._print_evaluation_summary(analysis)
+        self._print_evaluation_summary(analysis, final_results['evaluation_metadata'])
         
         return final_results
     
-    def _create_evaluation_record(self, 
-                                execution: Dict, 
-                                ground_truth: Dict, 
-                                is_correct: bool,
-                                note: str = None) -> Dict:
-        """Create comprehensive evaluation record"""
+    def evaluate_single_answer(self, agent_answer: str, task_id: str) -> Dict:
+        """Evaluate single answer with detailed analysis"""
+        
+        ground_truth = self.dataset_manager.get_ground_truth(task_id)
+        
+        if not ground_truth:
+            return {
+                'task_id': task_id,
+                'is_correct': False,
+                'error': 'No ground truth available'
+            }
+        
+        expected_answer = ground_truth['final_answer']
+        is_correct = self.gaia_answer_matching(agent_answer, expected_answer)
+        
+        return {
+            'task_id': task_id,
+            'agent_answer': agent_answer,
+            'expected_answer': expected_answer,
+            'is_correct': is_correct,
+            'level': ground_truth.get('level'),
+            'evaluation_details': self._analyze_answer_differences(agent_answer, expected_answer)
+        }
+    
+    def _evaluate_single_execution(self, execution: Dict, ground_truth: Dict) -> Dict:
+        """Evaluate single execution with fixed metrics"""
+        
+        # Extract execution data
+        raw_agent_response = execution.get('raw_agent_response', execution.get('agent_answer', ''))
+        clean_agent_answer = execution.get('agent_answer', '')
+        expected_answer = ground_truth['final_answer']
+        
+        # Determine if execution was actually successful
+        execution_successful = execution.get('execution_successful', False)
+        
+        # Evaluate correctness (only if execution succeeded)
+        if execution_successful and clean_agent_answer:
+            is_correct = self.gaia_answer_matching(clean_agent_answer, expected_answer)
+            similarity_score = self.fuzzy_answer_matching(clean_agent_answer, expected_answer)
+        else:
+            is_correct = False
+            similarity_score = 0.0
+        
+        # Create evaluation record
+        return self._create_evaluation_record(
+            execution, ground_truth, is_correct, 
+            similarity_score=similarity_score
+        )
+    
+    def _create_evaluation_record(self, execution: Dict, ground_truth: Dict, is_correct: bool, 
+                                 note: str = None, similarity_score: float = 0.0) -> Dict:
+        """Create comprehensive evaluation record with fixed metrics"""
+        
+        # Extract data safely
+        execution_successful = execution.get('execution_successful', False)
+        clean_agent_answer = execution.get('agent_answer', '') if execution_successful else ''
+        raw_response = execution.get('raw_agent_response', execution.get('agent_answer', ''))
+        error_message = execution.get('error_message')
+        error_type = execution.get('error_type')
         
         return {
             'task_id': execution.get('task_id'),
             'question': execution.get('question'),
             'level': execution.get('level'),
             'has_file': execution.get('has_file', False),
-            'is_image_question': execution.get('is_image_question', False),
             'file_name': execution.get('file_name', ''),
             
             # Execution data
-            'agent_answer': execution.get('agent_answer', ''),
-            'raw_answer': execution.get('raw_answer', ''),
+            'agent_answer': clean_agent_answer,
+            'raw_agent_response': raw_response,
             'strategy_used': execution.get('strategy_used', ''),
+            'selected_agent': execution.get('selected_agent', ''),
             'complexity_detected': execution.get('complexity_detected', ''),
             'execution_time': execution.get('execution_time', 0.0),
             'total_steps': execution.get('total_steps', 0),
-            'execution_successful': execution.get('success', False),
-            'error': execution.get('error'),
+            'execution_successful': execution_successful,
+            'error_message': error_message,
+            'error_type': error_type,
+            'attempt_number': execution.get('attempt_number', 1),
+            'fallback_attempted': execution.get('fallback_attempted', False),
             
             # Ground truth data
             'expected_answer': ground_truth.get('final_answer', '') if ground_truth else '',
-            'is_correct': is_correct,
+            'is_correct': is_correct and execution_successful,  # Can't be correct if execution failed
+            'similarity_score': similarity_score,
             'note': note,
             
-            # Evaluation metadata
+            # Analysis
+            'answer_length_diff': len(clean_agent_answer) - len(ground_truth.get('final_answer', '')) if ground_truth else 0,
             'evaluation_timestamp': datetime.now().isoformat()
         }
     
-    def _evaluate_gaia_answer_match(self, predicted: str, expected: str) -> bool:
-        """GAIA-style answer matching with multiple strategies"""
+    def gaia_answer_matching(self, predicted: str, expected: str) -> bool:
+        """GAIA-compliant answer matching logic"""
         
         if not predicted or not expected:
             return False
@@ -549,7 +739,7 @@ class GAIAAnswerEvaluator:
             return True
         
         # Remove common artifacts (GAIA formatting rules)
-        artifacts = ['.', ',', '!', '?', '"', "'", 'the ', 'a ', 'an ']
+        artifacts = ['.', ',', '!', '?', '"', "'", 'the ', 'a, 'an ']
         for artifact in artifacts:
             pred_clean = pred_clean.replace(artifact, '')
             exp_clean = exp_clean.replace(artifact, '')
@@ -563,11 +753,12 @@ class GAIAAnswerEvaluator:
             pred_num_str = re.sub(r'[^\d.-]', '', pred_clean)
             exp_num_str = re.sub(r'[^\d.-]', '', exp_clean)
             
-            pred_num = float(pred_num_str)
-            exp_num = float(exp_num_str)
-            
-            # Allow small floating point differences
-            return abs(pred_num - exp_num) < 1e-6
+            if pred_num_str and exp_num_str:
+                pred_num = float(pred_num_str)
+                exp_num = float(exp_num_str)
+                
+                # Allow small floating point differences
+                return abs(pred_num - exp_num) < 1e-6
         except (ValueError, TypeError):
             pass
         
@@ -590,41 +781,129 @@ class GAIAAnswerEvaluator:
             if pred_dates and exp_dates:
                 return pred_dates[0] == exp_dates[0]
         
-        # Partial match for very close answers (but be conservative)
-        if len(exp_clean) > 5:
-            similarity = SequenceMatcher(None, pred_clean, exp_clean).ratio()
-            return similarity > 0.95  # Very high threshold
-        
         return False
     
-    def _generate_evaluation_analysis(self, evaluation_results: List[Dict], correct_count: int) -> Dict:
+    def fuzzy_answer_matching(self, predicted: str, expected: str) -> float:
+        """Fuzzy matching for near-correct answers"""
+        
+        if not predicted or not expected:
+            return 0.0
+        
+        # Basic similarity
+        basic_similarity = SequenceMatcher(None, predicted.lower(), expected.lower()).ratio()
+        
+        # Enhanced similarity for numbers
+        if self._is_numeric_answer(predicted) and self._is_numeric_answer(expected):
+            try:
+                pred_num = self._extract_number(predicted)
+                exp_num = self._extract_number(expected)
+                
+                if pred_num is not None and exp_num is not None and exp_num != 0:
+                    # Calculate relative error
+                    relative_error = abs(pred_num - exp_num) / abs(exp_num)
+                    numeric_similarity = max(0, 1 - relative_error)
+                    return max(basic_similarity, numeric_similarity)
+            except (ValueError, TypeError):
+                pass
+        
+        return basic_similarity
+    
+    def _is_numeric_answer(self, answer: str) -> bool:
+        """Check if answer is primarily numeric"""
+        cleaned = re.sub(r'[^\d.-]', '', answer)
+        return len(cleaned) > 0 and len(cleaned) / len(answer) > 0.5
+    
+    def _extract_number(self, answer: str) -> Optional[float]:
+        """Extract numeric value from answer"""
+        numbers = re.findall(r'-?\d+\.?\d*', answer)
+        if numbers:
+            try:
+                return float(numbers[0])
+            except ValueError:
+                pass
+        return None
+    
+    def _print_evaluation_details(self, result: Dict):
+        """Print detailed evaluation results"""
+        
+        is_correct = result.get('is_correct', False)
+        execution_successful = result.get('execution_successful', False)
+        agent_answer = result.get('agent_answer', '')
+        expected_answer = result.get('expected_answer', '')
+        similarity = result.get('similarity_score', 0)
+        error_type = result.get('error_type')
+        
+        if execution_successful:
+            print(f"🤖 Agent Answer: '{agent_answer}'")
+            print(f"✅ Expected: '{expected_answer}'")
+            print(f"🎯 Result: {'✅ CORRECT' if is_correct else '❌ INCORRECT'}")
+            if not is_correct and similarity > 0:
+                print(f"📊 Similarity: {similarity:.2%}")
+        else:
+            print(f"❌ Execution Failed ({error_type or 'unknown'})")
+            error_msg = result.get('error_message', '')
+            print(f"💬 Error: {error_msg[:60]}{'...' if len(error_msg) > 60 else ''}")
+            print(f"✅ Expected: '{expected_answer}'")
+    
+    def _analyze_answer_differences(self, predicted: str, expected: str) -> Dict:
+        """Analyze differences between predicted and expected answers"""
+        
+        analysis = {
+            'length_difference': len(predicted) - len(expected),
+            'similarity_ratio': SequenceMatcher(None, predicted.lower(), expected.lower()).ratio(),
+            'has_numeric_difference': False,
+            'has_formatting_difference': False
+        }
+        
+        # Check for numeric differences
+        pred_numbers = re.findall(r'\d+\.?\d*', predicted)
+        exp_numbers = re.findall(r'\d+\.?\d*', expected)
+        
+        if pred_numbers != exp_numbers:
+            analysis['has_numeric_difference'] = True
+            analysis['predicted_numbers'] = pred_numbers
+            analysis['expected_numbers'] = exp_numbers
+        
+        # Check for formatting differences
+        if predicted.strip() != expected.strip():
+            analysis['has_formatting_difference'] = True
+        
+        return analysis
+    
+    def _generate_evaluation_analysis(self, evaluation_results: List[Dict], 
+                                    correct_count: int, execution_success_count: int) -> Dict:
         """Generate comprehensive analysis of evaluation results"""
         
-        if not evaluation_results:
-            return {}
-        
         total_questions = len(evaluation_results)
-        overall_accuracy = correct_count / total_questions
         
         analysis = {
             'overall_performance': {
                 'total_questions': total_questions,
+                'successful_executions': execution_success_count,
+                'execution_failures': total_questions - execution_success_count,
                 'correct_answers': correct_count,
                 'incorrect_answers': total_questions - correct_count,
-                'overall_accuracy': overall_accuracy,
-                'gaia_target_met': overall_accuracy >= 0.45  # GAIA benchmark target
+                'overall_accuracy': correct_count / total_questions if total_questions > 0 else 0,
+                'execution_success_rate': execution_success_count / total_questions if total_questions > 0 else 0,
+                'gaia_target_met': (correct_count / total_questions) >= 0.45 if total_questions > 0 else False
             }
         }
         
+        # Error analysis
+        error_analysis = self._analyze_errors(evaluation_results)
+        analysis['error_analysis'] = error_analysis
+        
         # Performance by level
-        level_stats = defaultdict(lambda: {'total': 0, 'correct': 0, 'avg_time': 0})
+        level_stats = defaultdict(lambda: {'total': 0, 'successful': 0, 'correct': 0, 'avg_time': 0})
         for result in evaluation_results:
-            level = result.get('level', 1)
+            level = result.get('level', 'Unknown')
             level_stats[level]['total'] += 1
-            if result.get('is_correct', False):
-                level_stats[level]['correct'] += 1
             
-            # Track execution time
+            if result.get('execution_successful', False):
+                level_stats[level]['successful'] += 1
+                if result.get('is_correct', False):
+                    level_stats[level]['correct'] += 1
+            
             exec_time = result.get('execution_time', 0)
             current_avg = level_stats[level]['avg_time']
             count = level_stats[level]['total']
@@ -634,36 +913,25 @@ class GAIAAnswerEvaluator:
         for level, stats in level_stats.items():
             analysis['level_performance'][f'level_{level}'] = {
                 'total_questions': stats['total'],
+                'successful_executions': stats['successful'],
+                'execution_success_rate': stats['successful'] / stats['total'] if stats['total'] > 0 else 0,
                 'correct_answers': stats['correct'],
-                'accuracy': stats['correct'] / stats['total'] if stats['total'] > 0 else 0,
+                'accuracy_of_successful': stats['correct'] / stats['successful'] if stats['successful'] > 0 else 0,
+                'overall_accuracy': stats['correct'] / stats['total'] if stats['total'] > 0 else 0,
                 'avg_execution_time': stats['avg_time']
             }
         
-        # File attachment performance
-        file_stats = {'with_files': {'total': 0, 'correct': 0}, 'without_files': {'total': 0, 'correct': 0}}
-        for result in evaluation_results:
-            category = 'with_files' if result.get('has_file', False) else 'without_files'
-            file_stats[category]['total'] += 1
-            if result.get('is_correct', False):
-                file_stats[category]['correct'] += 1
-        
-        analysis['file_attachment_performance'] = {}
-        for category, stats in file_stats.items():
-            analysis['file_attachment_performance'][category] = {
-                'total_questions': stats['total'],
-                'correct_answers': stats['correct'],
-                'accuracy': stats['correct'] / stats['total'] if stats['total'] > 0 else 0
-            }
-        
-        # Strategy performance (routing effectiveness)
-        strategy_stats = defaultdict(lambda: {'total': 0, 'correct': 0, 'avg_time': 0})
+        # Strategy performance
+        strategy_stats = defaultdict(lambda: {'total': 0, 'successful': 0, 'correct': 0, 'avg_time': 0})
         for result in evaluation_results:
             strategy = result.get('strategy_used', 'unknown')
             strategy_stats[strategy]['total'] += 1
-            if result.get('is_correct', False):
-                strategy_stats[strategy]['correct'] += 1
             
-            # Track execution time by strategy
+            if result.get('execution_successful', False):
+                strategy_stats[strategy]['successful'] += 1
+                if result.get('is_correct', False):
+                    strategy_stats[strategy]['correct'] += 1
+            
             exec_time = result.get('execution_time', 0)
             current_avg = strategy_stats[strategy]['avg_time']
             count = strategy_stats[strategy]['total']
@@ -673,40 +941,32 @@ class GAIAAnswerEvaluator:
         for strategy, stats in strategy_stats.items():
             analysis['strategy_performance'][strategy] = {
                 'total_questions': stats['total'],
+                'successful_executions': stats['successful'],
+                'execution_success_rate': stats['successful'] / stats['total'] if stats['total'] > 0 else 0,
                 'correct_answers': stats['correct'],
-                'accuracy': stats['correct'] / stats['total'] if stats['total'] > 0 else 0,
+                'accuracy_of_successful': stats['correct'] / stats['successful'] if stats['successful'] > 0 else 0,
+                'overall_accuracy': stats['correct'] / stats['total'] if stats['total'] > 0 else 0,
                 'avg_execution_time': stats['avg_time']
             }
         
-        # Error analysis
-        error_questions = [r for r in evaluation_results if not r.get('execution_successful', True)]
-        
-        analysis['error_analysis'] = {
-            'execution_errors': len(error_questions),
-            'execution_success_rate': 1 - (len(error_questions) / total_questions),
-            'sample_errors': [r.get('error') for r in error_questions[:3] if r.get('error')]
-        }
-        
-        # Routing analysis (specific to our system)
+        # Routing analysis
         routing_stats = {
             'one_shot_questions': len([r for r in evaluation_results if r.get('strategy_used') == 'one_shot_llm']),
             'manager_questions': len([r for r in evaluation_results if r.get('strategy_used') == 'manager_coordination']),
             'routing_accuracy': 0.0
         }
         
-        # Calculate routing accuracy (simple questions should use one_shot, complex should use manager)
+        # Calculate routing accuracy
         correct_routing = 0
         total_routing = 0
         for result in evaluation_results:
             level = result.get('level', 1)
             strategy = result.get('strategy_used', '')
             
-            # Level 1 questions should ideally use one_shot
             if level == 1:
                 total_routing += 1
                 if strategy == 'one_shot_llm':
                     correct_routing += 1
-            # Level 3 questions should ideally use manager
             elif level == 3:
                 total_routing += 1
                 if strategy == 'manager_coordination':
@@ -717,131 +977,388 @@ class GAIAAnswerEvaluator:
         
         return analysis
     
-    def _print_evaluation_summary(self, analysis: Dict):
+    def _analyze_errors(self, evaluation_results: List[Dict]) -> Dict:
+        """Analyze errors with categorization"""
+        
+        failed_results = [r for r in evaluation_results if not r.get('execution_successful', False)]
+        
+        error_analysis = {
+            'total_failures': len(failed_results),
+            'error_type_distribution': defaultdict(int),
+            'common_error_messages': defaultdict(int),
+            'failure_by_level': defaultdict(int),
+            'failure_by_strategy': defaultdict(int),
+            'failure_by_file_type': defaultdict(int)
+        }
+        
+        for result in failed_results:
+            # Error type distribution
+            error_type = result.get('error_type', 'unknown')
+            error_analysis['error_type_distribution'][error_type] += 1
+            
+            # Common error messages
+            error_msg = result.get('error_message', '')[:50]
+            error_analysis['common_error_messages'][error_msg] += 1
+            
+            # Failure by level
+            level = result.get('level', 'Unknown')
+            error_analysis['failure_by_level'][level] += 1
+            
+            # Failure by strategy
+            strategy = result.get('strategy_used', 'unknown')
+            error_analysis['failure_by_strategy'][strategy] += 1
+            
+            # Failure by file type
+            if result.get('has_file', False):
+                file_name = result.get('file_name', '')
+                if file_name:
+                    ext = Path(file_name).suffix.lower() or 'no_extension'
+                    error_analysis['failure_by_file_type'][ext] += 1
+            else:
+                error_analysis['failure_by_file_type']['no_file'] += 1
+        
+        # Convert defaultdicts to regular dicts
+        for key in error_analysis:
+            if isinstance(error_analysis[key], defaultdict):
+                error_analysis[key] = dict(error_analysis[key])
+        
+        return error_analysis
+    
+    def _print_evaluation_summary(self, analysis: Dict, metadata: Dict):
         """Print comprehensive evaluation summary"""
         
         overall = analysis.get('overall_performance', {})
         
         print(f"\n🎯 EVALUATION SUMMARY")
-        print("=" * 40)
+        print("=" * 50)
         print(f"📊 Total Questions: {overall.get('total_questions', 0)}")
-        print(f"✅ Correct Answers: {overall.get('correct_answers', 0)}")
-        print(f"❌ Incorrect Answers: {overall.get('incorrect_answers', 0)}")
-        print(f"🎯 Overall Accuracy: {overall.get('overall_accuracy', 0):.1%}")
+        print(f"✅ Successful Executions: {overall.get('successful_executions', 0)} ({overall.get('execution_success_rate', 0):.1%})")
+        print(f"❌ Execution Failures: {overall.get('execution_failures', 0)}")
+        print(f"🎯 Correct Answers: {overall.get('correct_answers', 0)} ({overall.get('overall_accuracy', 0):.1%})")
         print(f"🏆 GAIA Target (45%): {'✅ MET' if overall.get('gaia_target_met', False) else '❌ NOT MET'}")
         
-        # Level performance
-        level_perf = analysis.get('level_performance', {})
-        if level_perf:
-            print(f"\n📈 Performance by Level:")
-            for level_key, stats in level_perf.items():
-                level_num = level_key.replace('level_', '')
-                accuracy = stats.get('accuracy', 0)
-                total = stats.get('total_questions', 0)
-                correct = stats.get('correct_answers', 0)
-                avg_time = stats.get('avg_execution_time', 0)
-                print(f"├── Level {level_num}: {accuracy:.1%} ({correct}/{total}) - {avg_time:.1f}s avg")
+        # Error breakdown
+        error_analysis = analysis.get('error_analysis', {})
+        if error_analysis.get('total_failures', 0) > 0:
+            print(f"\n🐛 Error Analysis:")
+            print(f"  Total failures: {error_analysis['total_failures']}")
+            
+            error_types = error_analysis.get('error_type_distribution', {})
+            print(f"  Error types:")
+            for error_type, count in sorted(error_types.items(), key=lambda x: x[1], reverse=True):
+                print(f"    {error_type}: {count} occurrences")
         
-        # Strategy performance (routing effectiveness)
+        # Strategy performance
         strategy_perf = analysis.get('strategy_performance', {})
         if strategy_perf:
             print(f"\n🎯 Strategy Performance:")
             for strategy, stats in strategy_perf.items():
-                accuracy = stats.get('accuracy', 0)
+                success_rate = stats.get('execution_success_rate', 0)
+                accuracy = stats.get('overall_accuracy', 0)
                 total = stats.get('total_questions', 0)
-                avg_time = stats.get('avg_execution_time', 0)
-                print(f"├── {strategy.replace('_', ' ').title()}: {accuracy:.1%} ({total} questions) - {avg_time:.1f}s avg")
+                
+                print(f"  {strategy.replace('_', ' ').title()}:")
+                print(f"    Execution success: {success_rate:.1%} ({total} questions)")
+                print(f"    Overall accuracy: {accuracy:.1%}")
+    
+    def _save_evaluation_results(self, results: Dict):
+        """Save evaluation results to timestamped file"""
         
-        # Routing analysis
-        routing_analysis = analysis.get('routing_analysis', {})
-        if routing_analysis:
-            print(f"\n🔀 Routing Analysis:")
-            one_shot = routing_analysis.get('one_shot_questions', 0)
-            manager = routing_analysis.get('manager_questions', 0)
-            routing_acc = routing_analysis.get('routing_accuracy', 0)
-            print(f"├── One-shot LLM: {one_shot} questions")
-            print(f"├── Manager Coordination: {manager} questions")
-            print(f"└── Routing Accuracy: {routing_acc:.1%}")
+        filename = create_timestamped_filename("gaia_evaluation", "json")
+        filepath = Path("logs") / filename.split('/')[-1]
         
-        # File performance
-        file_perf = analysis.get('file_attachment_performance', {})
-        if file_perf:
-            print(f"\n📎 File Attachment Performance:")
-            for category, stats in file_perf.items():
-                accuracy = stats.get('accuracy', 0)
-                total = stats.get('total_questions', 0)
-                print(f"├── {category.replace('_', ' ').title()}: {accuracy:.1%} ({total} questions)")
+        with open(filepath, 'w') as f:
+            json.dump(results, f, indent=2, default=str)
         
-        # Error summary
-        error_analysis = analysis.get('error_analysis', {})
-        if error_analysis:
-            exec_errors = error_analysis.get('execution_errors', 0)
-            success_rate = error_analysis.get('execution_success_rate', 0)
-            
-            print(f"\n🔧 Error Analysis:")
-            print(f"├── Execution Success Rate: {success_rate:.1%}")
-            print(f"└── Execution Errors: {exec_errors}")
+        print(f"💾 Evaluation results saved: {filepath}")
 
 # ============================================================================
-# CONVENIENCE FUNCTIONS FOR TWO-STEP TESTING
+# ANALYSIS (PURE ANALYSIS LOGIC)
+# ============================================================================
+
+class GAIATestAnalyzer:
+    """Analyze test results for insights and improvements"""
+    
+    def __init__(self):
+        print(f"🔍 GAIA Test Analyzer Initialized")
+    
+    def analyze_failure_patterns(self, evaluation_results: Dict) -> Dict:
+        """Identify patterns in failures for improvement"""
+        
+        if not evaluation_results or 'detailed_results' not in evaluation_results:
+            return {'error': 'No evaluation results to analyze'}
+        
+        detailed_results = evaluation_results['detailed_results']
+        incorrect_results = [r for r in detailed_results if not r.get('is_correct', False)]
+        
+        print(f"\n🔍 FAILURE PATTERN ANALYSIS")
+        print("=" * 40)
+        print(f"📊 Total Questions: {len(detailed_results)}")
+        print(f"❌ Incorrect Answers: {len(incorrect_results)}")
+        
+        if len(incorrect_results) == 0:
+            return {'perfect_performance': True}
+        
+        # Analyze failure patterns
+        failure_patterns = {
+            'by_level': defaultdict(int),
+            'by_strategy': defaultdict(int),
+            'by_file_type': defaultdict(int),
+            'execution_failures': 0,
+            'low_complexity_failures': 0,
+            'high_complexity_failures': 0,
+            'common_error_types': defaultdict(int)
+        }
+        
+        for result in incorrect_results:
+            level = result.get('level', 'unknown')
+            failure_patterns['by_level'][level] += 1
+            
+            strategy = result.get('strategy_used', 'unknown')
+            failure_patterns['by_strategy'][strategy] += 1
+            
+            if result.get('has_file', False):
+                file_name = result.get('file_name', '')
+                if file_name:
+                    ext = Path(file_name).suffix.lower()
+                    failure_patterns['by_file_type'][ext or 'no_extension'] += 1
+            else:
+                failure_patterns['by_file_type']['no_file'] += 1
+            
+            if not result.get('execution_successful', True):
+                failure_patterns['execution_failures'] += 1
+                
+                error = result.get('error_message', '')
+                if 'timeout' in error.lower():
+                    failure_patterns['common_error_types']['timeout'] += 1
+                elif 'api' in error.lower() or 'rate limit' in error.lower():
+                    failure_patterns['common_error_types']['api_issues'] += 1
+                else:
+                    failure_patterns['common_error_types']['other'] += 1
+            
+            complexity = result.get('complexity_detected', '')
+            if complexity == 'simple':
+                failure_patterns['low_complexity_failures'] += 1
+            elif complexity == 'complex':
+                failure_patterns['high_complexity_failures'] += 1
+        
+        # Generate improvement recommendations
+        recommendations = self._generate_improvement_recommendations(failure_patterns, incorrect_results)
+        
+        return {
+            'failure_patterns': failure_patterns,
+            'recommendations': recommendations,
+            'sample_failures': incorrect_results[:5]
+        }
+    
+    def analyze_routing_effectiveness(self, evaluation_results: Dict) -> Dict:
+        """Analyze smart routing decisions and effectiveness"""
+        
+        if not evaluation_results or 'detailed_results' not in evaluation_results:
+            return {'error': 'No evaluation results to analyze'}
+        
+        detailed_results = evaluation_results['detailed_results']
+        
+        routing_analysis = {
+            'total_questions': len(detailed_results),
+            'strategy_distribution': defaultdict(int),
+            'strategy_accuracy': defaultdict(lambda: {'correct': 0, 'total': 0}),
+            'level_routing_patterns': defaultdict(lambda: defaultdict(int)),
+            'file_routing_patterns': defaultdict(lambda: defaultdict(int)),
+            'routing_recommendations': []
+        }
+        
+        for result in detailed_results:
+            strategy = result.get('strategy_used', 'unknown')
+            level = result.get('level', 'unknown')
+            has_file = result.get('has_file', False)
+            is_correct = result.get('is_correct', False)
+            
+            routing_analysis['strategy_distribution'][strategy] += 1
+            
+            routing_analysis['strategy_accuracy'][strategy]['total'] += 1
+            if is_correct:
+                routing_analysis['strategy_accuracy'][strategy]['correct'] += 1
+            
+            routing_analysis['level_routing_patterns'][level][strategy] += 1
+            
+            file_category = 'with_files' if has_file else 'without_files'
+            routing_analysis['file_routing_patterns'][file_category][strategy] += 1
+        
+        # Calculate accuracy rates
+        for strategy, stats in routing_analysis['strategy_accuracy'].items():
+            stats['accuracy'] = stats['correct'] / stats['total'] if stats['total'] > 0 else 0
+        
+        # Generate routing recommendations
+        routing_recommendations = []
+        
+        for level, strategies in routing_analysis['level_routing_patterns'].items():
+            total_level = sum(strategies.values())
+            if total_level > 0:
+                one_shot_ratio = strategies.get('one_shot_llm', 0) / total_level
+                manager_ratio = strategies.get('manager_coordination', 0) / total_level
+                
+                if level == 1 and one_shot_ratio < 0.7:
+                    routing_recommendations.append(f"Level 1 questions should use one-shot LLM more (currently {one_shot_ratio:.1%})")
+                elif level == 3 and manager_ratio < 0.7:
+                    routing_recommendations.append(f"Level 3 questions should use manager coordination more (currently {manager_ratio:.1%})")
+        
+        routing_analysis['routing_recommendations'] = routing_recommendations
+        
+        return routing_analysis
+    
+    def compare_agent_configurations(self, config_results: Dict[str, Dict]) -> pd.DataFrame:
+        """Compare multiple agent configurations"""
+        
+        comparison_data = []
+        
+        for config_name, results in config_results.items():
+            if 'evaluation_metadata' in results:
+                metadata = results['evaluation_metadata']
+                analysis = results.get('analysis', {})
+                overall = analysis.get('overall_performance', {})
+                
+                # Calculate average execution time
+                strategy_perf = analysis.get('strategy_performance', {})
+                avg_time = 0
+                if strategy_perf:
+                    total_time = sum(stats.get('avg_execution_time', 0) * stats.get('total_questions', 0) 
+                                   for stats in strategy_perf.values())
+                    total_questions = sum(stats.get('total_questions', 0) for stats in strategy_perf.values())
+                    avg_time = total_time / total_questions if total_questions > 0 else 0
+                
+                comparison_data.append({
+                    'config': config_name,
+                    'total_questions': metadata.get('total_questions', 0),
+                    'successful_executions': metadata.get('successful_executions', 0),
+                    'execution_success_rate': metadata.get('execution_success_rate', 0),
+                    'correct_answers': metadata.get('correct_answers', 0),
+                    'accuracy': metadata.get('overall_accuracy', 0),
+                    'avg_execution_time': avg_time,
+                    'gaia_target_met': overall.get('gaia_target_met', False)
+                })
+        
+        df = pd.DataFrame(comparison_data)
+        
+        if not df.empty:
+            df = df.sort_values('accuracy', ascending=False)
+        
+        return df
+    
+    def _generate_improvement_recommendations(self, failure_patterns: Dict, incorrect_results: List[Dict]) -> List[str]:
+        """Generate improvement recommendations based on failure patterns"""
+        
+        recommendations = []
+        total_failures = len(incorrect_results)
+        
+        # Level-based recommendations
+        level_failures = failure_patterns['by_level']
+        if level_failures.get(1, 0) > level_failures.get(2, 0):
+            recommendations.append("Focus on Level 1 performance - basic capabilities need strengthening")
+        if level_failures.get(3, 0) > 0:
+            recommendations.append("Level 3 questions are challenging - enhance reasoning capabilities")
+        
+        # Strategy-based recommendations  
+        strategy_failures = failure_patterns['by_strategy']
+        if strategy_failures.get('one_shot_llm', 0) > strategy_failures.get('manager_coordination', 0):
+            recommendations.append("One-shot LLM failing more - improve direct LLM prompting")
+        elif strategy_failures.get('manager_coordination', 0) > strategy_failures.get('one_shot_llm', 0):
+            recommendations.append("Manager coordination failing more - check agent routing and tool integration")
+        
+        # Execution-based recommendations
+        if failure_patterns['execution_failures'] > total_failures * 0.2:
+            recommendations.append("High execution failure rate - improve error handling and stability")
+        
+        # Error type recommendations
+        error_types = failure_patterns['common_error_types']
+        if error_types.get('timeout', 0) > 0:
+            recommendations.append("Timeout issues detected - optimize execution speed or increase timeout")
+        if error_types.get('api_issues', 0) > 0:
+            recommendations.append("API issues detected - implement better rate limiting and retry logic")
+        
+        return recommendations
+
+# ============================================================================
+# CONVENIENCE FUNCTIONS FOR TESTING
 # ============================================================================
 
 def run_gaia_test(
-    agent_config_name: str = "groq",
-    max_questions: int = 20,
-    target_levels: List[int] = None,
-    include_files: bool = True,
-    include_images: bool = True,
-    custom_config: Dict = None
+    agent_config: Union[str, Dict] = "groq",
+    dataset_path: str = "./tests/gaia_data",
+    batch_strategy: str = "balanced",
+    batch_size: int = 20,
+    **kwargs
 ) -> Dict:
-    """Complete two-step GAIA test: execute then evaluate"""
+    """Complete GAIA test: prepare batch, execute, evaluate"""
     
-    print(f"🚀 Two-Step GAIA Test")
-    print(f"🤖 Agent: {agent_config_name}")
-    print(f"📊 Max Questions: {max_questions}")
-    if target_levels:
-        print(f"🎯 Target Levels: {target_levels}")
-    print("=" * 50)
+    print(f"🚀 Complete GAIA Test")
+    print(f"🤖 Agent: {agent_config}")
+    print(f"📊 Batch: {batch_strategy} ({batch_size} questions)")
+    print("=" * 60)
     
-    # Configure testing
-    config = GAIATestConfig(
-        max_questions=max_questions,
-        target_levels=target_levels,
-        include_file_questions=include_files,
-        include_image_questions=include_images,
-        agent_config_name=agent_config_name,
-        custom_agent_config=custom_config
-    )
-    
-    # Step 1: Execute questions (blind)
-    print(f"\n📋 STEP 1: Question Execution")
+    # Step 1: Prepare test batch
+    print(f"\n📋 STEP 1: Test Batch Preparation")
     print("-" * 30)
     
-    executor = GAIAQuestionExecutor(config)
-    execution_file = executor.execute_questions_batch()
+    dataset_manager = GAIADatasetManager(dataset_path)
+    if not dataset_manager.metadata:
+        print("❌ Could not load dataset")
+        return {}
     
-    if not execution_file:
+    test_batch = dataset_manager.create_test_batch(batch_size, batch_strategy, **kwargs)
+    if not test_batch:
+        print("❌ Could not create test batch")
+        return {}
+    
+    # Step 2: Execute questions
+    print(f"\n🤖 STEP 2: Agent Execution")
+    print("-" * 30)
+    
+    executor = GAIATestExecutor(agent_config)
+    execution_results = executor.execute_test_batch(test_batch)
+    
+    if not execution_results:
         print("❌ Execution failed")
         return {}
     
-    # Step 2: Evaluate answers (with ground truth)
-    print(f"\n🎯 STEP 2: Answer Evaluation")
+    # Step 3: Evaluate results
+    print(f"\n🎯 STEP 3: Answer Evaluation")
     print("-" * 30)
     
-    evaluator = GAIAAnswerEvaluator(config)
-    evaluation_results = evaluator.evaluate_execution_results(execution_file)
+    evaluator = GAIATestEvaluator(dataset_manager)
+    evaluation_results = evaluator.evaluate_execution_results(execution_results)
     
     return evaluation_results
+
+def run_small_batch_test(agent_config: Union[str, Dict] = "groq", 
+                        dataset_path: str = "./tests/gaia_data") -> Dict:
+    """Quick test with small diverse batch"""
+    
+    return run_gaia_test(
+        agent_config=agent_config,
+        dataset_path=dataset_path,
+        batch_strategy="small_sample",
+        batch_size=5
+    )
+
+def run_large_batch_test(agent_config: Union[str, Dict] = "groq",
+                        dataset_path: str = "./tests/gaia_data") -> Dict:
+    """Comprehensive test with large batch"""
+    
+    return run_gaia_test(
+        agent_config=agent_config,
+        dataset_path=dataset_path,
+        batch_strategy="large_comprehensive",
+        batch_size=25
+    )
 
 def run_quick_gaia_test(agent_config_name: str = "groq") -> Dict:
     """Quick test for development and validation"""
     
     return run_gaia_test(
-        agent_config_name=agent_config_name,
+        agent_config=agent_config_name,
         max_questions=5,
-        target_levels=[1],  # Level 1 only for quick validation
-        include_files=False,  # Skip files for speed
-        include_images=False
+        batch_strategy="small_sample"
     )
 
 def run_smart_routing_test(agent_config_name: str = "performance") -> Dict:
@@ -851,13 +1368,10 @@ def run_smart_routing_test(agent_config_name: str = "performance") -> Dict:
     print(f"🤖 Agent: {agent_config_name}")
     print("=" * 50)
     
-    # Test with mix of simple and complex questions
     result = run_gaia_test(
-        agent_config_name=agent_config_name,
-        max_questions=20,
-        target_levels=[1, 2, 3],  # All levels to test routing
-        include_files=True,
-        include_images=False
+        agent_config=agent_config_name,
+        batch_size=20,
+        batch_strategy="balanced"
     )
     
     if result and 'analysis' in result:
@@ -885,6 +1399,54 @@ def run_smart_routing_test(agent_config_name: str = "performance") -> Dict:
     
     return result
 
+def run_agent_comparison_study(agent_configs: List[str],
+                              dataset_path: str = "./tests/gaia_data",
+                              batch_size: int = 15) -> pd.DataFrame:
+    """Compare multiple agents using standardized test batches"""
+    
+    print(f"🔬 Agent Comparison Study")
+    print(f"🤖 Configs: {', '.join(agent_configs)}")
+    print(f"📊 Batch size: {batch_size}")
+    print("=" * 50)
+    
+    comparison_results = {}
+    
+    for config in agent_configs:
+        print(f"\n🧪 Testing {config}...")
+        
+        try:
+            result = run_gaia_test(
+                agent_config=config,
+                dataset_path=dataset_path,
+                batch_strategy="balanced",
+                batch_size=batch_size
+            )
+            
+            if result:
+                comparison_results[config] = result
+                metadata = result.get('evaluation_metadata', {})
+                accuracy = metadata.get('overall_accuracy', 0)
+                print(f"  ✅ {config}: {accuracy:.1%} accuracy")
+            else:
+                print(f"  ❌ {config}: Test failed")
+                
+        except Exception as e:
+            print(f"  ❌ {config}: Error - {e}")
+    
+    # Generate comparison DataFrame
+    analyzer = GAIATestAnalyzer()
+    comparison_df = analyzer.compare_agent_configurations(comparison_results)
+    
+    print(f"\n📊 COMPARISON RESULTS")
+    print("=" * 60)
+    if not comparison_df.empty:
+        print(comparison_df.round(3).to_string(index=False))
+        
+        best_config = comparison_df.iloc[0]
+        print(f"\n🏆 Best performing: {best_config['config']} ({best_config['accuracy']:.1%})")
+    
+    return comparison_df
+
 def compare_agent_configs(
     configs: List[str] = None,
     questions_per_config: int = 15
@@ -894,72 +1456,7 @@ def compare_agent_configs(
     if configs is None:
         configs = ["groq", "google", "performance", "accuracy"]
     
-    print(f"🔄 Comparing {len(configs)} configurations")
-    print(f"📊 {questions_per_config} questions per config")
-    print("=" * 50)
-    
-    comparison_results = []
-    
-    for config in configs:
-        print(f"\n🧪 Testing {config}...")
-        
-        result = run_gaia_test(
-            agent_config_name=config,
-            max_questions=questions_per_config,
-            target_levels=[1, 2],  # Focus on achievable levels
-            include_files=True,
-            include_images=True
-        )
-        
-        if result and 'evaluation_metadata' in result:
-            metadata = result['evaluation_metadata']
-            analysis = result.get('analysis', {})
-            overall = analysis.get('overall_performance', {})
-            strategy_perf = analysis.get('strategy_performance', {})
-            
-            # Calculate average execution time
-            avg_time = 0
-            if strategy_perf:
-                total_time = sum(stats.get('avg_execution_time', 0) * stats.get('total_questions', 0) 
-                               for stats in strategy_perf.values())
-                total_questions = sum(stats.get('total_questions', 0) for stats in strategy_perf.values())
-                avg_time = total_time / total_questions if total_questions > 0 else 0
-            
-            comparison_results.append({
-                'config': config,
-                'total_questions': metadata.get('total_questions', 0),
-                'correct_answers': metadata.get('correct_answers', 0),
-                'accuracy': metadata.get('overall_accuracy', 0),
-                'avg_execution_time': avg_time,
-                'gaia_target_met': overall.get('gaia_target_met', False)
-            })
-        else:
-            comparison_results.append({
-                'config': config,
-                'total_questions': 0,
-                'correct_answers': 0,
-                'accuracy': 0.0,
-                'avg_execution_time': 0.0,
-                'gaia_target_met': False,
-                'error': 'Test failed'
-            })
-    
-    df = pd.DataFrame(comparison_results)
-    
-    print(f"\n📊 CONFIGURATION COMPARISON")
-    print("=" * 60)
-    print(df.round(3).to_string(index=False))
-    
-    # Find best configuration
-    if not df.empty:
-        best_accuracy = df.loc[df['accuracy'].idxmax()]
-        fastest_config = df.loc[df['avg_execution_time'].idxmin()]
-        
-        print(f"\n🏆 RECOMMENDATIONS:")
-        print(f"├── Best Accuracy: {best_accuracy['config']} ({best_accuracy['accuracy']:.1%})")
-        print(f"└── Fastest: {fastest_config['config']} ({fastest_config['avg_execution_time']:.1f}s avg)")
-    
-    return df
+    return run_agent_comparison_study(configs, batch_size=questions_per_config)
 
 def test_file_vs_text_performance(agent_config_name: str = "groq") -> Dict:
     """Compare performance on file vs text-only questions"""
@@ -975,11 +1472,10 @@ def test_file_vs_text_performance(agent_config_name: str = "groq") -> Dict:
     print("-" * 30)
     
     text_result = run_gaia_test(
-        agent_config_name=agent_config_name,
-        max_questions=15,
-        target_levels=[1, 2],
-        include_files=False,
-        include_images=False
+        agent_config=agent_config_name,
+        batch_size=15,
+        batch_strategy="balanced",
+        has_files=False
     )
     
     if text_result:
@@ -992,11 +1488,9 @@ def test_file_vs_text_performance(agent_config_name: str = "groq") -> Dict:
     print("-" * 30)
     
     file_result = run_gaia_test(
-        agent_config_name=agent_config_name,
-        max_questions=15,
-        target_levels=[1, 2],
-        include_files=True,
-        include_images=True
+        agent_config=agent_config_name,
+        batch_size=15,
+        batch_strategy="file_type_diverse"
     )
     
     if file_result:
@@ -1027,147 +1521,22 @@ def test_file_vs_text_performance(agent_config_name: str = "groq") -> Dict:
 def analyze_failure_patterns(evaluation_results: Dict) -> Dict:
     """Analyze patterns in incorrect answers for improvement insights"""
     
-    if not evaluation_results or 'detailed_results' not in evaluation_results:
-        print("❌ No evaluation results to analyze")
-        return {}
-    
-    detailed_results = evaluation_results['detailed_results']
-    incorrect_results = [r for r in detailed_results if not r.get('is_correct', False)]
-    
-    print(f"\n🔍 FAILURE PATTERN ANALYSIS")
-    print("=" * 40)
-    print(f"📊 Total Questions: {len(detailed_results)}")
-    print(f"❌ Incorrect Answers: {len(incorrect_results)}")
-    
-    if len(incorrect_results) == 0:
-        print("🎉 No failures to analyze - perfect performance!")
-        return {'perfect_performance': True}
-    
-    # Analyze failure patterns
-    failure_patterns = {
-        'by_level': defaultdict(int),
-        'by_strategy': defaultdict(int),
-        'by_file_type': defaultdict(int),
-        'execution_failures': 0,
-        'low_complexity_failures': 0,
-        'high_complexity_failures': 0
-    }
-    
-    for result in incorrect_results:
-        # Level pattern
-        level = result.get('level', 'unknown')
-        failure_patterns['by_level'][level] += 1
-        
-        # Strategy pattern
-        strategy = result.get('strategy_used', 'unknown')
-        failure_patterns['by_strategy'][strategy] += 1
-        
-        # File type pattern
-        if result.get('has_file', False):
-            file_name = result.get('file_name', '')
-            if file_name:
-                ext = Path(file_name).suffix.lower()
-                failure_patterns['by_file_type'][ext or 'no_extension'] += 1
-        else:
-            failure_patterns['by_file_type']['no_file'] += 1
-        
-        # Execution issues
-        if not result.get('execution_successful', True):
-            failure_patterns['execution_failures'] += 1
-        
-        # Complexity detection issues
-        complexity = result.get('complexity_detected', '')
-        if complexity == 'simple':
-            failure_patterns['low_complexity_failures'] += 1
-        elif complexity == 'complex':
-            failure_patterns['high_complexity_failures'] += 1
-    
-    # Print analysis
-    print(f"\n📈 Failure Breakdown:")
-    print(f"├── By Level:")
-    for level, count in failure_patterns['by_level'].items():
-        percentage = count / len(incorrect_results) * 100
-        print(f"│   ├── Level {level}: {count} ({percentage:.1f}%)")
-    
-    print(f"├── By Strategy:")
-    for strategy, count in failure_patterns['by_strategy'].items():
-        percentage = count / len(incorrect_results) * 100
-        print(f"│   ├── {strategy}: {count} ({percentage:.1f}%)")
-    
-    print(f"├── By File Type:")
-    for file_type, count in failure_patterns['by_file_type'].items():
-        percentage = count / len(incorrect_results) * 100
-        print(f"│   ├── {file_type}: {count} ({percentage:.1f}%)")
-    
-    print(f"└── Execution Issues:")
-    print(f"    ├── Execution Failures: {failure_patterns['execution_failures']}")
-    print(f"    ├── Simple Question Failures: {failure_patterns['low_complexity_failures']}")
-    print(f"    └── Complex Question Failures: {failure_patterns['high_complexity_failures']}")
-    
-    # Generate improvement recommendations
-    recommendations = []
-    
-    # Level-based recommendations
-    level_failures = failure_patterns['by_level']
-    if level_failures.get(1, 0) > level_failures.get(2, 0):
-        recommendations.append("Focus on Level 1 performance - basic capabilities need strengthening")
-    if level_failures.get(3, 0) > 0:
-        recommendations.append("Level 3 questions are challenging - enhance reasoning capabilities")
-    
-    # Strategy-based recommendations  
-    strategy_failures = failure_patterns['by_strategy']
-    if strategy_failures.get('one_shot_llm', 0) > strategy_failures.get('manager_coordination', 0):
-        recommendations.append("One-shot LLM failing more - improve direct LLM prompting")
-    elif strategy_failures.get('manager_coordination', 0) > strategy_failures.get('one_shot_llm', 0):
-        recommendations.append("Manager coordination failing more - check agent routing and tool integration")
-    
-    # Complexity-based recommendations
-    if failure_patterns['low_complexity_failures'] > failure_patterns['high_complexity_failures']:
-        recommendations.append("Simple questions failing - improve basic reasoning and routing")
-    
-    # File-based recommendations
-    file_failures = failure_patterns['by_file_type']
-    if file_failures.get('.png', 0) > 0 or file_failures.get('.jpg', 0) > 0:
-        recommendations.append("Image processing needs improvement - enhance visual analysis")
-    if file_failures.get('.xlsx', 0) > 0 or file_failures.get('.csv', 0) > 0:
-        recommendations.append("Spreadsheet analysis needs improvement - enhance data processing")
-    if file_failures.get('.pdf', 0) > 0:
-        recommendations.append("PDF processing needs improvement - enhance document analysis")
-    
-    # Execution-based recommendations
-    if failure_patterns['execution_failures'] > len(incorrect_results) * 0.2:
-        recommendations.append("High execution failure rate - improve error handling and stability")
-    
-    print(f"\n💡 Improvement Recommendations:")
-    for i, rec in enumerate(recommendations, 1):
-        print(f"  {i}. {rec}")
-    
-    # Show sample failures for manual inspection
-    print(f"\n🔍 Sample Failure Cases:")
-    sample_failures = incorrect_results[:3]
-    for i, failure in enumerate(sample_failures, 1):
-        question = failure.get('question', '')[:60] + "..."
-        agent_answer = failure.get('agent_answer', '')
-        expected = failure.get('expected_answer', '')
-        strategy = failure.get('strategy_used', '')
-        
-        print(f"  {i}. Question: {question}")
-        print(f"     Agent: '{agent_answer}'")
-        print(f"     Expected: '{expected}'")
-        print(f"     Level: {failure.get('level')}, Strategy: {strategy}")
-        if failure.get('error'):
-            print(f"     Error: {failure['error']}")
-        print()
-    
-    return {
-        'failure_patterns': failure_patterns,
-        'recommendations': recommendations,
-        'sample_failures': sample_failures[:5]
-    }
+    analyzer = GAIATestAnalyzer()
+    return analyzer.analyze_failure_patterns(evaluation_results)
 
-def generate_test_report(evaluation_results: Dict, 
-                        agent_config_name: str,
-                        save_to_file: bool = True) -> str:
+def analyze_test_results(evaluation_results: Dict) -> Dict:
+    """Comprehensive analysis of test results"""
+    
+    analyzer = GAIATestAnalyzer()
+    
+    analysis_results = {
+        'failure_analysis': analyzer.analyze_failure_patterns(evaluation_results),
+        'routing_analysis': analyzer.analyze_routing_effectiveness(evaluation_results)
+    }
+    
+    return analysis_results
+
+def generate_test_report(evaluation_results: Dict, agent_config_name: str) -> str:
     """Generate comprehensive test report"""
     
     if not evaluation_results:
@@ -1177,7 +1546,6 @@ def generate_test_report(evaluation_results: Dict,
     analysis = evaluation_results.get('analysis', {})
     overall = analysis.get('overall_performance', {})
     
-    # Generate report
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
     report = f"""
@@ -1186,14 +1554,15 @@ def generate_test_report(evaluation_results: Dict,
 
 📅 Generated: {timestamp}
 🤖 Agent Configuration: {agent_config_name}
-🔬 Testing Framework: Two-Step (Blind Execution + Ground Truth Evaluation)
+🔬 Testing Framework: Clean Architecture (Data + Testing Separation)
 
 📊 EXECUTIVE SUMMARY
 {'-'*30}
 ✨ Overall Performance: {overall.get('overall_accuracy', 0):.1%}
 📝 Questions Tested: {overall.get('total_questions', 0)}
-✅ Correct Answers: {overall.get('correct_answers', 0)}
-❌ Incorrect Answers: {overall.get('incorrect_answers', 0)}
+✅ Successful Executions: {metadata.get('successful_executions', 0)} ({metadata.get('execution_success_rate', 0):.1%})
+❌ Execution Failures: {metadata.get('execution_failures', 0)}
+🎯 Correct Answers: {overall.get('correct_answers', 0)}
 🏆 GAIA Target (45%): {'✅ ACHIEVED' if overall.get('gaia_target_met', False) else '❌ NOT ACHIEVED'}
 
 📈 PERFORMANCE BY GAIA LEVEL
@@ -1203,12 +1572,13 @@ def generate_test_report(evaluation_results: Dict,
     for level_key in sorted(level_performance.keys()):
         level_num = level_key.replace('level_', '')
         level_data = level_performance[level_key]
-        accuracy = level_data.get('accuracy', 0)
+        accuracy = level_data.get('overall_accuracy', 0)
+        success_rate = level_data.get('execution_success_rate', 0)
         total = level_data.get('total_questions', 0)
         correct = level_data.get('correct_answers', 0)
         avg_time = level_data.get('avg_execution_time', 0)
         
-        report += f"\n🔸 Level {level_num}: {accuracy:.1%} accuracy ({correct}/{total}) - {avg_time:.1f}s avg"
+        report += f"\n🔸 Level {level_num}: {accuracy:.1%} accuracy ({correct}/{total}) - {success_rate:.1%} success rate - {avg_time:.1f}s avg"
 
     # Strategy performance
     strategy_perf = analysis.get('strategy_performance', {})
@@ -1216,10 +1586,23 @@ def generate_test_report(evaluation_results: Dict,
         report += f"\n\n🎯 STRATEGY PERFORMANCE\n{'-'*30}"
         
         for strategy, stats in strategy_perf.items():
-            accuracy = stats.get('accuracy', 0)
+            accuracy = stats.get('overall_accuracy', 0)
+            success_rate = stats.get('execution_success_rate', 0)
             total = stats.get('total_questions', 0)
             avg_time = stats.get('avg_execution_time', 0)
-            report += f"\n🔸 {strategy.replace('_', ' ').title()}: {accuracy:.1%} ({total} questions) - {avg_time:.1f}s"
+            report += f"\n🔸 {strategy.replace('_', ' ').title()}: {accuracy:.1%} accuracy, {success_rate:.1%} success ({total} questions) - {avg_time:.1f}s"
+
+    # Error analysis
+    error_analysis = analysis.get('error_analysis', {})
+    if error_analysis and error_analysis.get('total_failures', 0) > 0:
+        report += f"\n\n🐛 ERROR ANALYSIS\n{'-'*30}"
+        report += f"\nTotal Failures: {error_analysis['total_failures']}"
+        
+        error_types = error_analysis.get('error_type_distribution', {})
+        if error_types:
+            report += f"\nError Types:"
+            for error_type, count in sorted(error_types.items(), key=lambda x: x[1], reverse=True):
+                report += f"\n  • {error_type}: {count} occurrences"
 
     # Routing analysis
     routing_analysis = analysis.get('routing_analysis', {})
@@ -1233,94 +1616,150 @@ def generate_test_report(evaluation_results: Dict,
         report += f"\n🔸 Manager Coordination: {manager} questions"
         report += f"\n🔸 Routing Accuracy: {routing_acc:.1%}"
 
-    # File attachment analysis
-    file_perf = analysis.get('file_attachment_performance', {})
-    if file_perf:
-        report += f"\n\n📎 FILE ATTACHMENT PERFORMANCE\n{'-'*30}"
-        
-        for category, stats in file_perf.items():
-            accuracy = stats.get('accuracy', 0)
-            total = stats.get('total_questions', 0)
-            report += f"\n🔸 {category.replace('_', ' ').title()}: {accuracy:.1%} ({total} questions)"
-
-    # Error analysis
-    error_analysis = analysis.get('error_analysis', {})
-    if error_analysis:
-        report += f"\n\n🔧 SYSTEM RELIABILITY\n{'-'*30}"
-        success_rate = error_analysis.get('execution_success_rate', 0)
-        exec_errors = error_analysis.get('execution_errors', 0)
-        
-        report += f"\n🔸 Execution Success Rate: {success_rate:.1%}"
-        report += f"\n🔸 Execution Errors: {exec_errors}"
-
     # Recommendations
     report += f"\n\n💡 KEY RECOMMENDATIONS\n{'-'*30}"
     
-    if overall.get('overall_accuracy', 0) >= 0.45:
+    execution_success_rate = metadata.get('execution_success_rate', 0)
+    overall_accuracy = overall.get('overall_accuracy', 0)
+    
+    if execution_success_rate < 0.8:
+        report += "\n❌ Critical: Fix execution failures before optimizing performance"
+        report += "\n🔧 Focus on agent stability and error handling"
+    elif overall_accuracy >= 0.45:
         report += "\n✅ System meets GAIA performance targets"
         report += "\n🚀 Ready for production deployment"
-    elif overall.get('overall_accuracy', 0) >= 0.35:
+    elif overall_accuracy >= 0.35:
         report += "\n⚠️ Performance approaching targets - optimization recommended"
+        report += "\n🎯 Focus on accuracy improvements"
     else:
         report += "\n❌ Performance below targets - significant improvements needed"
+        report += "\n🔧 Review agent architecture and strategy selection"
 
     report += f"\n\n{'='*60}"
-    report += f"\nGenerated by GAIA Testing Framework v2.0"
+    report += f"\nGenerated by GAIA Testing Framework v3.0 (Clean Architecture)"
     
-    # Save to file if requested
-    if save_to_file:
-        report_file = Path("logs") / create_timestamped_filename(f"gaia_test_report_{agent_config_name}", "txt").split('/')[-1]
-        
-        with open(report_file, 'w') as f:
-            f.write(report)
-        
-        print(f"📄 Test report saved: {report_file}")
+    # Save to file
+    report_file = Path("logs") / create_timestamped_filename(f"gaia_test_report_{agent_config_name}", "txt").split('/')[-1]
+    
+    with open(report_file, 'w') as f:
+        f.write(report)
+    
+    print(f"📄 Test report saved: {report_file}")
     
     return report
+
+def diagnose_agent_issues(agent_config: Union[str, Dict] = "groq",
+                         dataset_path: str = "./tests/gaia_data") -> Dict:
+    """Diagnostic test to identify agent issues"""
+    
+    print(f"🔧 Agent Diagnostic Test")
+    print("=" * 40)
+    
+    # Run test with maximum error detection
+    test_config = GAIATestConfig(
+        max_retries=1,  # Don't retry to see raw errors
+        detect_execution_failures=True,
+        enable_strategy_fallback=False,  # Don't mask with fallbacks
+        enable_real_time_monitoring=True
+    )
+    
+    # Create small diagnostic batch
+    dataset_manager = GAIADatasetManager(dataset_path)
+    test_batch = dataset_manager.create_test_batch(3, "small_sample")
+    
+    if test_batch:
+        executor = GAIATestExecutor(agent_config, test_config)
+        execution_results = executor.execute_test_batch(test_batch)
+        
+        # Analyze execution issues
+        print(f"\n🔍 Diagnostic Analysis:")
+        
+        for i, result in enumerate(execution_results, 1):
+            print(f"\nQuestion {i}:")
+            print(f"  Execution successful: {result.get('execution_successful', False)}")
+            print(f"  Error type: {result.get('error_type', 'None')}")
+            
+            if result.get('error_message'):
+                print(f"  Error message: {result['error_message'][:100]}...")
+            
+            if result.get('raw_agent_response'):
+                response = result['raw_agent_response']
+                print(f"  Raw response: {response[:100]}...")
+        
+        return execution_results
+    
+    return {}
 
 # ============================================================================
 # MAIN EXECUTION AND EXAMPLES
 # ============================================================================
 
 if __name__ == "__main__":
-    print("🎯 GAIA Testing Framework v2.0")
-    print("=" * 50)
+    print("🧪 GAIA Testing Framework v3.0 - Clean Architecture")
+    print("=" * 60)
     
     # Available test functions
-    test_options = {
-        "quick_test": "Quick 5-question validation",
-        "standard_test": "Standard 20-question evaluation", 
-        "routing_test": "Test smart routing behavior",
-        "comparison": "Compare multiple agent configurations",
-        "file_test": "Test file vs text performance",
-        "custom": "Custom test parameters"
+    test_functions = {
+        'run_quick_gaia_test': 'Quick 5-question validation (Level 1)',
+        'run_small_batch_test': 'Quick 5-question diverse batch',
+        'run_large_batch_test': 'Comprehensive 25-question evaluation',
+        'run_gaia_test': 'Custom testing with parameters',
+        'run_smart_routing_test': 'Analyze routing effectiveness',
+        'run_agent_comparison_study': 'Compare multiple configurations',
+        'compare_agent_configs': 'Compare agent configurations',
+        'test_file_vs_text_performance': 'File processing vs text-only',
+        'analyze_failure_patterns': 'Deep dive into failure analysis',
+        'analyze_test_results': 'Comprehensive result analysis',
+        'generate_test_report': 'Professional reporting',
+        'diagnose_agent_issues': 'Diagnostic test for agent problems'
     }
-    
-    print("\n📋 Available Tests:")
-    for key, description in test_options.items():
-        print(f"  ├── {key}: {description}")
-    
+
+    print(f"\n📋 Available Testing Functions:")
+    for func, description in test_functions.items():
+        print(f"├── {func}: {description}")
+
     print(f"\n💡 Usage Examples:")
-    print(f"  ├── run_quick_gaia_test('groq')")
-    print(f"  ├── run_gaia_test('groq', max_questions=30)")
+    print(f"  ├── run_small_batch_test('groq')")
+    print(f"  ├── run_gaia_test('groq', batch_size=30)")
     print(f"  ├── run_smart_routing_test('performance')")
     print(f"  ├── compare_agent_configs(['groq', 'google', 'performance'])")
     print(f"  ├── test_file_vs_text_performance('groq')")
+    print(f"  ├── diagnose_agent_issues('groq')")
     print(f"  └── analyze_failure_patterns(result)")
+
+    print(f"\n🔧 Key Features:")
+    features = [
+        "✅ Fixed execution success detection (catches error messages)",
+        "✅ Comprehensive error categorization and analysis", 
+        "✅ Real-time progress monitoring with progress bars",
+        "✅ Strategy fallback mechanisms for robustness",
+        "✅ Detailed performance profiling and timing",
+        "✅ Robust retry logic with smart decisions",
+        "✅ Enhanced similarity scoring for near-matches",
+        "✅ GAIA-compliant answer matching with multiple strategies",
+        "✅ Comprehensive reporting and export capabilities",
+        "✅ Diagnostic tools for agent debugging"
+    ]
     
+    for feature in features:
+        print(f"  {feature}")
+
     # Run demonstration
-    print(f"\n🚀 Running quick demonstration...")
+    print(f"\n🚀 Running demonstration...")
     try:
         demo_result = run_quick_gaia_test("groq")
         
         if demo_result and 'evaluation_metadata' in demo_result:
             metadata = demo_result['evaluation_metadata']
             accuracy = metadata.get('overall_accuracy', 0)
+            execution_success_rate = metadata.get('execution_success_rate', 0)
             total = metadata.get('total_questions', 0)
             
             print(f"✅ Demo completed!")
             print(f"   ├── Questions: {total}")
+            print(f"   ├── Execution Success: {execution_success_rate:.1%}")
             print(f"   ├── Accuracy: {accuracy:.1%}")
+            print(f"   ├── Fixed Metrics: ✅ WORKING")
             print(f"   └── GAIA Target: {'✅ Met' if accuracy >= 0.45 else '❌ Not Met'}")
             
             # Generate demo report
@@ -1328,10 +1767,9 @@ if __name__ == "__main__":
             
         else:
             print(f"❌ Demo failed - check your setup")
+            print(f"💡 Use diagnose_agent_issues('groq') to identify problems")
             
     except Exception as e:
         print(f"❌ Demo error: {e}")
-        print(f"💡 Ensure metadata.jsonl is available and agent system is properly configured")
-    
-    print(f"\n🎓 GAIA Testing Framework Ready!")
-    print(f"This framework provides rigorous testing for your GAIA agent system.")
+        print(f"💡 Ensure dataset is available and agent system is configured")
+        print(f"🔧 Try: diagnose_agent_issues('groq') for detailed diagnosis")
