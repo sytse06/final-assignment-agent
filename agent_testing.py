@@ -65,8 +65,13 @@ class GAIATestConfig:
 # AGENT CONFIGURATION MAPPING
 # ============================================================================
 
-def get_agent_config_by_name(config_name: str) -> Dict:
-    """Map configuration names to actual configs"""
+def gaia_config_to_dict(config: GAIAConfig) -> Dict:
+    """Convert GAIAConfig dataclass to dictionary"""
+    import dataclasses
+    return dataclasses.asdict(config)
+
+def get_agent_config_by_name(config_name: str) -> GAIAConfig:
+    """Map configuration names to actual configs -  - returns GAIAConfig objects"""
     
     config_map = {
         "groq": get_groq_config("qwen-qwq-32b"),
@@ -76,8 +81,8 @@ def get_agent_config_by_name(config_name: str) -> Dict:
         "google": get_google_config("gemini-2.0-flash-preview"),
         "google_pro": get_google_config("gemini-1.5-pro-002"),
         "ollama": get_ollama_config("qwen2.5-coder:32b"),
-        "performance": {**get_groq_config(), **get_performance_config()},
-        "accuracy": {**get_groq_config(), **get_accuracy_config()}
+        "performance": get_performance_config(),
+        "accuracy": get_accuracy_config()
     }
     
     return config_map.get(config_name, get_groq_config())
@@ -87,24 +92,26 @@ def get_agent_config_by_name(config_name: str) -> Dict:
 # ============================================================================
 
 class GAIATestExecutor:
-    """Execute agents on test batches - no dataset management"""
-    
-    def __init__(self, agent_config: Union[str, Dict], test_config: GAIATestConfig = None):
-        """Initialize with agent and test configurations"""
+    def __init__(self, agent_config: Union[str, Dict, GAIAConfig], test_config: GAIATestConfig = None):
+        """Initialize tests with agent and test configurations"""
         
         self.test_config = test_config or GAIATestConfig()
         self.results_dir = Path(self.test_config.results_dir)
         self.results_dir.mkdir(exist_ok=True)
         
-        # Create agent
+        # Handle different config types
         if isinstance(agent_config, str):
-            config_dict = get_agent_config_by_name(agent_config)
+            gaia_config = get_agent_config_by_name(agent_config)  # Returns GAIAConfig now
             self.agent_config_name = agent_config
-        else:
-            config_dict = agent_config
+        elif isinstance(agent_config, dict):
+            gaia_config = dict_to_gaia_config(agent_config)
+            self.agent_config_name = "custom"
+        else:  # GAIAConfig object
+            gaia_config = agent_config
             self.agent_config_name = "custom"
         
-        self.agent = create_gaia_agent(config_dict)
+        # Pass GAIAConfig object
+        self.agent = create_gaia_agent(gaia_config)
         self.session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         
         # Execution tracking
@@ -191,7 +198,7 @@ class GAIATestExecutor:
             question_text = self._prepare_question_for_agent(question_data)
             
             # Execute with our agent system
-            result = self.agent.run_single_question(
+            result = self.agent.process_question(
                 question=question_text,
                 task_id=task_id
             )
@@ -739,7 +746,7 @@ class GAIATestEvaluator:
             return True
         
         # Remove common artifacts (GAIA formatting rules)
-        artifacts = ['.', ',', '!', '?', '"', "'", 'the ', 'a, 'an ']
+        artifacts = ['.', ',', '!', '?', '"', "'", 'the ', 'a ', 'an ']
         for artifact in artifacts:
             pred_clean = pred_clean.replace(artifact, '')
             exp_clean = exp_clean.replace(artifact, '')

@@ -198,7 +198,7 @@ def quick_test(question: str = "Calculate 15% of 1000",
     """Quick test function with custom config"""
     try:
         agent = create_gaia_agent(config_overrides)
-        result = agent.run_single_question(question)
+        result = agent.process_question(question)
         
         print(f"\n🎯 TEST RESULT")
         print("=" * 30)
@@ -233,12 +233,12 @@ def test_multiple_questions(questions: List[str],
     for i, question in enumerate(questions, 1):
         print(f"\nQuestion {i}/{len(questions)}: {question[:50]}...")
         try:
-            result = run_single_question_enhanced(agent, question)
+            result = run_single_question_with_logging(agent, question)
             results.append(result)
             
             # Show enhanced information
             print(f"✅ Answer: {result.get('final_answer', 'No answer')}")
-            print(f"🔄 Strategy: {result.get('selected_strategy', 'unknown')}")
+            print(f"🔄 Strategy: {result.get('routing_path', 'unknown')}")
             print(f"🤖 Agent: {result.get('selected_agent', 'unknown')}")
             print(f"⏱️ Time: {result.get('execution_time', 0):.2f}s")
             
@@ -617,6 +617,32 @@ def get_performance_config() -> GAIAConfig:
         debug_mode=False  # Less verbose for performance
     )
 
+def get_ollama_config(model_name: str = "qwen2.5-coder:32b") -> GAIAConfig:
+    """Get Ollama configuration with enhanced defaults"""
+    return GAIAConfig(
+        model_provider="ollama",
+        model_name=model_name,
+        temperature=0.3,
+        max_agent_steps=15,
+        enable_smart_routing=True,
+        skip_rag_for_simple=True,
+        enable_csv_logging=True,
+        debug_mode=True
+    )
+
+def get_debug_config() -> GAIAConfig:
+    """Get debug configuration with enhanced logging"""
+    return GAIAConfig(
+        model_provider="groq",
+        model_name="qwen-qwq-32b",
+        temperature=0.3,
+        max_agent_steps=15,
+        enable_smart_routing=True,
+        skip_rag_for_simple=True,
+        enable_csv_logging=True,
+        debug_mode=True
+    )
+
 def get_accuracy_config() -> GAIAConfig:
     """Get accuracy-optimized configuration"""
     return GAIAConfig(
@@ -754,7 +780,7 @@ def compare_agent_configs(config_names: List[str], test_questions: List[str] = N
             
             for question in test_questions:
                 try:
-                    result = agent.run_single_question(question)
+                    result = agent.process_question(question)
                     config_results.append({
                         "question": question,
                         "answer": result.get("final_answer", ""),
