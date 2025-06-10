@@ -22,6 +22,8 @@ from smolagents import (
     LiteLLMModel,
     GoogleSearchTool,
     VisitWebpageTool,
+    AgentLogger,
+    LogLevel
 )
 
 # Import retriever system
@@ -257,7 +259,7 @@ class GAIAAgent:
             
             print(f"✅ Orchestration model: {getattr(self.orchestration_model, 'model_name', getattr(self.orchestration_model, 'model', 'Unknown'))}")
             
-            # Initialize specialist model (SmolagAgents)
+            # Initialize specialist model (SmolAgents)
             if self.config.model_provider == "groq":
                 model_id = f"groq/{self.config.model_name}"
                 api_key = os.getenv("GROQ_API_KEY")
@@ -293,7 +295,7 @@ class GAIAAgent:
             raise
             
     def _create_specialist_agents(self):
-        """Create specialist agents"""
+        """Create specialist agents with clean logging"""
         env_tools = []
         
         # Add custom GAIA tools if available
@@ -303,11 +305,9 @@ class GAIAAgent:
                 ContentRetrieverTool()
             ])
         
-        # Setup logging callbacks
-        step_callbacks = []
+        # Use basic SmolagAgent logger only (no callbacks)
         logger = None
-        if self.logging:
-            step_callbacks = [self.logging.capture_step_log]
+        if self.logging and hasattr(self.logging, 'logger'):
             logger = self.logging.logger
         
         specialists = {}
@@ -323,8 +323,7 @@ class GAIAAgent:
             ],
             model=self.model,
             max_steps=self.config.max_agent_steps,
-            logger=logger,
-            step_callbacks=step_callbacks
+            logger=logger
         )
         
         # Web Researcher - ToolCallingAgent for search and current information
@@ -348,8 +347,7 @@ class GAIAAgent:
             model=self.model,
             max_steps=self.config.max_agent_steps,
             planning_interval=self.config.planning_interval,
-            logger=logger,
-            step_callbacks=step_callbacks
+            logger=logger  # Basic logger only - no callbacks
         )
         
         # Document Processor - ToolCallingAgent for file and multimedia processing
@@ -360,8 +358,7 @@ class GAIAAgent:
             add_base_tools=True,  # Includes transcriber for audio
             model=self.model,
             max_steps=self.config.max_agent_steps,
-            logger=logger,
-            step_callbacks=step_callbacks
+            logger=logger  # Basic logger only - no callbacks
         )
         
         print(f"✅ Created {len(specialists)} specialist agents")
@@ -379,10 +376,8 @@ class GAIAAgent:
             ])
         
         # Setup logging
-        step_callbacks = []
         logger = None
-        if self.logging:
-            step_callbacks = [self.logging.capture_step_log]
+        if self.logging and hasattr(self.logging, 'logger'):
             logger = self.logging.logger
         
         # Switch from CodeAgent to ToolCallingAgent
@@ -394,8 +389,7 @@ class GAIAAgent:
             managed_agents=list(self.specialists.values()),
             planning_interval=self.config.planning_interval,
             max_steps=self.config.max_agent_steps,
-            logger=logger,
-            step_callbacks=step_callbacks
+            logger=logger
         )
         
         print("✅ Manager agent created with ToolCallingAgent for better coordination")
@@ -451,11 +445,7 @@ class GAIAAgent:
     def _read_question_node(self, state: GAIAState):
         """Read question and conditionally get RAG context"""
         if self.logging:
-            self.logging.logger.log_task(
-                content=state["question"].strip(),
-                title="GAIA Question Processing",
-                subtitle="Question Analysis and Routing"
-            )
+            self.logging.log_step("question_setup", f"Processing question: {state['question'][:50]}...")
         
         # Initialize similar_examples
         similar_examples = []
@@ -481,7 +471,7 @@ class GAIAAgent:
                 print(f"📚 Found {len(similar_examples)} similar examples")
                 if self.logging:
                     self.logging.set_similar_examples_count(len(similar_examples))
-                                    
+                                
             except Exception as e:
                 print(f"⚠️  RAG retrieval error: {e}")
                 similar_examples = []
@@ -492,11 +482,14 @@ class GAIAAgent:
             "similar_examples": similar_examples,
             "steps": state["steps"] + ["Question setup complete"]
         }
-    
+
     def _complexity_check_node(self, state: GAIAState):
-        """Determine if question needs specialist coordination"""
+        """Determine if question needs specialist coordination - MAIN LOGGING HERE"""
         question = state["question"]
         task_id = state.get("task_id", "")
+        
+        if self.logging:
+            self.logging.log_step("complexity_analysis", f"Analyzing complexity for: {question[:50]}...")
         
         print(f"🧠 Analyzing complexity for: {question[:50]}...")
         
@@ -515,16 +508,23 @@ class GAIAAgent:
             reason = "Current information needed"
         else:
             # LLM decides for edge cases
+            if self.logging:
+                self.logging.log_step("llm_complexity_check", "Using LLM for edge case assessment")
+            
             complexity = self._llm_complexity_check(question)
             reason = "LLM complexity assessment"
         
         print(f"📊 Complexity: {complexity} ({reason})")
         if self.logging:
             self.logging.set_complexity(complexity)
+            self.logging.log_step("complexity_result", f"Final complexity: {complexity} - {reason}")
         
         # If complex perform RAG search with retriever
         if complexity == "complex" and self.config.skip_rag_for_simple and not state.get("similar_examples"):
             print("📚 Retrieving RAG examples for complex question...")
+            
+            if self.logging:
+                self.logging.log_step("rag_retrieval", "Retrieving examples for complex question")
             
             try:
                 similar_docs = self.retriever.search(question, k=self.config.rag_examples_count)
@@ -545,9 +545,12 @@ class GAIAAgent:
                 print(f"📚 Found {len(similar_examples)} similar examples")                            
                 if self.logging:
                     self.logging.set_similar_examples_count(len(similar_examples))
+                    self.logging.log_step("rag_complete", f"Retrieved {len(similar_examples)} examples")
                     
             except Exception as e:
                 print(f"⚠️  RAG retrieval error: {e}")
+                if self.logging:
+                    self.logging.log_step("rag_error", f"RAG retrieval failed: {str(e)}")
                 similar_examples = state.get("similar_examples", [])
         else:
             similar_examples = state.get("similar_examples", [])
@@ -557,9 +560,10 @@ class GAIAAgent:
             "similar_examples": similar_examples,
             "steps": state["steps"] + [f"Complexity assessed: {complexity} ({reason})"]
         }
-    
+
     def _llm_complexity_check(self, question: str) -> str:
-        """Use LLM to determine complexity for edge cases"""
+        """Use LLM to determine complexity for edge cases - SIMPLIFIED"""
+        
         prompt = f"""Analyze this question and determine if it needs specialist tools or can be answered directly.
 
         Question: {question}
@@ -573,22 +577,39 @@ class GAIAAgent:
         try:
             response = llm_invoke_with_retry(self.orchestration_model, [HumanMessage(content=prompt)])
             result = response.content.strip().lower()
-            return "simple" if "simple" in result else "complex"
-        except Exception:
+            complexity = "simple" if "simple" in result else "complex"
+            
+            # Only log the final result in the parent method
+            return complexity
+            
+        except Exception as e:
             # Default to complex if LLM fails
+            print(f"⚠️  LLM complexity check failed: {str(e)}, defaulting to complex")
             return "complex"
+
+    def _route_by_complexity(self, state: GAIAState) -> str:
+        """Routing function for conditional edges - NO LOGGING NEEDED"""
+        # This is just a simple getter - no logging needed
+        return state.get("complexity", "complex")
     
     def _one_shot_answering_node(self, state: GAIAState):
-        """Direct LLM answering for simple questions"""
+        """Direct LLM answering for simple questions with comprehensive logging"""
         print("⚡ Using one-shot direct answering")
         
         if self.logging:
             self.logging.set_routing_path("one_shot_llm")
+            self.logging.log_step("one_shot_start", "Starting direct LLM answering")
+        
+        # Build prompt for direct answering
+        question = state["question"]
+        
+        if self.logging:
+            self.logging.log_step("one_shot_prompt_prep", f"Preparing direct prompt for: {question[:30]}...")
         
         # Simple prompt for direct answering
         prompt = f"""You are a general AI assistant. Answer this question directly and concisely.
 
-        Question: {state["question"]}
+        Question: {question}
 
         Provide your answer in the format: FINAL ANSWER: [YOUR ANSWER]
 
@@ -598,33 +619,52 @@ class GAIAAgent:
         - Keep it as brief as possible"""
         
         try:
+            if self.logging:
+                self.logging.log_step("one_shot_llm_call", "Making direct LLM call")
+            
             response = llm_invoke_with_retry(self.orchestration_model, [HumanMessage(content=prompt)])
+            
+            if self.logging:
+                response_preview = response.content[:50] + "..." if len(response.content) > 50 else response.content
+                self.logging.log_step("one_shot_response", f"LLM response received: {response_preview}")
+            
+            # Validate response
+            if not response.content or len(response.content.strip()) == 0:
+                error_msg = "Empty response from LLM"
+                if self.logging:
+                    self.logging.log_step("one_shot_empty_response", error_msg)
+                raise ValueError(error_msg)
+            
+            if self.logging:
+                self.logging.log_step("one_shot_complete", "Direct LLM answering completed successfully")
             
             return {
                 "raw_answer": response.content,
                 "steps": state["steps"] + ["One-shot direct answering completed"]
             }
+            
         except Exception as e:
             error_msg = f"One-shot answering failed: {str(e)}"
             print(f"❌ {error_msg}")
             
+            if self.logging:
+                self.logging.log_step("one_shot_error", error_msg)
+            
+            # Return error state but continue workflow
             return {
-                "raw_answer": f"Error: {error_msg}",
+                "raw_answer": f"Error in one-shot answering: {error_msg}",
                 "steps": state["steps"] + [error_msg]
             }
-    
-    def _route_by_complexity(self, state: GAIAState) -> str:
-        """Routing function for conditional edges"""
-        return state.get("complexity", "complex")
-    
+        
     def _manager_execution_node(self, state: GAIAState):
-        """Execute manager agent with specialist coordination"""
+        """Execute manager agent with manual step logging"""
         task_id = state.get("task_id", str(uuid.uuid4()))
         
         # Start logging for this task
         if self.logging:
-            self.logging.start_task(task_id)
+            self.logging.start_task(task_id, self.logging.current_complexity, self.logging.current_model_used)
             self.logging.set_routing_path("manager_coordination")
+            self.logging.log_step("manager_start", "Starting manager coordination")
         
         # Prepare manager context
         manager_context = self._prepare_manager_context(
@@ -633,9 +673,19 @@ class GAIAAgent:
             task_id=task_id
         )
         
+        if self.logging:
+            self.logging.log_step("context_prepared", f"Manager context prepared with {len(state.get('similar_examples', []))} examples")
+        
         try:
             print(f"🤖 Executing manager agent with {len(self.specialists)} specialists")
+            
+            if self.logging:
+                self.logging.log_step("manager_execution", "Running manager agent")
+            
             result = self.manager.run(manager_context)
+            
+            if self.logging:
+                self.logging.log_step("manager_complete", "Manager execution successful")
             
             # Get step count
             step_count = self.logging.step_counter if self.logging else 0
@@ -651,13 +701,19 @@ class GAIAAgent:
             error_msg = f"Manager execution failed: {str(e)}"
             print(f"❌ {error_msg}")
             
+            if self.logging:
+                self.logging.log_step("manager_error", error_msg)
+            
             return {
                 "raw_answer": error_msg,
                 "steps": state["steps"] + [error_msg]
             }
     
     def _prepare_manager_context(self, question: str, rag_examples: List[Dict], task_id: str) -> str:
-        """Prepare context for manager agent"""
+        """Prepare context for manager agent with logging"""
+        if self.logging:
+            self.logging.log_step("context_prep_start", f"Preparing manager context for task {task_id}")
+        
         context_parts = [
             "You are coordinating a GAIA benchmark question. You have access to specialist agents:",
             "",
@@ -672,6 +728,9 @@ class GAIAAgent:
         
         # Add RAG examples
         if rag_examples:
+            if self.logging:
+                self.logging.log_step("context_add_rag", f"Adding {len(rag_examples)} RAG examples to context")
+            
             context_parts.extend([
                 "Similar examples from GAIA database:",
                 ""
@@ -683,9 +742,15 @@ class GAIAAgent:
                     f"A: {example['answer']}",
                     ""
                 ])
+        else:
+            if self.logging:
+                self.logging.log_step("context_no_rag", "No RAG examples to add")
         
         # Add file context if available
         if task_id:
+            if self.logging:
+                self.logging.log_step("context_add_file", f"Adding file context for task {task_id}")
+            
             context_parts.extend([
                 f"Task ID: {task_id}",
                 "Use GetAttachmentTool to access any uploaded files if needed.",
@@ -710,15 +775,35 @@ class GAIAAgent:
             "Provide your final answer in format: FINAL ANSWER: [YOUR ANSWER]"
         ])
         
-        return "\n".join(context_parts)
+        final_context = "\n".join(context_parts)
+        
+        if self.logging:
+            context_length = len(final_context)
+            self.logging.log_step("context_prep_complete", f"Manager context prepared: {context_length} characters")
+        
+        return final_context
     
     def _format_answer_node(self, state: GAIAState):
-        """Final answer formatting and validation"""
+        """Final answer formatting and validation with logging"""
         raw_answer = state.get("raw_answer", "")
         
+        if self.logging:
+            self.logging.log_step("format_start", f"Formatting answer: {raw_answer[:50]}...")
+        
         try:
+            # Extract final answer
+            if self.logging:
+                self.logging.log_step("extract_answer", "Extracting final answer from raw response")
+            
             formatted_answer = self._extract_final_answer(raw_answer)
+            
+            if self.logging:
+                self.logging.log_step("apply_gaia_format", f"Applying GAIA formatting to: {formatted_answer}")
+            
             formatted_answer = self._apply_gaia_formatting(formatted_answer)
+            
+            if self.logging:
+                self.logging.log_step("format_complete", f"Final formatted answer: {formatted_answer}")
             
             return {
                 "final_answer": formatted_answer,
@@ -727,15 +812,24 @@ class GAIAAgent:
             
         except Exception as e:
             error_msg = f"Answer formatting error: {str(e)}"
+            
+            if self.logging:
+                self.logging.log_step("format_error", error_msg)
+            
             return {
                 "final_answer": raw_answer.strip() if raw_answer else "No answer",
                 "steps": state["steps"] + [error_msg]
             }
-    
+            
     def _extract_final_answer(self, raw_answer: str) -> str:
-        """Extract final answer from manager response"""
+        """Extract final answer from manager response with logging"""
         if not raw_answer:
+            if self.logging:
+                self.logging.log_step("extract_empty", "Raw answer is empty")
             return "No answer"
+        
+        if self.logging:
+            self.logging.log_step("extract_patterns", "Searching for FINAL ANSWER patterns")
         
         # Try to find FINAL ANSWER pattern
         patterns = [
@@ -744,21 +838,35 @@ class GAIAAgent:
             r"Answer:\s*(.+?)(?:\n|$)"
         ]
         
-        for pattern in patterns:
+        for i, pattern in enumerate(patterns):
             match = re.search(pattern, raw_answer, re.IGNORECASE | re.DOTALL)
             if match:
-                return match.group(1).strip()
+                extracted = match.group(1).strip()
+                if self.logging:
+                    self.logging.log_step("extract_success", f"Pattern {i+1} matched: {extracted}")
+                return extracted
         
         # Fallback to last line
         lines = raw_answer.strip().split('\n')
-        return lines[-1].strip() if lines else "No answer"
-    
+        fallback = lines[-1].strip() if lines else "No answer"
+        
+        if self.logging:
+            self.logging.log_step("extract_fallback", f"No pattern matched, using last line: {fallback}")
+        
+        return fallback
+
     def _apply_gaia_formatting(self, answer: str) -> str:
-        """Apply GAIA formatting rules"""
+        """Apply GAIA formatting rules with logging"""
         if not answer:
+            if self.logging:
+                self.logging.log_step("gaia_format_empty", "Answer is empty, returning default")
             return "No answer"
         
+        original_answer = answer
         answer = answer.strip()
+        
+        if self.logging:
+            self.logging.log_step("gaia_format_start", f"Original: '{original_answer}' -> Stripped: '{answer}'")
         
         # Remove common prefixes
         prefixes = [
@@ -769,24 +877,37 @@ class GAIAAgent:
         answer_lower = answer.lower()
         for prefix in prefixes:
             if answer_lower.startswith(prefix):
+                old_answer = answer
                 answer = answer[len(prefix):].strip()
                 answer_lower = answer.lower()
+                if self.logging:
+                    self.logging.log_step("gaia_format_prefix", f"Removed prefix '{prefix}': '{old_answer}' -> '{answer}'")
+                break
         
         # Remove quotes and punctuation
+        old_answer = answer
         answer = answer.strip('.,!?:;"\'')
+        if old_answer != answer and self.logging:
+            self.logging.log_step("gaia_format_punct", f"Removed punctuation: '{old_answer}' -> '{answer}'")
         
         # Handle numbers - remove commas
         if answer.replace('.', '').replace('-', '').replace(',', '').isdigit():
+            old_answer = answer
             answer = answer.replace(',', '')
+            if old_answer != answer and self.logging:
+                self.logging.log_step("gaia_format_number", f"Removed commas from number: '{old_answer}' -> '{answer}'")
+        
+        if self.logging:
+            self.logging.log_step("gaia_format_final", f"Final GAIA formatted answer: '{answer}'")
         
         return answer
     
     # ============================================================================
-    # PUBLIC INTERFACE
+    # CONVENIENCE FUNCTION
     # ============================================================================
     
-    def run_single_question(self, question: str, task_id: str = None) -> Dict:
-        """Execute single question using manager agent"""
+    def process_question(self, question: str, task_id: str = None) -> Dict:
+        """Core production method to process a single question"""
         if task_id is None:
             task_id = str(uuid.uuid4())
         
@@ -796,33 +917,51 @@ class GAIAAgent:
             "steps": []
         }
         
-        print(f"🔍 Processing: {question[:60]}...")
+        # Start logging if available
+        if self.logging:
+            self.logging.start_task(task_id, model_used=self.config.model_name)
+            self.logging.log_step("question_received", f"Processing question: {question}")
         
         try:
+            if self.logging:
+                self.logging.log_step("workflow_start", "Starting LangGraph workflow execution")
+            
             result = self.workflow.invoke(initial_state)
             
-            # Log to CSV if enabled
             if self.logging:
+                self.logging.log_step("workflow_complete", "Workflow completed successfully")
+            
+            # Add basic metadata
+            result.update({
+                "task_id": task_id,
+                "question": question,
+                "execution_successful": True
+            })
+            
+            # Log completion
+            if self.logging:
+                manual_steps = len(self.logging.manual_steps)
                 self.logging.log_question_result(
                     task_id=task_id,
                     question=question,
                     final_answer=result.get("final_answer", ""),
-                    total_steps=len(result.get("steps", [])),
+                    total_steps=manual_steps,
                     success=True
                 )
+                self.logging.log_step("execution_complete", f"Question execution completed with {manual_steps} logged steps")
             
             return result
             
         except Exception as e:
             error_msg = f"Workflow execution failed: {str(e)}"
-            print(f"❌ {error_msg}")
             
             if self.logging:
+                self.logging.log_step("execution_error", error_msg)
                 self.logging.log_question_result(
                     task_id=task_id,
                     question=question,
                     final_answer="ERROR",
-                    total_steps=0,
+                    total_steps=len(self.logging.manual_steps) if self.logging else 0,
                     success=False
                 )
             
@@ -830,7 +969,8 @@ class GAIAAgent:
                 "task_id": task_id,
                 "question": question,
                 "final_answer": "Execution failed",
-                "error": error_msg
+                "error": error_msg,
+                "execution_successful": False
             }
 
 # ============================================================================
