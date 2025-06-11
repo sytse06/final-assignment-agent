@@ -200,6 +200,10 @@ class GAIAAgent:
         else:
             self.logging = None
         
+        # Create shared tool instances
+        self.shared_tools = self._create_shared_tools()
+        print(f"🔍 DEBUG: shared_tools keys: {list(self.shared_tools.keys())}")
+        
         # Create specialist agents
         self.specialists = self._create_specialist_agents()
         
@@ -316,13 +320,13 @@ class GAIAAgent:
         if LANGCHAIN_TOOLS_AVAILABLE:
             env_tools.extend(ALL_LANGCHAIN_TOOLS)
             print(f"✅ Added {len(ALL_LANGCHAIN_TOOLS)} LangChain tools")
-        
-        # Add custom GAIA tools if available
-        if CUSTOM_TOOLS_AVAILABLE:
-            env_tools.extend([
-                GetAttachmentTool(),
-                ContentRetrieverTool()
-            ])
+            
+        if CUSTOM_TOOLS_AVAILABLE and self.shared_tools:
+            if 'get_attachment' in self.shared_tools:
+                env_tools.append(self.shared_tools['get_attachment'])
+            if 'content_retriever' in self.shared_tools:
+                env_tools.append(self.shared_tools['content_retriever'])
+            print(f"✅ Added {len([k for k in ['get_attachment', 'content_retriever'] if k in self.shared_tools])} shared GAIA tools to specialists")
         
         # Data Analyst - CodeAgent for calculations and data processing
         specialists["data_analyst"] = CodeAgent(
@@ -343,12 +347,13 @@ class GAIAAgent:
 
         # PRIORITY 1: LangChain search tools FIRST
         if LANGCHAIN_TOOLS_AVAILABLE:
-            web_tools.extend(ALL_LANGCHAIN_TOOLS)  # Serper gets added FIRST
-            print(f"✅ PRIORITY: {len(ALL_LANGCHAIN_TOOLS)} LangChain tools added FIRST")
+            web_tools.extend(ALL_LANGCHAIN_TOOLS)
             
-        if CUSTOM_TOOLS_AVAILABLE:
-            web_tools.extend([GetAttachmentTool(), ContentRetrieverTool()])
-            print("✅ GAIA tools added as secondary priority")
+        if CUSTOM_TOOLS_AVAILABLE and self.shared_tools:
+            if 'get_attachment' in self.shared_tools:
+                web_tools.append(self.shared_tools['get_attachment'])
+            if 'content_retriever' in self.shared_tools:
+                web_tools.append(self.shared_tools['content_retriever'])
         
         specialists["web_researcher"] = ToolCallingAgent(
             name="web_researcher",
@@ -363,17 +368,41 @@ class GAIAAgent:
         
         print(f"✅ Created {len(specialists)} specialist agents")
         return specialists
+
+    def _create_shared_tools(self):
+        """Create shared tool instance"""
+        shared_tools = {}
+        
+        if CUSTOM_TOOLS_AVAILABLE:
+            try:
+                shared_tools['get_attachment'] = GetAttachmentTool()
+                print("✅ GetAttachmentTool created successfully")
+            except Exception as e:
+                print(f"❌ GetAttachmentTool failed: {e}")
+                
+            try:
+                shared_tools['content_retriever'] = ContentRetrieverTool()
+                print("✅ ContentRetrieverTool created successfully")
+            except Exception as e:
+                print(f"❌ ContentRetrieverTool failed: {e}")
+                
+            print(f"🔧 Final shared_tools keys: {list(shared_tools.keys())}")
+        else:
+            print("⚠️  Custom tools not available - shared_tools will be empty")
+        
+        return shared_tools
     
     def _create_manager_agent(self):
         """Create manager agent with specialist coordination using ToolCallingAgent"""
         manager_tools = []
         
         # Manager gets context tools
-        if CUSTOM_TOOLS_AVAILABLE:
-            manager_tools.extend([
-                GetAttachmentTool(),
-                ContentRetrieverTool()
-            ])
+        if CUSTOM_TOOLS_AVAILABLE and self.shared_tools:
+            if 'get_attachment' in self.shared_tools:
+                manager_tools.append(self.shared_tools['get_attachment'])
+            if 'content_retriever' in self.shared_tools:
+                manager_tools.append(self.shared_tools['content_retriever'])
+            print(f"✅ Manager gets {len([k for k in ['get_attachment', 'content_retriever'] if k in self.shared_tools])} shared GAIA tools")
         
         # Setup logging
         logger = None
@@ -444,6 +473,14 @@ class GAIAAgent:
     
     def _read_question_node(self, state: GAIAState):
         """Read question and conditionally get RAG context"""
+        task_id = state.get("task_id")
+        
+        # Access to task_id
+        if self.shared_tools and task_id:
+            if 'get_attachment' in self.shared_tools:
+                self.shared_tools['get_attachment'].attachment_for(task_id)
+                print(f"🔗 GetAttachmentTool configured for task: {task_id}")
+                
         if self.logging:
             self.logging.log_step("question_setup", f"Processing question: {state['question'][:50]}...")
         
@@ -659,9 +696,6 @@ class GAIAAgent:
     def _manager_execution_node(self, state: GAIAState):
         """Execute manager agent with manual step logging"""
         task_id = state.get("task_id", str(uuid.uuid4()))
-        
-        # Set task_id in environment for tools to access
-        os.environ["CURRENT_GAIA_TASK_ID"] = task_id
         
         # Start logging for this task
         if self.logging:
