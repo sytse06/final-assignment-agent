@@ -75,12 +75,12 @@ def get_agent_config_by_name(config_name: str) -> GAIAConfig:
     
     config_map = {
         "groq": get_groq_config("qwen-qwq-32b"),
-        "groq_fast": get_groq_config("llama-3.3-70b-versatile"),
-        "openrouter": get_openrouter_config("qwen/qwen-2.5-coder-32b-instruct:free"),
-        "openrouter_premium": get_openrouter_config("deepseek/deepseek-chat"),
-        "google": get_google_config("gemini-2.0-flash-preview"),
-        "google_pro": get_google_config("gemini-1.5-pro-002"),
-        "ollama": get_ollama_config("qwen2.5-coder:32b"),
+        "groq_fast": get_groq_config("meta-llama/llama-4-scout-17b-16e-instruct"),
+        "openrouter": get_openrouter_config("qwen/qwen3-30b-a3b"),
+        "openrouter_premium": get_openrouter_config("qwen/qwen2.5-vl-32b-instruct"),
+        "google": get_google_config("gemini-2.5-pro-preview"),
+        "google_pro": get_google_config("gemini-2.5-flash-preview-05-20"),
+        "ollama": get_ollama_config("qwen-agent-custom"),
         "performance": get_performance_config(),
         "accuracy": get_accuracy_config()
     }

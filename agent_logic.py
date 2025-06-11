@@ -32,13 +32,21 @@ from dev_retriever import load_gaia_retriever
 # Import logging
 from agent_logging import AgentLoggingSetup
 
-# Import custom tools
+# Import custom and Langchain tools
 try:
     from tools import GetAttachmentTool, ContentRetrieverTool
     CUSTOM_TOOLS_AVAILABLE = True
 except ImportError:
     print("⚠️  Custom tools not available - using base tools only")
     CUSTOM_TOOLS_AVAILABLE = False
+try:
+    from tools import ALL_LANGCHAIN_TOOLS
+    LANGCHAIN_TOOLS_AVAILABLE = True
+    print("✅ LangChain tools imported successfully")
+except ImportError as e:
+    print(f"⚠️  LangChain tools not available: {e}")
+    ALL_LANGCHAIN_TOOLS = []
+    LANGCHAIN_TOOLS_AVAILABLE = False
 
 import openai
 
@@ -251,7 +259,7 @@ class GAIAAgent:
             else:
                 # Fallback to Openrouter
                 self.orchestration_model = ChatOpenAI(
-                    model="qwen/qwen-2.5-coder-32b-instruct:free",
+                    model="qwen/qwen3-32b",
                     api_key=os.getenv("OPENROUTER_API_KEY"),
                     base_url="https://openrouter.ai/api/v1",
                     temperature=self.config.temperature
@@ -296,7 +304,18 @@ class GAIAAgent:
             
     def _create_specialist_agents(self):
         """Create specialist agents with clean logging"""
+        
+        logger = None
+        if self.logging and hasattr(self.logging, 'logger'):
+            logger = self.logging.logger
+    
+        specialists = {}
         env_tools = []
+
+        # Add LangChain research tools
+        if LANGCHAIN_TOOLS_AVAILABLE:
+            env_tools.extend(ALL_LANGCHAIN_TOOLS)
+            print(f"✅ Added {len(ALL_LANGCHAIN_TOOLS)} LangChain tools")
         
         # Add custom GAIA tools if available
         if CUSTOM_TOOLS_AVAILABLE:
@@ -304,13 +323,6 @@ class GAIAAgent:
                 GetAttachmentTool(),
                 ContentRetrieverTool()
             ])
-        
-        # Use basic SmolagAgent logger only (no callbacks)
-        logger = None
-        if self.logging and hasattr(self.logging, 'logger'):
-            logger = self.logging.logger
-        
-        specialists = {}
         
         # Data Analyst - CodeAgent for calculations and data processing
         specialists["data_analyst"] = CodeAgent(
@@ -327,38 +339,26 @@ class GAIAAgent:
         )
         
         # Web Researcher - ToolCallingAgent for search and current information
-        web_tools = env_tools.copy()
-        try:
-            web_tools.append(GoogleSearchTool())
-            print("✅ GoogleSearchTool added to web_researcher")
-        except Exception:
-            print("⚠️  GoogleSearchTool not available")
-        
-        try:
-            web_tools.append(VisitWebpageTool())
-            print("✅ VisitWebpageTool added to web_researcher")
-        except Exception:
-            print("⚠️  VisitWebpageTool not available")
+        web_tools = []
+
+        # PRIORITY 1: LangChain search tools FIRST
+        if LANGCHAIN_TOOLS_AVAILABLE:
+            web_tools.extend(ALL_LANGCHAIN_TOOLS)  # Serper gets added FIRST
+            print(f"✅ PRIORITY: {len(ALL_LANGCHAIN_TOOLS)} LangChain tools added FIRST")
+            
+        if CUSTOM_TOOLS_AVAILABLE:
+            web_tools.extend([GetAttachmentTool(), ContentRetrieverTool()])
+            print("✅ GAIA tools added as secondary priority")
         
         specialists["web_researcher"] = ToolCallingAgent(
             name="web_researcher",
-            description="Web researcher for finding current information and verifying facts",
+            description="Web researcher using Serper API, Wikipedia, and ArXiv for comprehensive information gathering",
             tools=web_tools,
             model=self.model,
             max_steps=self.config.max_agent_steps,
             planning_interval=self.config.planning_interval,
-            logger=logger  # Basic logger only - no callbacks
-        )
-        
-        # Document Processor - ToolCallingAgent for file and multimedia processing
-        specialists["document_processor"] = ToolCallingAgent(
-            name="document_processor",
-            description="Document processor for analyzing files, images, and multimedia content",
-            tools=env_tools,
-            add_base_tools=True,  # Includes transcriber for audio
-            model=self.model,
-            max_steps=self.config.max_agent_steps,
-            logger=logger  # Basic logger only - no callbacks
+            add_base_tools=False,
+            logger=logger
         )
         
         print(f"✅ Created {len(specialists)} specialist agents")
@@ -660,6 +660,9 @@ class GAIAAgent:
         """Execute manager agent with manual step logging"""
         task_id = state.get("task_id", str(uuid.uuid4()))
         
+        # Set task_id in environment for tools to access
+        os.environ["CURRENT_GAIA_TASK_ID"] = task_id
+        
         # Start logging for this task
         if self.logging:
             self.logging.start_task(task_id, self.logging.current_complexity, self.logging.current_model_used)
@@ -708,7 +711,12 @@ class GAIAAgent:
                 "raw_answer": error_msg,
                 "steps": state["steps"] + [error_msg]
             }
-    
+            
+        finally:
+            # Clean up environment - this ALWAYS runs
+            if "CURRENT_GAIA_TASK_ID" in os.environ:
+                del os.environ["CURRENT_GAIA_TASK_ID"]
+
     def _prepare_manager_context(self, question: str, rag_examples: List[Dict], task_id: str) -> str:
         """Prepare context for manager agent with logging"""
         if self.logging:
@@ -764,8 +772,9 @@ class GAIAAgent:
             "2. For web searches, provide focused search queries to avoid broad searches",
             "3. Delegate to appropriate specialist(s) with clear instructions",
             "4. Review specialist responses for relevance and completeness",
-            "5. Format final answer according to GAIA requirements",
-            "",
+            "5. When you have the answer, use final_answer('your concise answer') to finish."
+            
+            "IMPORTANT: Use the final_answer tool to provide your response, not free text.",
             "FINAL ANSWER format requirements:",
             "- Should be a number OR as few words as possible OR comma separated list",
             "- Numbers: no commas, no units ($ %) unless specified",

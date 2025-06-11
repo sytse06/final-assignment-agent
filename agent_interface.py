@@ -578,7 +578,7 @@ def get_groq_config(model_name: str = "qwen-qwq-32b") -> GAIAConfig:
         debug_mode=True
     )
 
-def get_google_config(model_name: str = "gemini-2.0-flash-preview") -> GAIAConfig:
+def get_google_config(model_name: str = "gemini-2.5-flash-preview") -> GAIAConfig:
     """Get Google configuration with enhanced defaults"""
     return GAIAConfig(
         model_provider="google",
@@ -591,7 +591,7 @@ def get_google_config(model_name: str = "gemini-2.0-flash-preview") -> GAIAConfi
         debug_mode=True
     )
 
-def get_openrouter_config(model_name: str = "qwen/qwen-2.5-coder-32b-instruct:free") -> GAIAConfig:
+def get_openrouter_config(model_name: str = "qwen/qwen3-32b") -> GAIAConfig:
     """Get OpenRouter configuration with enhanced defaults"""
     return GAIAConfig(
         model_provider="openrouter",
@@ -617,12 +617,12 @@ def get_performance_config() -> GAIAConfig:
         debug_mode=False  # Less verbose for performance
     )
 
-def get_ollama_config(model_name: str = "qwen2.5-coder:32b") -> GAIAConfig:
+def get_ollama_config(model_name: str = "qwen-agent-custom") -> GAIAConfig:
     """Get Ollama configuration with enhanced defaults"""
     return GAIAConfig(
         model_provider="ollama",
         model_name=model_name,
-        temperature=0.3,
+        temperature=0.1,
         max_agent_steps=15,
         enable_smart_routing=True,
         skip_rag_for_simple=True,
@@ -647,12 +647,12 @@ def get_accuracy_config() -> GAIAConfig:
     """Get accuracy-optimized configuration"""
     return GAIAConfig(
         model_provider="google",
-        model_name="gemini-2.0-flash-preview",
+        model_name="gemini-2.5-flash-preview",
         temperature=0.2,
-        max_agent_steps=20,  # More steps for thoroughness
+        max_agent_steps=20,
         enable_smart_routing=True,
-        skip_rag_for_simple=False,  # Always use RAG for better context
-        rag_examples_count=5,  # More examples
+        skip_rag_for_simple=False,
+        rag_examples_count=5,
         enable_csv_logging=True,
         debug_mode=True
     )
@@ -935,7 +935,7 @@ def show_usage_examples():
     print("\n2️⃣ AVAILABLE PRESETS:")
     print("   - 'groq' or 'qwen3_32b': Fast Groq models")
     print("   - 'google' or 'gemini': Google's Gemini models")
-    print("   - 'openrouter': Free OpenRouter models")
+    print("   - 'openrouter': OpenRouter models")
     print("   - 'ollama': Local Ollama models")
     print("   - 'performance': Optimized for speed")
     print("   - 'accuracy': Optimized for accuracy")
