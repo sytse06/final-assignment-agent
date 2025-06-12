@@ -291,3 +291,33 @@ def my_agent_retriever_node(state_messages):
 similar_examples = retriever.search("My test question", k=3)
 print(similar_examples[0].page_content)
 """
+
+def patch_existing_retriever():
+    """
+    Quick patch to add cleanup to existing retriever.
+    Add this to the end of your dev_retriever.py file.
+    """
+    
+    # Find existing retriever instance and patch it
+    import sys
+    current_module = sys.modules[__name__]
+    
+    # Add cleanup to module-level variables
+    if hasattr(current_module, 'retriever_instance'):
+        retriever = current_module.retriever_instance
+        
+        # Add cleanup method if it doesn't exist
+        if not hasattr(retriever, 'cleanup'):
+            def cleanup_method(self):
+                if hasattr(self, 'client') and self.client is not None:
+                    try:
+                        self.client.close()
+                        print("🧹 Weaviate client cleaned up")
+                    except:
+                        pass
+            
+            retriever.cleanup = cleanup_method.__get__(retriever, type(retriever))
+            
+            # Register cleanup on exit
+            import atexit
+            atexit.register(retriever.cleanup)

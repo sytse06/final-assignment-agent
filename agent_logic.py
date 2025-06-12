@@ -7,6 +7,7 @@ import re
 import backoff
 from typing import TypedDict, Optional, List, Dict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 # Core dependencies
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
@@ -24,6 +25,14 @@ from smolagents import (
     VisitWebpageTool,
     AgentLogger,
     LogLevel
+)
+
+# Import agent context system
+from agent_context import (
+    ContextVariableFlow,
+    create_context_aware_tools,
+    with_context,
+    ensure_task_context
 )
 
 # Import retriever system
@@ -76,6 +85,10 @@ class GAIAConfig:
     # Routing settings
     enable_smart_routing: bool = True
     skip_rag_for_simple: bool = True
+    
+    # Context settings
+    enable_context_bridge: bool = True
+    context_bridge_debug: bool = True
     
     # Logging
     enable_csv_logging: bool = True
@@ -180,7 +193,7 @@ def validate_gaia_format(answer: str) -> bool:
 # ============================================================================
 
 class GAIAAgent:
-    """GAIA agent using SmolagAgents manager pattern with complexity check"""
+    """GAIA agent using SmolagAgents manager pattern with context sharing"""
     
     def __init__(self, config: GAIAConfig = None):
         if config is None:
@@ -204,6 +217,13 @@ class GAIAAgent:
         self.shared_tools = self._create_shared_tools()
         print(f"🔍 DEBUG: shared_tools keys: {list(self.shared_tools.keys())}")
         
+        # Create context-aware tools (now returns proper Tool objects)
+        if config.enable_context_bridge and self.shared_tools:
+            self.context_aware_tools = create_context_aware_tools(self.shared_tools)
+            print(f"🌉 Context-aware tools created: {len(self.context_aware_tools)} tools")
+        else:
+            self.context_aware_tools = []
+        
         # Create specialist agents
         self.specialists = self._create_specialist_agents()
         
@@ -216,7 +236,7 @@ class GAIAAgent:
         print("🚀 GAIA Manager Agent initialized!")
     
     def _initialize_retriever(self):
-        """Initialize retriever"""
+        """Initialize retriever for similar questions in manager context."""
         try:
             print("🔄 Setting up retriever...")
             retriever = load_gaia_retriever(self.config.csv_file)
@@ -307,12 +327,12 @@ class GAIAAgent:
             raise
             
     def _create_specialist_agents(self):
-        """Create specialist agents with clean logging"""
+        """Create specialist agents with context-aware tools"""
         
         logger = None
         if self.logging and hasattr(self.logging, 'logger'):
             logger = self.logging.logger
-    
+
         specialists = {}
         env_tools = []
 
@@ -320,19 +340,14 @@ class GAIAAgent:
         if LANGCHAIN_TOOLS_AVAILABLE:
             env_tools.extend(ALL_LANGCHAIN_TOOLS)
             print(f"✅ Added {len(ALL_LANGCHAIN_TOOLS)} LangChain tools")
-            
-        if CUSTOM_TOOLS_AVAILABLE and self.shared_tools:
-            if 'get_attachment' in self.shared_tools:
-                env_tools.append(self.shared_tools['get_attachment'])
-            if 'content_retriever' in self.shared_tools:
-                env_tools.append(self.shared_tools['content_retriever'])
-            print(f"✅ Added {len([k for k in ['get_attachment', 'content_retriever'] if k in self.shared_tools])} shared GAIA tools to specialists")
         
-        # Data Analyst - CodeAgent for calculations and data processing
+        # Data Analyst - computation focus, no file tools
+        data_tools = env_tools.copy()  # Base tools only
+        
         specialists["data_analyst"] = CodeAgent(
             name="data_analyst",
             description="Data analyst with Python skills for calculations, statistics, and data processing",
-            tools=env_tools,
+            tools=data_tools,
             additional_authorized_imports=[
                 "numpy", "pandas", "matplotlib", "seaborn", "scipy", 
                 "json", "csv", "statistics", "math", "re"
@@ -342,22 +357,24 @@ class GAIAAgent:
             logger=logger
         )
         
-        # Web Researcher - ToolCallingAgent for search and current information
-        web_tools = []
-
-        # PRIORITY 1: LangChain search tools FIRST
-        if LANGCHAIN_TOOLS_AVAILABLE:
-            web_tools.extend(ALL_LANGCHAIN_TOOLS)
-            
-        if CUSTOM_TOOLS_AVAILABLE and self.shared_tools:
-            if 'get_attachment' in self.shared_tools:
-                web_tools.append(self.shared_tools['get_attachment'])
-            if 'content_retriever' in self.shared_tools:
-                web_tools.append(self.shared_tools['content_retriever'])
+        # Web Researcher - gets context-aware content tools
+        web_tools = env_tools.copy()
+        
+        # Add context-aware content retriever tool if available
+        # FIX: Check that context_aware_tools is a list and has Tool objects
+        if self.context_aware_tools and isinstance(self.context_aware_tools, list):
+            for tool in self.context_aware_tools:
+                # FIX: Check that tool is an object with name attribute
+                if hasattr(tool, 'name') and tool.name == "retrieve_content":
+                    web_tools.append(tool)
+                    print("✅ Web researcher gets context-aware ContentRetrieverTool")
+                    break
+        else:
+            print(f"⚠️  Context-aware tools not available or invalid: {type(self.context_aware_tools)}")
         
         specialists["web_researcher"] = ToolCallingAgent(
             name="web_researcher",
-            description="Web researcher using Serper API, Wikipedia, and ArXiv for comprehensive information gathering",
+            description="Web researcher for current information and content processing",
             tools=web_tools,
             model=self.model,
             max_steps=self.config.max_agent_steps,
@@ -393,26 +410,30 @@ class GAIAAgent:
         return shared_tools
     
     def _create_manager_agent(self):
-        """Create manager agent with specialist coordination using ToolCallingAgent"""
+        """Create manager agent with context-aware file access tools"""
         manager_tools = []
         
-        # Manager gets context tools
-        if CUSTOM_TOOLS_AVAILABLE and self.shared_tools:
-            if 'get_attachment' in self.shared_tools:
-                manager_tools.append(self.shared_tools['get_attachment'])
-            if 'content_retriever' in self.shared_tools:
-                manager_tools.append(self.shared_tools['content_retriever'])
-            print(f"✅ Manager gets {len([k for k in ['get_attachment', 'content_retriever'] if k in self.shared_tools])} shared GAIA tools")
+        # Manager gets file access tools (context-aware versions)
+        # FIX: Check that context_aware_tools is a list and has Tool objects
+        if self.context_aware_tools and isinstance(self.context_aware_tools, list):
+            for tool in self.context_aware_tools:
+                # FIX: Check that tool is an object with name attribute
+                if hasattr(tool, 'name') and tool.name == "get_attachment":
+                    manager_tools.append(tool)
+                    print("✅ Manager gets context-aware GetAttachmentTool")
+                    break
+        else:
+            print(f"⚠️  Context-aware tools not available for manager: {type(self.context_aware_tools)}")
         
         # Setup logging
         logger = None
         if self.logging and hasattr(self.logging, 'logger'):
             logger = self.logging.logger
         
-        # Switch from CodeAgent to ToolCallingAgent
+        # Manager is ToolCallingAgent with file access specialization
         manager = ToolCallingAgent(
             name="gaia_manager",
-            description="GAIA task coordinator that manages specialist agents and ensures answer formatting",
+            description="GAIA task coordinator that manages file access and coordinates specialist agents",
             model=self.model,
             tools=manager_tools,
             managed_agents=list(self.specialists.values()),
@@ -421,7 +442,7 @@ class GAIAAgent:
             logger=logger
         )
         
-        print("✅ Manager agent created with ToolCallingAgent for better coordination")
+        print("✅ Manager agent created with context-aware file access tools")
         return manager
     
     def _build_workflow(self):
@@ -468,21 +489,27 @@ class GAIAAgent:
         return builder.compile()
     
     # ============================================================================
-    # WORKFLOW NODES
+    # WORKFLOW NODES WITH CONTEXT
     # ============================================================================
     
     def _read_question_node(self, state: GAIAState):
-        """Read question and conditionally get RAG context"""
+        """Read question and setup context bridge"""
         task_id = state.get("task_id")
+        question = state["question"]
         
-        # Access to task_id
-        if self.shared_tools and task_id:
-            if 'get_attachment' in self.shared_tools:
-                self.shared_tools['get_attachment'].attachment_for(task_id)
-                print(f"🔗 GetAttachmentTool configured for task: {task_id}")
-                
+        # Setup context bridge
+        if self.config.enable_context_bridge:
+            metadata = {
+                "complexity": state.get("complexity"),
+                "routing_path": "initializing"
+            }
+            ContextVariableFlow.set_task_context(task_id, question, metadata)
+            
+            if self.config.context_bridge_debug:
+                print(f"🌉 Context bridge activated: {ContextVariableFlow.get_context_summary()}")
+        
         if self.logging:
-            self.logging.log_step("question_setup", f"Processing question: {state['question'][:50]}...")
+            self.logging.log_step("question_setup", f"Processing question: {question[:50]}...")
         
         # Initialize similar_examples
         similar_examples = []
@@ -491,7 +518,7 @@ class GAIAAgent:
         if not self.config.enable_smart_routing or not self.config.skip_rag_for_simple:
             # Always do RAG (original behavior)
             try:
-                similar_docs = self.retriever.search(state["question"], k=self.config.rag_examples_count)
+                similar_docs = self.retriever.search(question, k=self.config.rag_examples_count)
                 
                 for doc in similar_docs:
                     content = doc.page_content
@@ -517,11 +544,11 @@ class GAIAAgent:
         
         return {
             "similar_examples": similar_examples,
-            "steps": state["steps"] + ["Question setup complete"]
+            "steps": state["steps"] + ["Question setup and context bridge activated"]
         }
 
     def _complexity_check_node(self, state: GAIAState):
-        """Determine if question needs specialist coordination - MAIN LOGGING HERE"""
+        """Determine complexity and update context bridge"""
         question = state["question"]
         task_id = state.get("task_id", "")
         
@@ -552,6 +579,11 @@ class GAIAAgent:
             reason = "LLM complexity assessment"
         
         print(f"📊 Complexity: {complexity} ({reason})")
+        
+        # Update context bridge with complexity
+        if self.config.enable_context_bridge:
+            ContextVariableFlow.update_complexity(complexity)
+        
         if self.logging:
             self.logging.set_complexity(complexity)
             self.logging.log_step("complexity_result", f"Final complexity: {complexity} - {reason}")
@@ -599,7 +631,7 @@ class GAIAAgent:
         }
 
     def _llm_complexity_check(self, question: str) -> str:
-        """Use LLM to determine complexity for edge cases - SIMPLIFIED"""
+        """Use LLM to determine complexity for edge cases"""
         
         prompt = f"""Analyze this question and determine if it needs specialist tools or can be answered directly.
 
@@ -616,7 +648,6 @@ class GAIAAgent:
             result = response.content.strip().lower()
             complexity = "simple" if "simple" in result else "complex"
             
-            # Only log the final result in the parent method
             return complexity
             
         except Exception as e:
@@ -625,13 +656,16 @@ class GAIAAgent:
             return "complex"
 
     def _route_by_complexity(self, state: GAIAState) -> str:
-        """Routing function for conditional edges - NO LOGGING NEEDED"""
-        # This is just a simple getter - no logging needed
+        """Routing function for conditional edges"""
         return state.get("complexity", "complex")
     
     def _one_shot_answering_node(self, state: GAIAState):
-        """Direct LLM answering for simple questions with comprehensive logging"""
+        """Direct LLM answering for simple questions with context bridge"""
         print("⚡ Using one-shot direct answering")
+        
+        # Update context bridge routing
+        if self.config.enable_context_bridge:
+            ContextVariableFlow.update_routing_path("one_shot_llm")
         
         if self.logging:
             self.logging.set_routing_path("one_shot_llm")
@@ -677,7 +711,7 @@ class GAIAAgent:
             
             return {
                 "raw_answer": response.content,
-                "steps": state["steps"] + ["One-shot direct answering completed"]
+                "steps": state["steps"] + ["Direct LLM answering completed"]
             }
             
         except Exception as e:
@@ -687,50 +721,61 @@ class GAIAAgent:
             if self.logging:
                 self.logging.log_step("one_shot_error", error_msg)
             
-            # Return error state but continue workflow
             return {
-                "raw_answer": f"Error in one-shot answering: {error_msg}",
+                "raw_answer": error_msg,
                 "steps": state["steps"] + [error_msg]
             }
-        
+
     def _manager_execution_node(self, state: GAIAState):
-        """Execute manager agent with manual step logging"""
-        task_id = state.get("task_id", str(uuid.uuid4()))
+        """Manager execution with FIXED context bridge coordination"""
+        print("🎯 Using manager coordination with context bridge")
         
-        # Start logging for this task
+        # Update context bridge routing
+        if self.config.enable_context_bridge:
+            ContextVariableFlow.update_routing_path("manager_coordination")
+        
         if self.logging:
-            self.logging.start_task(task_id, self.logging.current_complexity, self.logging.current_model_used)
             self.logging.set_routing_path("manager_coordination")
             self.logging.log_step("manager_start", "Starting manager coordination")
         
-        # Prepare manager context
-        manager_context = self._prepare_manager_context(
-            question=state["question"],
-            rag_examples=state.get("similar_examples", []),
-            task_id=task_id
-        )
+        question = state["question"]
+        task_id = state.get("task_id", "")
+        rag_examples = state.get("similar_examples", [])
         
-        if self.logging:
-            self.logging.log_step("context_prepared", f"Manager context prepared with {len(state.get('similar_examples', []))} examples")
+        # Ensure context is properly set before manager execution
+        if self.config.enable_context_bridge and task_id:
+            # Refresh context to ensure it's active during manager execution
+            ContextVariableFlow.set_task_context(
+                task_id=task_id,
+                question=question,
+                metadata={
+                    "complexity": state.get("complexity", "complex"),
+                    "routing_path": "manager_coordination",
+                    "execution_phase": "manager_delegation"
+                }
+            )
+            print(f"🌉 Context refreshed for manager execution: {task_id}")
+        
+        # Prepare context for manager with FIXED delegation format
+        context = self._prepare_manager_context(question, rag_examples, task_id)
         
         try:
-            print(f"🤖 Executing manager agent with {len(self.specialists)} specialists")
+            if self.logging:
+                self.logging.log_step("manager_execution", "Executing manager with fixed context")
+            
+            # Run manager agent with proper context
+            result = self.manager.run(context)
+            
+            # Extract step count if available
+            step_count = len(getattr(self.manager, 'logs', []))
             
             if self.logging:
-                self.logging.log_step("manager_execution", "Running manager agent")
-            
-            result = self.manager.run(manager_context)
-            
-            if self.logging:
-                self.logging.log_step("manager_complete", "Manager execution successful")
-            
-            # Get step count
-            step_count = self.logging.step_counter if self.logging else 0
+                self.logging.log_step("manager_complete", f"Manager execution completed - {step_count} steps")
             
             return {
                 "raw_answer": str(result),
                 "steps": state["steps"] + [
-                    f"Manager coordination complete - {step_count} steps"
+                    f"Manager coordination with fixed delegation complete - {step_count} steps"
                 ]
             }
             
@@ -738,43 +783,89 @@ class GAIAAgent:
             error_msg = f"Manager execution failed: {str(e)}"
             print(f"❌ {error_msg}")
             
+            # Enhanced error debugging
+            if self.config.context_bridge_debug:
+                context_summary = ContextVariableFlow.get_context_summary()
+                print(f"🔍 Context during error: {context_summary}")
+            
             if self.logging:
                 self.logging.log_step("manager_error", error_msg)
             
             return {
-                "raw_answer": error_msg,
+                "raw_answer": f"Manager execution error: {str(e)}",
                 "steps": state["steps"] + [error_msg]
             }
             
         finally:
-            # Clean up environment - this ALWAYS runs
-            if "CURRENT_GAIA_TASK_ID" in os.environ:
-                del os.environ["CURRENT_GAIA_TASK_ID"]
+            # Context bridge cleanup happens automatically via context variables
+            if self.config.context_bridge_debug:
+                context_summary = ContextVariableFlow.get_context_summary()
+                print(f"🌉 Context during manager execution: {context_summary}")
 
+    def _get_current_temporal_context(self) -> str:
+        """Get current date/time context for temporal awareness"""
+        now = datetime.now(timezone.utc)
+        return f"Current date: {now.strftime('%Y-%m-%d')} ({now.strftime('%B %d, %Y')})"
+    
     def _prepare_manager_context(self, question: str, rag_examples: List[Dict], task_id: str) -> str:
-        """Prepare context for manager agent with logging"""
+        """Prepare context for manager agent with FIXED delegation format"""
         if self.logging:
             self.logging.log_step("context_prep_start", f"Preparing manager context for task {task_id}")
         
         context_parts = [
-            "You are coordinating a GAIA benchmark question. You have access to specialist agents:",
+            "GAIA TASK COORDINATOR",
+            "=" * 50,
             "",
-            "Available specialists:",
-            "- data_analyst: Python code execution, calculations, statistics, data processing",
-            "- web_researcher: Web search, current information, fact verification",  
-            "- document_processor: File analysis, multimedia processing, transcription",
-            "",
+            f"TASK CONTEXT: {task_id}",
             f"Question: {question}",
-            ""
+            "",
+            "🌉 Context bridge is ACTIVE - tools automatically access task context",
+            "",
+            "AVAILABLE SPECIALIST AGENTS:",
+            "- data_analyst: Python code execution, calculations, statistics, data processing",
+            "- web_researcher: Web search, current information, content processing",
+            "",
+            "⚠️  CRITICAL: Use the EXACT format below for agent delegation:",
+            "",
+            "AGENT DELEGATION FORMAT:",
+            "To call data_analyst:",
+            "data_analyst(\"Calculate the average of [1, 2, 3, 4, 5]\")",
+            "",
+            "To call web_researcher:", 
+            "web_researcher(\"Search for current information about Mark Rutte\")",
+            "",
+            "❌ DO NOT use complex JSON or dictionary arguments",
+            "❌ DO NOT pass task_context, current_date, or content_retrieval as arguments",
+            "✅ DO use simple string instructions only",
+            "",
+            "COORDINATION WORKFLOW:",
+            "1. If files needed: Use get_attachment() tool first",
+            "2. Extract/process data from files yourself", 
+            "3. Delegate to specialists using SIMPLE STRING INSTRUCTIONS:",
+            "   • For calculations: data_analyst(\"your calculation request\")",
+            "   • For research: web_researcher(\"your research request\")",
+            "4. Synthesize specialist results and provide final answer",
+            "",
+            "EXAMPLES OF CORRECT DELEGATION:",
+            "",
+            "For data questions:",
+            f'data_analyst("Analyze the data and calculate statistics for the question: {question}")',
+            "",
+            "For research questions:",
+            f'web_researcher("Research current information about: {question}")',
+            "",
+            "For web search questions:", 
+            f'web_researcher("Find the latest news and information about: {question}")',
         ]
         
-        # Add RAG examples
+        # Add RAG examples if available
         if rag_examples:
             if self.logging:
                 self.logging.log_step("context_add_rag", f"Adding {len(rag_examples)} RAG examples to context")
             
             context_parts.extend([
-                "Similar examples from GAIA database:",
+                "",
+                "SIMILAR GAIA EXAMPLES:",
                 ""
             ])
             for i, example in enumerate(rag_examples[:2], 1):
@@ -784,38 +875,31 @@ class GAIAAgent:
                     f"A: {example['answer']}",
                     ""
                 ])
-        else:
-            if self.logging:
-                self.logging.log_step("context_no_rag", "No RAG examples to add")
         
-        # Add file context if available
-        if task_id:
+        # Add file access instructions if needed
+        if task_id and CUSTOM_TOOLS_AVAILABLE:
             if self.logging:
-                self.logging.log_step("context_add_file", f"Adding file context for task {task_id}")
+                self.logging.log_step("context_add_file", f"Adding file access instructions for task {task_id}")
             
             context_parts.extend([
-                f"Task ID: {task_id}",
-                "Use GetAttachmentTool to access any uploaded files if needed.",
+                "FILE ACCESS (if needed):",
+                f"- Task ID: {task_id}",
+                "- Use get_attachment() to access files",
+                "- Context bridge automatically provides task_id",
                 ""
             ])
         
-        # Add coordination instructions
+        # Add final requirements
         context_parts.extend([
-            "Coordination instructions:",
-            "1. Analyze the question to determine which specialist(s) to use",
-            "2. For web searches, provide focused search queries to avoid broad searches",
-            "3. Delegate to appropriate specialist(s) with clear instructions",
-            "4. Review specialist responses for relevance and completeness",
-            "5. When you have the answer, use final_answer('your concise answer') to finish."
-            
-            "IMPORTANT: Use the final_answer tool to provide your response, not free text.",
-            "FINAL ANSWER format requirements:",
-            "- Should be a number OR as few words as possible OR comma separated list",
-            "- Numbers: no commas, no units ($ %) unless specified",
-            "- Strings: no articles (the, a, an), no abbreviations, digits as text unless specified",
-            "- Lists: apply above rules to each element",
+            "FINAL ANSWER REQUIREMENTS:",
+            "- Use format: FINAL ANSWER: [YOUR ANSWER]",
+            "- Numbers: no commas, no units unless specified",
+            "- Strings: no articles (the, a, an), concise wording",
+            "- Lists: comma separated, apply above rules to each element",
             "",
-            "Provide your final answer in format: FINAL ANSWER: [YOUR ANSWER]"
+            "Remember: Context bridge handles task_id automatically!",
+            f"Your task: {task_id}",
+            ""
         ])
         
         final_context = "\n".join(context_parts)
@@ -824,10 +908,13 @@ class GAIAAgent:
             context_length = len(final_context)
             self.logging.log_step("context_prep_complete", f"Manager context prepared: {context_length} characters")
         
+        if self.config.context_bridge_debug:
+            print(f"🔧 Manager context prepared with simplified delegation format")
+        
         return final_context
     
     def _format_answer_node(self, state: GAIAState):
-        """Final answer formatting and validation with logging"""
+        """Final answer formatting and validation with context bridge cleanup"""
         raw_answer = state.get("raw_answer", "")
         
         if self.logging:
@@ -863,9 +950,20 @@ class GAIAAgent:
                 "final_answer": raw_answer.strip() if raw_answer else "No answer",
                 "steps": state["steps"] + [error_msg]
             }
+        finally:
+            # Context cleanup
+            if self.config.enable_context_bridge:
+                if self.config.context_bridge_debug:
+                    final_context = ContextVariableFlow.get_context_summary()
+                    print(f"🌉 Final context before cleanup: {final_context}")
+                
+                ContextVariableFlow.clear_context()
+                
+                if self.config.context_bridge_debug:
+                    print("🧹 Context bridge cleaned up")
             
     def _extract_final_answer(self, raw_answer: str) -> str:
-        """Extract final answer from manager response with logging"""
+        """Extract final answer from manager response"""
         if not raw_answer:
             if self.logging:
                 self.logging.log_step("extract_empty", "Raw answer is empty")
@@ -899,7 +997,7 @@ class GAIAAgent:
         return fallback
 
     def _apply_gaia_formatting(self, answer: str) -> str:
-        """Apply GAIA formatting rules with logging"""
+        """Apply GAIA formatting rules"""
         if not answer:
             if self.logging:
                 self.logging.log_step("gaia_format_empty", "Answer is empty, returning default")
@@ -946,11 +1044,12 @@ class GAIAAgent:
         return answer
     
     # ============================================================================
-    # CONVENIENCE FUNCTION
+    # CONVENIENCE FUNCTION WITH CONTEXT
     # ============================================================================
     
+    @with_context
     def process_question(self, question: str, task_id: str = None) -> Dict:
-        """Core production method to process a single question"""
+        """Core production method to process a single question with context"""
         if task_id is None:
             task_id = str(uuid.uuid4())
         
@@ -963,22 +1062,23 @@ class GAIAAgent:
         # Start logging if available
         if self.logging:
             self.logging.start_task(task_id, model_used=self.config.model_name)
-            self.logging.log_step("question_received", f"Processing question: {question}")
+            self.logging.log_step("question_received", f"Processing question with context bridge: {question}")
         
         try:
             if self.logging:
-                self.logging.log_step("workflow_start", "Starting LangGraph workflow execution")
+                self.logging.log_step("workflow_start", "Starting LangGraph workflow with context bridge")
             
             result = self.workflow.invoke(initial_state)
             
             if self.logging:
                 self.logging.log_step("workflow_complete", "Workflow completed successfully")
             
-            # Add basic metadata
+            # Add metadata with context bridge info
             result.update({
                 "task_id": task_id,
                 "question": question,
-                "execution_successful": True
+                "execution_successful": True,
+                "context_bridge_used": self.config.enable_context_bridge
             })
             
             # Log completion
@@ -991,7 +1091,7 @@ class GAIAAgent:
                     total_steps=manual_steps,
                     success=True
                 )
-                self.logging.log_step("execution_complete", f"Question execution completed with {manual_steps} logged steps")
+                self.logging.log_step("execution_complete", f"Question execution with context bridge completed - {manual_steps} logged steps")
             
             return result
             
@@ -1013,14 +1113,23 @@ class GAIAAgent:
                 "question": question,
                 "final_answer": "Execution failed",
                 "error": error_msg,
-                "execution_successful": False
+                "execution_successful": False,
+                "context_bridge_used": self.config.enable_context_bridge
             }
+        finally:
+            # Ensure context cleanup
+            if self.config.enable_context_bridge:
+                ContextVariableFlow.clear_context()
 
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
 
 if __name__ == "__main__":
-    print("🚀 GAIA Manager Agent Module")
-    print("=" * 30)
-    print("Use gaia_interface.py for testing")
+    print("🚀 GAIA Manager Agent with Context")
+    print("=" * 50)
+    print("✅ Context integration available")
+    print("✅ File access capability")
+    print("✅ Routing with context awareness")
+    print("")
+    print("Use agent_interface.py for testing")
