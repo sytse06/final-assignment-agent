@@ -1,4 +1,4 @@
-# agent_context.py - FIXED VERSION
+# agent_context.py
 # Context Variables Infrastructure for LangGraph ↔ SmolagAgents Bridging
 
 from contextvars import ContextVar
@@ -181,60 +181,43 @@ class ContextAwareGetAttachmentTool(Tool):
         super().__init__(**kwargs)
         self.original_tool = original_tool
     
-def forward(self, task_id: str = None) -> str:
-    """
-    Enhanced call with automatic context fallback and error handling.
-    
-    Args:
-        task_id: Optional task ID. If not provided, will try to get from context.
+    def forward(self, task_id: str = None) -> str:
+        """
+        Enhanced call with automatic context fallback.
         
-    Returns:
-        Result from original GetAttachmentTool
-    """
-    # Try to get task_id from context if not provided
-    if task_id is None:
-        context_task_id = ContextVariableFlow.get_task_id()
+        Args:
+            task_id: Optional task ID. If not provided, will try to get from context.
+            
+        Returns:
+            Result from original GetAttachmentTool
+            
+        Raises:
+            ValueError: If no task_id provided and none found in context
+        """
+        if task_id is None:
+            # Try to get from context variables
+            context_task_id = ContextVariableFlow.get_task_id()
+            
+            if context_task_id:
+                task_id = context_task_id
+                print(f"🔧 GetAttachmentTool auto-detected task_id: {task_id}")
+            else:
+                available_context = ContextVariableFlow.get_context_summary()
+                raise ValueError(
+                    f"No task_id provided and none found in context. "
+                    f"Current context: {available_context}"
+                )
         
-        if context_task_id:
-            task_id = context_task_id
-            print(f"🔧 GetAttachmentTool auto-detected task_id: {task_id}")
-        else:
-            # More detailed error with context debugging
-            available_context = ContextVariableFlow.get_context_summary()
-            error_msg = (
-                f"GetAttachmentTool called without task_id and none found in context.\n"
-                f"Current context: {available_context}\n"
-                f"Context active: {ContextVariableFlow.is_context_active()}"
-            )
+        try:
+            # Call original tool
+            result = self.original_tool(task_id)
+            print(f"✅ GetAttachmentTool successful for task: {task_id}")
+            return result
+        except Exception as e:
+            error_msg = f"GetAttachmentTool failed for task {task_id}: {str(e)}"
             print(f"❌ {error_msg}")
-            return f"Error: {error_msg}"
-    
-    try:
-        # Clean up task_id format - remove hyphens and convert to uppercase
-        # The original tool seems to expect a specific format
-        clean_task_id = task_id.replace('-', '').upper()
-        
-        print(f"🔧 Calling GetAttachmentTool with cleaned task_id: {clean_task_id}")
-        
-        # Try with cleaned task_id first
-        result = self.original_tool(clean_task_id)
-        print(f"✅ GetAttachmentTool successful with cleaned task_id")
-        return result
-        
-    except Exception as e:
-        error_msg = str(e)
-        print(f"❌ GetAttachmentTool failed: {error_msg}")
-        
-        # If it's a format error, provide helpful guidance
-        if "Invalid format" in error_msg:
-            return (
-                f"GetAttachmentTool format error: {error_msg}\n"
-                f"Task ID provided: {task_id}\n"
-                f"Cleaned task ID: {clean_task_id}\n"
-                f"The tool expects: URL, DATA_URL, LOCAL_FILE_PATH, or TEXT format"
-            )
-        else:
-            return f"GetAttachmentTool error: {error_msg}"
+            return error_msg
+
 
 class ContextAwareContentRetrieverTool(Tool):
     """
@@ -337,6 +320,88 @@ def create_context_aware_tools(original_tools: Dict[str, Any]) -> List[Tool]:
     
     print(f"🔧 Created {len(context_aware_tools)} context-aware tools total")
     return context_aware_tools
+
+
+# Convenience functions for common patterns
+def with_context(func):
+    """
+    Decorator to ensure function runs with proper context handling.
+    """
+    def wrapper(*args, **kwargs):
+        if not ContextVariableFlow.is_context_active():
+            print("⚠️  Function called without active context")
+        
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            current_context = ContextVariableFlow.get_context_summary()
+            print(f"❌ Function failed with context: {current_context}")
+            raise
+    
+    return wrapper
+
+
+def ensure_task_context(task_id: str = None, question: str = None):
+    """
+    Ensure minimum context is available, creating if necessary.
+    """
+    if not ContextVariableFlow.is_context_active():
+        if not task_id:
+            task_id = str(uuid.uuid4())
+        if not question:
+            question = "Context restoration"
+        
+        ContextVariableFlow.set_task_context(task_id, question, {"restored": True})
+        print(f"🔄 Context restored: {task_id}")
+    
+    return ContextVariableFlow.get_task_context()
+
+
+if __name__ == "__main__":
+    print("🌉 Context Bridge Module - FIXED VERSION")
+    print("=" * 50)
+    
+    # Demo usage
+    print("\n📚 Demo: Context Variable Flow")
+    
+    # Set context
+    ContextVariableFlow.set_task_context(
+        task_id="demo_123",
+        question="What is the capital of France?",
+        metadata={"complexity": "simple", "routing_path": "one_shot"}
+    )
+    
+    # Show context access
+    print(f"Context summary: {ContextVariableFlow.get_context_summary()}")
+    print(f"Task ID: {ContextVariableFlow.get_task_id()}")
+    print(f"Question: {ContextVariableFlow.get_question()}")
+    
+    # Update routing
+    ContextVariableFlow.update_routing_path("manager_coordination")
+    print(f"Updated context: {ContextVariableFlow.get_context_summary()}")
+    
+    # Clear context
+    ContextVariableFlow.clear_context()
+    print(f"After clear: {ContextVariableFlow.get_context_summary()}")
+        if tool_name == 'get_attachment' and tool_instance:
+            try:
+                context_tool = ContextAwareGetAttachmentTool(tool_instance)
+                context_aware_tools.append(context_tool)
+                print(f"✅ Created context-aware GetAttachmentTool")
+            except Exception as e:
+                print(f"❌ Failed to create context-aware GetAttachmentTool: {e}")
+            
+        elif tool_name == 'content_retriever' and tool_instance:
+            try:
+                context_tool = ContextAwareContentRetrieverTool(tool_instance)
+                context_aware_tools.append(context_tool)
+                print(f"✅ Created context-aware ContentRetrieverTool")
+            except Exception as e:
+                print(f"❌ Failed to create context-aware ContentRetrieverTool: {e}")
+    
+    print(f"🔧 Created {len(context_aware_tools)} context-aware tools total")
+    return context_aware_tools
+
 
 # Convenience functions for common patterns
 def with_context(func):
