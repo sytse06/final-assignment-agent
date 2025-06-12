@@ -488,6 +488,44 @@ class GAIAAgent:
         
         return builder.compile()
     
+    def _get_agent_step_count(self, agent) -> int:
+        """
+        Safely get step count from SmolagAgent using new or old method.
+        
+        Args:
+            agent: SmolagAgent instance
+            
+        Returns:
+            Number of steps executed by the agent
+        """
+        try:
+            # NEW METHOD: Use memory.steps (recommended)
+            if hasattr(agent, 'memory') and agent.memory is not None:
+                if hasattr(agent.memory, 'steps'):
+                    step_count = len(agent.memory.steps)
+                    if step_count > 0:
+                        return step_count
+                
+                # Alternative: memory might be a dict
+                if isinstance(agent.memory, dict) and 'steps' in agent.memory:
+                    step_count = len(agent.memory['steps'])
+                    if step_count > 0:
+                        return step_count
+            
+            # FALLBACK: Use deprecated logs attribute if memory doesn't work
+            if hasattr(agent, 'logs'):
+                step_count = len(agent.logs)
+                if step_count > 0:
+                    print("⚠️  Using deprecated 'logs' attribute - consider updating SmolagAgents")
+                    return step_count
+            
+            # No steps found
+            return 0
+            
+        except Exception as e:
+            print(f"⚠️  Error getting agent step count: {e}")
+            return 0
+    
     # ============================================================================
     # WORKFLOW NODES WITH CONTEXT
     # ============================================================================
@@ -727,7 +765,7 @@ class GAIAAgent:
             }
 
     def _manager_execution_node(self, state: GAIAState):
-        """Manager execution with FIXED context bridge coordination"""
+        """Manager execution with FIXED context bridge coordination and updated logging"""
         print("🎯 Using manager coordination with context bridge")
         
         # Update context bridge routing
@@ -766,8 +804,14 @@ class GAIAAgent:
             # Run manager agent with proper context
             result = self.manager.run(context)
             
-            # Extract step count if available
-            step_count = len(getattr(self.manager, 'logs', []))
+            # UPDATED: Extract step count using new memory.steps instead of deprecated logs
+            step_count = len(getattr(self.manager, 'memory', {}).get('steps', []))
+            
+            # Fallback: Try the old method if new one doesn't work
+            if step_count == 0:
+                step_count = len(getattr(self.manager, 'logs', []))
+                if step_count > 0:
+                    print("⚠️  Using deprecated 'logs' attribute - please update SmolagAgents")
             
             if self.logging:
                 self.logging.log_step("manager_complete", f"Manager execution completed - {step_count} steps")

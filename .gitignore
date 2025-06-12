@@ -8,11 +8,10 @@ __pycache__/
 *.code-workspace
 /docs
 /notebooks
-/src
-/tests
 /examples
 metadata.json
 /gaia_results
+/tests/gaia_data
 /logs
 # Weaviate embedded files
 weaviate_binary/
