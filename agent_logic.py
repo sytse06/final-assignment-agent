@@ -361,10 +361,8 @@ class GAIAAgent:
         web_tools = env_tools.copy()
         
         # Add context-aware content retriever tool if available
-        # FIX: Check that context_aware_tools is a list and has Tool objects
         if self.context_aware_tools and isinstance(self.context_aware_tools, list):
             for tool in self.context_aware_tools:
-                # FIX: Check that tool is an object with name attribute
                 if hasattr(tool, 'name') and tool.name == "retrieve_content":
                     web_tools.append(tool)
                     print("✅ Web researcher gets context-aware ContentRetrieverTool")
@@ -414,10 +412,8 @@ class GAIAAgent:
         manager_tools = []
         
         # Manager gets file access tools (context-aware versions)
-        # FIX: Check that context_aware_tools is a list and has Tool objects
         if self.context_aware_tools and isinstance(self.context_aware_tools, list):
             for tool in self.context_aware_tools:
-                # FIX: Check that tool is an object with name attribute
                 if hasattr(tool, 'name') and tool.name == "get_attachment":
                     manager_tools.append(tool)
                     print("✅ Manager gets context-aware GetAttachmentTool")
@@ -488,9 +484,49 @@ class GAIAAgent:
         
         return builder.compile()
     
-    def _get_agent_step_count(self, agent) -> int:
+# ============================================================================
+# FIXED MEMORY ACCESS HELPERS
+# ============================================================================
+
+    def get_agent_memory_safely(agent) -> Dict:
         """
-        Safely get step count from SmolagAgent using new or old method.
+        Safely access agent memory in various SmolagAgent versions.
+        
+        Args:
+            agent: SmolagAgent instance
+            
+        Returns:
+            Dictionary representation of agent memory
+        """
+        try:
+            # NEW METHOD: Direct memory attribute access
+            if hasattr(agent, 'memory') and agent.memory is not None:
+                # Handle AgentMemory object
+                if hasattr(agent.memory, '__dict__'):
+                    return agent.memory.__dict__
+                # Handle dict-like memory
+                elif hasattr(agent.memory, 'steps'):
+                    return {'steps': agent.memory.steps}
+                # Handle memory as dict
+                elif isinstance(agent.memory, dict):
+                    return agent.memory
+            
+            # FALLBACK: Use deprecated logs attribute
+            if hasattr(agent, 'logs'):
+                print("⚠️  Using deprecated 'logs' attribute - consider updating SmolagAgents")
+                return {'steps': agent.logs}
+            
+            # No memory found
+            print("⚠️  No memory found in agent")
+            return {'steps': []}
+            
+        except Exception as e:
+            print(f"⚠️  Error accessing agent memory: {e}")
+            return {'steps': []}
+
+    def get_agent_step_count_safely(agent) -> int:
+        """
+        Safely get step count from agent memory.
         
         Args:
             agent: SmolagAgent instance
@@ -499,31 +535,11 @@ class GAIAAgent:
             Number of steps executed by the agent
         """
         try:
-            # NEW METHOD: Use memory.steps (recommended)
-            if hasattr(agent, 'memory') and agent.memory is not None:
-                if hasattr(agent.memory, 'steps'):
-                    step_count = len(agent.memory.steps)
-                    if step_count > 0:
-                        return step_count
-                
-                # Alternative: memory might be a dict
-                if isinstance(agent.memory, dict) and 'steps' in agent.memory:
-                    step_count = len(agent.memory['steps'])
-                    if step_count > 0:
-                        return step_count
-            
-            # FALLBACK: Use deprecated logs attribute if memory doesn't work
-            if hasattr(agent, 'logs'):
-                step_count = len(agent.logs)
-                if step_count > 0:
-                    print("⚠️  Using deprecated 'logs' attribute - consider updating SmolagAgents")
-                    return step_count
-            
-            # No steps found
-            return 0
-            
+            memory = get_agent_memory_safely(agent)
+            steps = memory.get('steps', [])
+            return len(steps) if steps else 0
         except Exception as e:
-            print(f"⚠️  Error getting agent step count: {e}")
+            print(f"⚠️  Error getting step count: {e}")
             return 0
     
     # ============================================================================
@@ -765,7 +781,7 @@ class GAIAAgent:
             }
 
     def _manager_execution_node(self, state: GAIAState):
-        """Manager execution with FIXED context bridge coordination and updated logging"""
+        """Manager execution with context bridge coordination"""
         print("🎯 Using manager coordination with context bridge")
         
         # Update context bridge routing
@@ -794,7 +810,7 @@ class GAIAAgent:
             )
             print(f"🌉 Context refreshed for manager execution: {task_id}")
         
-        # Prepare context for manager with FIXED delegation format
+        # Prepare context for manager with curated delegation format
         context = self._prepare_manager_context(question, rag_examples, task_id)
         
         try:
@@ -804,14 +820,8 @@ class GAIAAgent:
             # Run manager agent with proper context
             result = self.manager.run(context)
             
-            # UPDATED: Extract step count using new memory.steps instead of deprecated logs
-            step_count = len(getattr(self.manager, 'memory', {}).get('steps', []))
-            
-            # Fallback: Try the old method if new one doesn't work
-            if step_count == 0:
-                step_count = len(getattr(self.manager, 'logs', []))
-                if step_count > 0:
-                    print("⚠️  Using deprecated 'logs' attribute - please update SmolagAgents")
+            # Adopt new memory access method
+            step_count = get_agent_step_count_safely(self.manager)
             
             if self.logging:
                 self.logging.log_step("manager_complete", f"Manager execution completed - {step_count} steps")
@@ -852,7 +862,7 @@ class GAIAAgent:
         return f"Current date: {now.strftime('%Y-%m-%d')} ({now.strftime('%B %d, %Y')})"
     
     def _prepare_manager_context(self, question: str, rag_examples: List[Dict], task_id: str) -> str:
-        """Prepare context for manager agent with FIXED delegation format"""
+        """Prepare context for manager agent with curated delegation format"""
         if self.logging:
             self.logging.log_step("context_prep_start", f"Preparing manager context for task {task_id}")
         

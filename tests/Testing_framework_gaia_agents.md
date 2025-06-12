@@ -1,4 +1,4 @@
-# Testing Framework for GAIA Agents
+# Testing Framework for GAIA Agents - Enhanced
 
 ## Overview
 
@@ -148,7 +148,6 @@ generate_test_batches(configs)           # Bulk batch generation
 compare_dataset_versions(path1, path2)   # Dataset comparison analysis
 ```
 
-**After refactoring:**
 **`gaia_dataset_utils.py` - Pure Data Layer**
 
 - ✅ Dataset loading, validation, and file operations
@@ -199,65 +198,104 @@ Dictionary keys: ['validation', 'test', 'stats']
 ### **🎯 Functional Goals:**
 
 - **Agent Execution**: Run GAIA agents on question batches with comprehensive tracking
-- **Blind Evaluation**: Compare agent responses against ground truth post-execution
-- **Performance Analysis**: Deep-dive analysis of agent behavior and effectiveness
-- **Configuration Comparison**: Systematic comparison of different agent setups
-- **Result Management**: Generate detailed reports and actionable insights
+- **Proper Evaluation**: Compare agent responses against expected answers without contamination
+- **Performance Analysis**: Understand agent behavior and identify improvements
+- **Configuration Comparison**: Test different agent setups fairly
+- **Result Management**: Generate reports and track progress
+
+### **🔒 Two-Phase Testing System**
+
+To ensure fair evaluation, the testing system separates execution from evaluation:
+
+#### **Phase 1: Blind Execution**
+The agent processes questions **without seeing expected answers**. This prevents the agent from accidentally using ground truth information.
+
+```python
+class GAIAQuestionExecutor:
+    """Execute questions without access to expected answers"""
+    
+    def execute_questions_batch(self, blind_questions):
+        # blind_questions only contain task_id, question, and level
+        # NO expected answers included!
+        
+        for question in blind_questions:
+            result = self.agent.process_question(question["Question"])
+            # Agent never sees the expected answer
+        
+        return execution_file  # Saved for later evaluation
+```
+
+#### **Phase 2: Evaluation**
+After execution is complete, results are compared against expected answers:
+
+```python
+class GAIAAnswerEvaluator:
+    """Compare results against expected answers after execution"""
+    
+    def evaluate_execution_results(self, execution_file):
+        # Load execution results
+        # NOW compare against expected answers
+        
+        for result in execution_results:
+            expected = dataset.get_ground_truth(result.task_id)
+            is_correct = self.compare_answers(result.answer, expected)
+        
+        return evaluation_results
+```
+
+### **🔍 Why This Separation Matters**
+
+**Problem**: If the agent can see expected answers during execution, results might be inflated
+**Solution**: Keep expected answers completely separate until after execution
+
+**This ensures:**
+- ✅ Fair testing - agent can't cheat by seeing answers
+- ✅ Honest results - performance reflects real capability
+- ✅ Proper benchmarking - matches how GAIA testing should work
+- ✅ Debugging clarity - execution issues separate from evaluation issues
 
 ### **🛠️ Core Methods:**
 
 #### **Agent Execution**
 
 ```python
-GAIATestExecutor(agent_config)           # Initialize agent for testing
-.execute_test_batch(questions)           # Run agent on batch of questions
-.execute_single_question(question_data)  # Execute individual question with tracking
-._determine_strategy_used(result)        # Identify routing decisions made
+GAIAQuestionExecutor(agent_config)           # Initialize agent for testing
+.execute_questions_batch(questions)          # Run agent on batch of questions
+.execute_single_question(question_data)      # Execute individual question with tracking
+._determine_strategy_used(result)            # Identify routing decisions made
 ```
 
 #### **Evaluation & Analysis**
 
 ```python
-GAIATestEvaluator(dataset_manager)       # Initialize evaluator with ground truth access
-.evaluate_execution_results(exec_results) # Compare agent answers vs expected
-.evaluate_single_answer(agent, task_id)  # Detailed single-answer analysis  
-.gaia_answer_matching(predicted, expected) # GAIA-compliant answer comparison
-.fuzzy_answer_matching(predicted, expected) # Similarity-based matching
-```
-
-#### **Performance Analysis**
-
-```python
-GAIATestAnalyzer()                       # Initialize analysis engine
-.analyze_failure_patterns(results)       # Identify improvement opportunities
-.analyze_routing_effectiveness(results)  # Evaluate smart routing decisions
-.compare_agent_configurations(configs)   # Cross-configuration performance
-._generate_improvement_recommendations() # Actionable optimization suggestions
+GAIAAnswerEvaluator(dataset_manager)         # Initialize evaluator with ground truth access
+.evaluate_execution_results(exec_results)    # Compare agent answers vs expected
+.gaia_answer_matching(predicted, expected)   # GAIA-compliant answer comparison
+.fuzzy_answer_matching(predicted, expected)  # Similarity-based matching
 ```
 
 #### **High-Level Testing Workflows**
 
 ```python
-run_gaia_test(config, dataset_path, ...)  # Complete test: batch→execute→evaluate
-run_small_batch_test(config)             # Quick 5-question validation
-run_large_batch_test(config)             # Comprehensive 25-question evaluation  
-run_agent_comparison_study(configs)      # Multi-config head-to-head comparison
+run_gaia_test(config, dataset_path, ...)     # Complete test: execute→evaluate
+run_quick_gaia_test(config, num_questions=5) # Quick 5-question validation
+compare_agent_configs(configs)               # Multi-config comparison
+run_smart_routing_test(config)               # Test routing effectiveness
 ```
 
 #### **Result Management**
 
 ```python
-generate_test_report(results, config)    # Comprehensive performance report
-analyze_test_results(evaluation)         # Extract insights and patterns
-._save_execution_results(results)        # Persist execution data
-._save_evaluation_results(results)       # Persist evaluation outcomes
+analyze_failure_patterns(results)            # Identify improvement opportunities
+._save_execution_results(results)            # Persist execution data
+._save_evaluation_results(results)           # Persist evaluation outcomes
 ```
 
 #### **Configuration Management**
 
 ```python
-get_agent_config_by_name(name)          # Map config names to actual settings
-GAIATestConfig()                         # Test execution parameters
+get_agent_config_by_name(name)               # Map config names to actual settings
+GAIATestConfig()                             # Test execution parameters
 ```
 
 ---
@@ -312,99 +350,131 @@ poetry run python tests/test_comprehensive.py all -q "Your question" -v
 
 ---
 
-## 🔄 Functional Interaction Pattern
+## 🔄 Complete Testing Workflow
 
-### **Data Preparation (gaia_dataset_utils)**
-
+### **Step 1: Dataset Preparation**
 ```python
-# 1. Load and validate dataset
-manager = GAIADatasetManager("./tests/gaia_data")
+from gaia_dataset_utils import GAIADatasetManager
 
-# 2. Create strategic test batch 
-test_batch = manager.create_test_batch(15, "balanced")
-# → Returns blind questions (no ground truth)
+# Load dataset and create test questions (without answers)
+dataset_manager = GAIADatasetManager("./tests/gaia_data")
+test_questions = dataset_manager.create_test_batch(15, "balanced")
+# Result: Questions without expected answers
 ```
 
-### **🔒 Blind Testing Strategy**
-
-The blind testing strategy ensures rigorous evaluation:
-
-#### **🎯 What Blind Testing Means**
-
-1. **During execution**: The agent never sees expected answers
-2. **During evaluation**: Results compared against ground truth AFTER execution
-3. **No contamination**: Ground truth doesn't influence agent responses
-
-#### **🔍 How Architecture Preserves Blind Testing**
-
-**1. Stricter Separation**
+### **Step 2: Agent Execution**
 ```python
-# Data Layer - NEVER exposes ground truth to execution
-def create_test_batch(self, size, strategy):
-    blind_questions = [{
-        'task_id': q['task_id'],
-        'Question': q['Question'],
-        'Level': q['Level']
-        # 'Final answer' NEVER included
-    } for q in selected]
+from agent_testing import GAIAQuestionExecutor
+
+# Execute questions without seeing expected answers
+executor = GAIAQuestionExecutor(get_agent_config_by_name("groq"))
+execution_file = executor.execute_questions_batch(test_questions)
+# Agent processes questions blindly
 ```
 
-**2. Clear Data Flow**
-```
-📊 Dataset Manager → 🔒 Blind Batch → 🤖 Agent Execution → 📝 Results
-                                                              ↓
-📊 Dataset Manager ← 🎯 Evaluation ← 🔓 Ground Truth Added ←──┘
-```
-
-**3. Interface-Level Protection**
+### **Step 3: Evaluation**
 ```python
-# Execution Phase - CAN'T access ground truth
-executor = GAIATestExecutor("groq")
-execution_results = executor.execute_test_batch(blind_questions)
+from agent_testing import GAIAAnswerEvaluator
 
-# Evaluation Phase - Gets ground truth ONLY after execution
-evaluator = GAIATestEvaluator(dataset_manager)
-evaluation = evaluator.evaluate_execution_results(execution_results)
+# Compare results against expected answers
+evaluator = GAIAAnswerEvaluator(dataset_manager)
+evaluation = evaluator.evaluate_execution_results(execution_file)
+# Now we can see how well the agent did
 ```
+
+### **Step 4: Analysis**
+```python
+from agent_testing import analyze_failure_patterns
+
+# Understand what worked and what didn't
+analysis = analyze_failure_patterns(evaluation)
+print(f"Accuracy: {evaluation['overall_performance']['accuracy']:.1%}")
+```
+
+### **🎯 High-Level Functions**
+
+#### **Complete Test**
+```python
+def run_gaia_test(agent_config_name="groq", max_questions=20):
+    """Run complete execution and evaluation workflow"""
+    
+    # Step 1: Prepare questions (no answers)
+    dataset_manager = GAIADatasetManager("./tests/gaia_data")
+    test_questions = dataset_manager.create_test_batch(max_questions, "balanced")
+    
+    # Step 2: Execute blindly
+    executor = GAIAQuestionExecutor(get_agent_config_by_name(agent_config_name))
+    execution_file = executor.execute_questions_batch(test_questions)
+    
+    # Step 3: Evaluate
+    evaluator = GAIAAnswerEvaluator(dataset_manager)
+    results = evaluator.evaluate_execution_results(execution_file)
+    
+    return results
+```
+
+**Usage:**
+```python
+# Test your agent properly
+results = run_gaia_test("groq", max_questions=20)
+print(f"Your agent got {results['overall_performance']['accuracy']:.1%} correct")
+```
+
+#### **Quick Validation**
+```python
+# Quick test with 5 questions
+quick_results = run_quick_gaia_test("groq", num_questions=5)
+```
+
+#### **Compare Configurations**
+```python
+# Test different setups fairly
+comparison = compare_agent_configs(["groq", "google"], num_questions=10)
+for config, perf in comparison.items():
+    print(f"{config}: {perf['accuracy']:.1%}")
+```
+
+### **📊 Understanding Results**
+
+**Performance Metrics:**
+```python
+{
+    "overall_performance": {
+        "total_questions": 20,
+        "correct_answers": 12,
+        "accuracy": 0.60,  # 60% correct
+        "successful_executions": 19  # 19/20 ran without errors
+    },
+    "level_performance": {
+        "1": {"accuracy": 0.75, "correct": 6, "total": 8},  # Easy questions
+        "2": {"accuracy": 0.50, "correct": 4, "total": 8},  # Medium questions  
+        "3": {"accuracy": 0.25, "correct": 1, "total": 4}   # Hard questions
+    },
+    "strategy_analysis": {
+        "one_shot_llm": {"accuracy": 0.80, "total_questions": 5},      # Direct answers
+        "manager_coordination": {"accuracy": 0.53, "total_questions": 15}  # Complex workflow
+    }
+}
+```
+
+**What This Tells You:**
+- Your agent answers 60% of questions correctly
+- It's better at easy questions (75%) than hard ones (25%)
+- Simple direct answers work better than complex coordination
+- 19 out of 20 questions executed without crashes
 
 ---
 
-## 📓 **Agent Builder Notebook** - Development Focus
+## 🎯 **Key Design Principles**
 
-✅ **Dependency checking** - Reveals all import requirements and system setup
-✅ **Component isolation** - Tests each piece independently
-✅ **Model initialization** - Validates all provider configurations
-✅ **Workflow validation** - Tests LangGraph routing and complexity detection
-✅ **GAIA file type testing** - Real file processing validation (.xlsx, .png, .pdf, etc.)
-✅ **Mock data testing** - Synthetic validation before real GAIA data
-✅ **Development readiness score** - Clear go/no-go for production testing
-
----
-
-## 📊 **Production Validator Notebook** - Performance Focus
-
-✅ **Testing framework exploration** - Learn the comprehensive testing system
-✅ **Performance baselines** - Establish metrics across question types
-✅ **Smart routing analysis** - Deep dive into routing effectiveness
-✅ **Provider-specific testing** - Groq, OpenRouter, Ollama independent evaluation
-✅ **Interactive visualization** - One example with charts, then direct data access
-✅ **Failure pattern analysis** - Systematic improvement insights
-✅ **Production readiness assessment** - Data-driven deployment recommendation
-✅ **Comprehensive reporting** - Professional documentation and data export
-
----
-
-## 🎯 **Key Design Principles Achieved**
-
-1. **Clear Separation**: Building vs Production testing
-2. **Dependency Transparency**: Full import and system requirements revealed
-3. **Provider Flexibility**: Independent testing of Groq, OpenRouter, Ollama
+1. **Clear Separation**: Development testing vs GAIA testing
+2. **Fair Evaluation**: Agent can't see answers during execution
+3. **Provider Flexibility**: Test different models independently
 4. **Real File Testing**: Actual GAIA file types (.xlsx, .png, .pdf)
-5. **Data Access**: Direct access to source data after visualization example
-6. **Manual Configuration**: No automatic tuning - you maintain control
-7. **Comprehensive Coverage**: From component testing to production readiness
-8. **CLI-Driven Development**: Quick iteration with command-line testing
-9. **Multi-Modal Validation**: Development vs GAIA vs Custom scenarios
+5. **Practical Results**: Clear metrics for improvement
+6. **Debugging Support**: Isolate issues at each step
+7. **CLI-Driven Development**: Quick iteration with command-line testing
+8. **Multi-Modal Validation**: Development vs GAIA vs Custom scenarios
 
 ---
 
@@ -436,17 +506,29 @@ poetry run python tests/test_comprehensive.py development -q "Your question"
 poetry run python tests/test_comprehensive.py all -v
 ```
 
-### **4. Production Testing**
-- **Use Agent Builder Notebook** - Validate all components work
-- **Fix any issues** found in development testing
-- **Move to Production Validator** - Real GAIA performance analysis
-- **Use failure analysis** to iterate and improve
-- **Generate final report** for production deployment decision
-
-### **5. GAIA Benchmark Testing**
+### **4. GAIA Benchmark Testing**
 ```bash
-# If you have GAIA dataset
-poetry run python tests/test_comprehensive.py gaia -n 5 -c groq
+# Quick validation
+python -c "
+from agent_testing import run_quick_gaia_test
+results = run_quick_gaia_test('groq', num_questions=5)
+print(f'Accuracy: {results[\"overall_performance\"][\"accuracy\"]:.1%}')
+"
+
+# Full evaluation
+python -c "
+from agent_testing import run_gaia_test
+results = run_gaia_test('groq', max_questions=20)
+print(f'GAIA Score: {results[\"overall_performance\"][\"accuracy\"]:.1%}')
+"
+
+# Compare models
+python -c "
+from agent_testing import compare_agent_configs
+comparison = compare_agent_configs(['groq', 'google'], num_questions=10)
+for config, perf in comparison.items():
+    print(f'{config}: {perf[\"accuracy\"]:.1%}')
+"
 ```
 
 ---
@@ -461,3 +543,18 @@ poetry run python tests/test_comprehensive.py gaia -n 5 -c groq
 - ✅ This validates your system works properly!
 
 **The "error" is actually proof your agent correctly distinguishes between development testing and real GAIA tasks.**
+
+---
+
+## 📚 **Summary: Practical Testing System**
+
+Your GAIA agent testing framework provides:
+
+1. **🧪 Development Testing**: Quick iteration and debugging
+2. **🔒 Fair Evaluation**: Proper separation of execution and evaluation
+3. **📊 Clear Metrics**: Understand what's working and what isn't
+4. **🔄 Easy Comparison**: Test different configurations fairly
+5. **📈 Improvement Guidance**: Identify specific areas to work on
+6. **🎯 GAIA Compatibility**: Test against the actual benchmark
+
+This gives you a solid foundation for developing and improving your GAIA agent with confidence in your results. 🎯
