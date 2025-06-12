@@ -16,4 +16,5 @@ metadata.json
 # Weaviate embedded files
 weaviate_binary/
 weaviate_data/
-
+*.sh
+file_list_git_checkout.txt
