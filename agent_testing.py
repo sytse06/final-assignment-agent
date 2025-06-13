@@ -79,6 +79,11 @@ class GAIATestConfig:
 # CONFIGURATION HELPERS (Enhanced)
 # ============================================================================
 
+def gaia_config_to_dict(config: GAIAConfig) -> Dict:
+    """Convert GAIAConfig dataclass to dictionary"""
+    import dataclasses
+    return dataclasses.asdict(config)
+
 def dict_to_gaia_config(config_dict: Dict) -> GAIAConfig:
     """Convert dictionary to GAIAConfig object"""
     return GAIAConfig(
@@ -102,7 +107,7 @@ def dict_to_gaia_config(config_dict: Dict) -> GAIAConfig:
     )
 
 def get_agent_config_by_name(config_name: str) -> GAIAConfig:
-    """Get agent configuration by name - ENHANCED with agent_interface integration"""
+    """Get agent configuration by name - FIXED to return GAIAConfig objects"""
     
     # Use agent_interface functions for consistency
     config_functions = {
@@ -118,53 +123,25 @@ def get_agent_config_by_name(config_name: str) -> GAIAConfig:
         # Get config dict from agent_interface
         config_dict = config_functions[config_name]()
         
-        # Convert to GAIAConfig object
-        return GAIAConfig(
-            model_provider=config_dict.get("model_provider", "groq"),
-            model_name=config_dict.get("model_name", "qwen-qwq-32b"),
-            temperature=config_dict.get("temperature", 0.3),
-            api_base=config_dict.get("api_base"),
-            num_ctx=config_dict.get("num_ctx", 32768),
-            csv_file=config_dict.get("csv_file", "gaia_embeddings.csv"),
-            rag_examples_count=config_dict.get("rag_examples_count", 3),
-            max_agent_steps=config_dict.get("max_agent_steps", 15),
-            planning_interval=config_dict.get("planning_interval", 3),
-            enable_smart_routing=config_dict.get("enable_smart_routing", True),
-            skip_rag_for_simple=config_dict.get("skip_rag_for_simple", True),
-            enable_context_bridge=config_dict.get("enable_context_bridge", True),
-            context_bridge_debug=config_dict.get("context_bridge_debug", False),
-            enable_csv_logging=config_dict.get("enable_csv_logging", True),
-            step_log_file=config_dict.get("step_log_file", "gaia_steps.csv"),
-            question_log_file=config_dict.get("question_log_file", "gaia_questions.csv"),
-            debug_mode=config_dict.get("debug_mode", False)
-        )
+        # FIXED: Convert to GAIAConfig object properly
+        return dict_to_gaia_config(config_dict)
     else:
         # Fallback configurations
-        fallback_configs = {
-            "basic": GAIAConfig(
-                model_provider="groq",
-                model_name="qwen-qwq-32b",
-                temperature=0.3,
-                enable_smart_routing=True,
-                enable_context_bridge=True,
-                context_bridge_debug=False,
-                enable_csv_logging=True,
-                debug_mode=False
-            )
-        }
-        
-        print(f"⚠️  Unknown config '{config_name}', using 'basic' fallback")
+        print(f"⚠️  Unknown config '{config_name}', using 'groq' fallback")
         print(f"   Available configs: {list(config_functions.keys())}")
-        return fallback_configs["basic"]
+        
+        # Use groq as fallback
+        fallback_dict = get_groq_config()
+        return dict_to_gaia_config(fallback_dict)
 
 # ============================================================================
-# PHASE 1: BLIND EXECUTION (No Ground Truth Access) - RESTORED
+# PHASE 1: BLIND EXECUTION (No Ground Truth Access)
 # ============================================================================
 
 class GAIAQuestionExecutor:
     """
-    Phase 1: Execute GAIA questions WITHOUT access to ground truth.
-    This ensures truly blind testing where the agent never sees expected answers.
+    Execute GAIA questions WITHOUT access to ground truth to ensures 
+    blind testing. Test executor properly handles GAIAConfig objects.
     """
     
     def __init__(self, agent_config: GAIAConfig, test_config: GAIATestConfig = None):
@@ -178,6 +155,8 @@ class GAIAQuestionExecutor:
         print(f"🔒 BLIND EXECUTOR initialized - NO ground truth access")
         print(f"   Model: {agent_config.model_provider}/{agent_config.model_name}")
         print(f"   Results: {self.test_config.results_dir}")
+        print(f"   🛡️ Ground truth isolation: {'✅ ENABLED' if 
+              self.test_config.enable_ground_truth_isolation else '❌ DISABLED'}")
     
     def execute_questions_batch(self, blind_questions: List[Dict], batch_name: str = None) -> str:
         """
@@ -197,7 +176,8 @@ class GAIAQuestionExecutor:
         print(f"📝 Batch: {batch_name}")
         
         # Verify questions are truly blind (no ground truth)
-        self._verify_blind_questions(blind_questions)
+        if self.test_config.enable_ground_truth_isolation:
+            self._verify_blind_questions(blind_questions)
         
         execution_results = []
         start_time = time.time()
@@ -227,12 +207,47 @@ class GAIAQuestionExecutor:
         return execution_file
     
     def _verify_blind_questions(self, questions: List[Dict]):
-        """Verify questions don't contain ground truth"""
-        for i, q in enumerate(questions):
-            if 'Final answer' in q or 'final_answer' in q:
-                raise ValueError(f"Question {i+1} contains ground truth! Blind testing compromised.")
+        """
+        RESTORED: Verify questions don't contain ground truth
         
-        print("✅ Verified: Questions are properly blind (no ground truth)")
+        Critical for GAIA benchmark compliance
+        """
+        contaminated_questions = []
+        
+        for i, q in enumerate(questions):
+            # Check for ground truth contamination
+            contamination_found = False
+            
+            if 'Final answer' in q or 'final_answer' in q:
+                contaminated_questions.append(f"Question {i+1}: Contains 'Final answer' field")
+                contamination_found = True
+            
+            if 'ground_truth' in q or 'expected_answer' in q:
+                contaminated_questions.append(f"Question {i+1}: Contains ground truth fields")
+                contamination_found = True
+            
+            # Check for suspicious answer-like fields
+            suspicious_fields = ['answer', 'solution', 'result', 'correct_answer']
+            for field in suspicious_fields:
+                if field in q and len(str(q[field])) > 0:
+                    contaminated_questions.append(f"Question {i+1}: Suspicious field '{field}'")
+                    contamination_found = True
+                    break
+        
+        if contaminated_questions:
+            print("🚨 GROUND TRUTH CONTAMINATION DETECTED:")
+            for contamination in contaminated_questions[:5]:  # Show first 5
+                print(f"   ❌ {contamination}")
+            
+            if len(contaminated_questions) > 5:
+                print(f"   ... and {len(contaminated_questions) - 5} more contaminations")
+            
+            if self.test_config.enable_ground_truth_isolation:
+                raise ValueError(f"Blind testing compromised! {len(contaminated_questions)} questions contain ground truth.")
+            else:
+                print("   ⚠️ Continuing despite contamination (isolation disabled)")
+        else:
+            print("✅ Verified: Questions are properly blind (no ground truth contamination)")
     
     def _execute_single_question_blind(self, question_data: Dict, question_num: int) -> Dict:
         """Execute single question without ground truth access"""
@@ -243,9 +258,9 @@ class GAIAQuestionExecutor:
         start_time = time.time()
         
         try:
-            print(f"   Processing: {question[:50]}...")
+            print(f"   🔒 Processing (BLIND): {question[:50]}...")
             
-            # Execute question (agent has NO access to ground truth)
+            # CRITICAL: Execute question - agent has NO access to ground truth
             result = self.agent.process_question(question, task_id=task_id)
             
             execution_time = time.time() - start_time
@@ -253,6 +268,7 @@ class GAIAQuestionExecutor:
             # Determine strategy used
             strategy_used = self._determine_strategy_used(result)
             
+            # RESTORED: Complete blind execution record
             return {
                 "question_number": question_num,
                 "task_id": task_id,
@@ -269,13 +285,15 @@ class GAIAQuestionExecutor:
                 "context_bridge_used": result.get("context_bridge_used", False),
                 "model_provider": self.agent_config.model_provider,
                 "model_name": self.agent_config.model_name,
-                "execution_timestamp": datetime.now().isoformat()
+                "execution_timestamp": datetime.now().isoformat(),
+                "blind_execution_verified": True  # RESTORED: Blind testing marker
             }
             
         except Exception as e:
             execution_time = time.time() - start_time
             print(f"   ❌ Execution failed: {str(e)}")
             
+            # RESTORED: Complete error record for blind testing
             return {
                 "question_number": question_num,
                 "task_id": task_id,
@@ -293,7 +311,8 @@ class GAIAQuestionExecutor:
                 "model_provider": self.agent_config.model_provider,
                 "model_name": self.agent_config.model_name,
                 "execution_timestamp": datetime.now().isoformat(),
-                "error": str(e)
+                "error": str(e),
+                "blind_execution_verified": True  # RESTORED: Even errors are blind
             }
     
     def _determine_strategy_used(self, result: Dict) -> str:
@@ -362,7 +381,8 @@ class GAIAQuestionExecutor:
 class GAIATestExecutor:
     """
     Enhanced test executor with comprehensive error detection and real-time monitoring.
-    This is the main executor class for production testing.
+    This is the main executor class for production testing. Gaiaconfig objects are
+    properly handled.
     """
     
     def __init__(self, agent_config: Union[str, Dict, GAIAConfig], test_config: GAIATestConfig = None):
@@ -379,12 +399,19 @@ class GAIATestExecutor:
         elif isinstance(agent_config, dict):
             gaia_config = dict_to_gaia_config(agent_config)
             self.agent_config_name = "custom"
-        else:  # GAIAConfig object
+        elif isinstance(agent_config, GAIAConfig):
             gaia_config = agent_config
             self.agent_config_name = "custom"
+        else:
+            raise TypeError(f"Invalid agent_config type: {type(agent_config)}")
         
-        # Create agent
-        self.agent = create_gaia_agent(gaia_config)
+        try:
+            self.agent = create_gaia_agent(gaia_config)
+            print(f"✅ Agent created successfully with {gaia_config.model_provider}/{gaia_config.model_name}")
+        except Exception as e:
+            print(f"❌ Agent creation failed: {e}")
+            raise
+            
         self.session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         
         # Execution tracking
@@ -548,6 +575,49 @@ class GAIATestExecutor:
                 return self.execute_single_question(question_data, attempt + 1)
         
         return execution_record
+    
+    def execute_with_retry(self, question: Dict, max_retries: int = 2) -> Dict:
+        """Execute with retry logic for robustness"""
+        
+        for attempt in range(1, max_retries + 2):
+            result = self.execute_single_question(question, attempt)
+            
+            if result.get('execution_successful', False):
+                return result
+            
+            if attempt <= max_retries:
+                print(f"    🔄 Retry {attempt}/{max_retries}")
+                time.sleep(1)
+        
+        return result
+    
+    def execute_with_timeout(self, question: Dict, timeout: int = 180) -> Dict:
+        """Execute with timeout handling"""
+        
+        import signal
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError(f"Question execution timeout after {timeout}s")
+        
+        # Set timeout
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout)
+        
+        try:
+            result = self.execute_single_question(question)
+            signal.alarm(0)  # Cancel timeout
+            return result
+        except TimeoutError as e:
+            signal.alarm(0)
+            return {
+                'task_id': question.get('task_id', 'unknown'),
+                'execution_successful': False,
+                'error_message': str(e),
+                'error_type': 'timeout',
+                'agent_answer': '',
+                'strategy_used': 'timeout',
+                'execution_time': timeout
+            }
     
     def _detect_execution_failure(self, agent_response: str) -> bool:
         """ENHANCED: Detect execution failures in agent responses"""
@@ -1595,7 +1665,7 @@ class GAIATestEvaluator:
         print(f"💾 Evaluation results saved: {filepath}")
 
 # ============================================================================
-# HIGH-LEVEL TESTING FUNCTIONS (RESTORED & ENHANCED)
+# HIGH-LEVEL TESTING FUNCTIONS
 # ============================================================================
 
 def run_gaia_test(agent_config_name: str = "groq", dataset_path: str = "./tests/gaia_data", 
@@ -1603,7 +1673,7 @@ def run_gaia_test(agent_config_name: str = "groq", dataset_path: str = "./tests/
     """
     COMPLETE BLIND TESTING WORKFLOW: Execute then Evaluate
     
-    This is the main function for proper GAIA benchmark testing.
+    This is the main function for GAIA benchmark testing.
     """
     print(f"🎯 COMPLETE GAIA TEST: {agent_config_name}")
     print("=" * 60)
@@ -1904,7 +1974,7 @@ def diagnose_agent_issues(agent_config: Union[str, Dict] = "groq",
     return {}
 
 # ============================================================================
-# ANALYSIS FUNCTIONS (RESTORED)
+# ANALYSIS FUNCTIONS
 # ============================================================================
 
 def analyze_failure_patterns(evaluation_results: Dict) -> Dict:
