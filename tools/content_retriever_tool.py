@@ -51,7 +51,8 @@ This tool processes various document formats (PDF, DOCX, XLSX, HTML, images) and
         "verification_mode": {
             "type": "string",
             "description": "Optional: 'multi_source' to compare with other sources, 'authority_check' to assess source reliability, or 'temporal_analysis' for time-sensitive content.",
-            "nullable": True  # FIX: Added nullable flag
+            "nullable": True,
+            "default": "standard"
         }
     }
     output_type = "string"

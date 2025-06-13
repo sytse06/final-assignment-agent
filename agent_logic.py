@@ -367,6 +367,8 @@ class GAIAAgent:
                     web_tools.append(tool)
                     print("✅ Web researcher gets context-aware ContentRetrieverTool")
                     break
+                elif isinstance(tool, str) and "content_retriever" in tool:
+                    print(f"⚠️  Context tool is string: {tool}")
         else:
             print(f"⚠️  Context-aware tools not available or invalid: {type(self.context_aware_tools)}")
         
