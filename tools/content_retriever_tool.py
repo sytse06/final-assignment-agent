@@ -112,13 +112,24 @@ This tool processes various document formats (PDF, DOCX, XLSX, HTML, images) and
 
     def _get_current_temporal_context(self) -> Dict[str, str]:
         """Get current temporal context for analysis"""
-        now = datetime.now(timezone.utc)
-        return {
-            "current_date": now.strftime("%Y-%m-%d"),
-            "current_year": str(now.year),
-            "current_month": now.strftime("%B %Y"),
-            "current_quarter": f"Q{(now.month-1)//3 + 1} {now.year}"
-        }
+        try:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            return {
+                "current_date": now.strftime("%Y-%m-%d"),
+                "current_year": str(now.year),
+                "current_month": now.strftime("%B %Y"),
+                "current_quarter": f"Q{(now.month-1)//3 + 1} {now.year}"
+            }
+        except Exception as e:
+            # Fallback if datetime import fails
+            print(f"⚠️  Temporal context error: {e}")
+            return {
+                "current_date": "2025-06-13",
+                "current_year": "2025",
+                "current_month": "June 2025",
+                "current_quarter": "Q2 2025"
+            }
 
     def _assess_source_authority(self, url: str) -> Tuple[str, float, str]:
         """

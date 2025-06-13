@@ -333,6 +333,25 @@ class GAIAAgent:
         if self.logging and hasattr(self.logging, 'logger'):
             logger = self.logging.logger
 
+        try:
+            temporal_ctx = self._get_current_temporal_context()
+            if not isinstance(temporal_ctx, dict):
+                raise ValueError("Temporal context is not a dictionary")
+                
+            web_researcher_prompt = f"""You are a web research specialist.
+
+        CURRENT TEMPORAL CONTEXT:
+        - Today's date: {temporal_ctx['current_date']}
+        - Current year: {temporal_ctx['current_year']}
+        - Current month: {temporal_ctx['current_month']}
+
+        CRITICAL: When searching for "current", "recent", "latest", or "now" information, always use {temporal_ctx['current_year']} in your search queries. Do NOT use 2023.
+
+        Your role is to find accurate, up-to-date information using web search tools."""
+
+        except Exception as e:
+            print(f"⚠️  Temporal context failed, using fallback: {e}")
+
         specialists = {}
         env_tools = []
 
@@ -822,8 +841,16 @@ class GAIAAgent:
             # Run manager agent with proper context
             result = self.manager.run(context)
             
+            # Check if result contains FINAL ANSWER - if so, stop here
+            if "FINAL ANSWER:" in str(result).upper():
+                print("✅ FINAL ANSWER detected - terminating manager execution")
+                return {
+                    "raw_answer": str(result),
+                    "steps": state["steps"] + ["Manager found final answer and terminated"]
+    }
+            
             # Adopt new memory access method
-            step_count = get_agent_step_count_safely(self.manager)
+            step_count = GAIAAgent.get_agent_step_count_safely(self.manager)
             
             if self.logging:
                 self.logging.log_step("manager_complete", f"Manager execution completed - {step_count} steps")
@@ -947,6 +974,10 @@ class GAIAAgent:
         
         # Add final requirements
         context_parts.extend([
+            "TERMINATION RULES:",
+            "- Once you provide FINAL ANSWER, STOP immediately",
+            "- Do NOT make additional tool calls after FINAL ANSWER",
+            "- Do NOT continue planning after providing the answer",
             "FINAL ANSWER REQUIREMENTS:",
             "- Use format: FINAL ANSWER: [YOUR ANSWER]",
             "- Numbers: no commas, no units unless specified",

@@ -72,6 +72,14 @@ Returns empty string if no file is attached to the current task."""
         Returns:
             File content in requested format, or empty string if no file
         """
+        # This happens when the tool is called incorrectly by the agent
+        if fmt and len(fmt) > 10 and '-' in fmt:
+            # This looks like a task_id, not a format
+            print(f"⚠️  Detected task_id passed as format: {fmt}")
+            print(f"🔧 Auto-correcting: setting task_id and using default format 'URL'")
+            self.task_id = fmt
+            fmt = "LOCAL_FILE_PATH"
+        
         fmt = fmt.upper().strip()
         
         # Validate format
