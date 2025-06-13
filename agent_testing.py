@@ -79,60 +79,114 @@ class GAIATestConfig:
 # CONFIGURATION HELPERS (Enhanced)
 # ============================================================================
 
-def gaia_config_to_dict(config: GAIAConfig) -> Dict:
-    """Convert GAIAConfig dataclass to dictionary"""
-    import dataclasses
-    return dataclasses.asdict(config)
+# agent_testing.py - COMPLETE FIX for GAIAConfig handling
 
-def dict_to_gaia_config(config_dict: Dict) -> GAIAConfig:
-    """Convert dictionary to GAIAConfig object"""
-    return GAIAConfig(
-        model_provider=config_dict.get("model_provider", "groq"),
-        model_name=config_dict.get("model_name", "qwen-qwq-32b"),
-        temperature=config_dict.get("temperature", 0.3),
-        api_base=config_dict.get("api_base"),
-        num_ctx=config_dict.get("num_ctx", 32768),
-        csv_file=config_dict.get("csv_file", "gaia_embeddings.csv"),
-        rag_examples_count=config_dict.get("rag_examples_count", 3),
-        max_agent_steps=config_dict.get("max_agent_steps", 15),
-        planning_interval=config_dict.get("planning_interval", 3),
-        enable_smart_routing=config_dict.get("enable_smart_routing", True),
-        skip_rag_for_simple=config_dict.get("skip_rag_for_simple", True),
-        enable_context_bridge=config_dict.get("enable_context_bridge", True),
-        context_bridge_debug=config_dict.get("context_bridge_debug", False),
-        enable_csv_logging=config_dict.get("enable_csv_logging", True),
-        step_log_file=config_dict.get("step_log_file", "gaia_steps.csv"),
-        question_log_file=config_dict.get("question_log_file", "gaia_questions.csv"),
-        debug_mode=config_dict.get("debug_mode", False)
-    )
+import json
+import os
+import pandas as pd
+import numpy as np
+from typing import Dict, List, Optional, Any, Union
+from dataclasses import dataclass, asdict
+from datetime import datetime
+from pathlib import Path
+import time
+import traceback
+from collections import defaultdict
+import re
+from difflib import SequenceMatcher
+import logging
+import uuid
+
+# Import our agent system and dataset manager
+from agent_logic import GAIAAgent, GAIAConfig
+from agent_interface import (
+    create_gaia_agent, 
+    get_groq_config, 
+    get_openrouter_config, 
+    get_google_config, 
+    get_ollama_config, 
+    get_performance_config, 
+    get_accuracy_config
+)
+from agent_logging import create_timestamped_filename
+
+# Try to import dataset management (graceful degradation if not available)
+try:
+    from gaia_dataset_utils import GAIADatasetManager, quick_dataset_check
+    DATASET_UTILS_AVAILABLE = True
+    print("✅ GAIA dataset utilities available for complete testing")
+except ImportError:
+    print("⚠️  GAIA dataset utilities not available - limited testing mode")
+    DATASET_UTILS_AVAILABLE = False
+
+# ============================================================================
+# Configuration Management Functions
+# ============================================================================
 
 def get_agent_config_by_name(config_name: str) -> GAIAConfig:
-    """Get agent configuration by name - FIXED to return GAIAConfig objects"""
+    """Get agent configuration by name - COMPLETELY FIXED"""
     
-    # Use agent_interface functions for consistency
     config_functions = {
         "groq": get_groq_config,
+        "qwen": get_groq_config,
+        "qwen3_32b": get_groq_config,
         "google": get_google_config,
+        "gemini": get_google_config,
         "openrouter": get_openrouter_config,
+        "or": get_openrouter_config,
         "ollama": get_ollama_config,
+        "local": get_ollama_config,
         "performance": get_performance_config,
         "accuracy": get_accuracy_config
     }
     
-    if config_name in config_functions:
-        # Get config dict from agent_interface
-        config_dict = config_functions[config_name]()
-        
-        # FIXED: Convert to GAIAConfig object properly
-        return dict_to_gaia_config(config_dict)
+    config_name_lower = config_name.lower()
+    
+    if config_name_lower in config_functions:
+        # These functions return GAIAConfig objects directly - NO CONVERSION NEEDED!
+        return config_functions[config_name_lower]()
     else:
-        # Fallback configurations
-        print(f"⚠️  Unknown config '{config_name}', using 'groq' fallback")
-        print(f"   Available configs: {list(config_functions.keys())}")
+        # Fallback to groq config
+        print(f"⚠️  Unknown config name '{config_name}', using default groq config")
+        return get_groq_config()
+
+def debug_agent_config_creation(config_name: str):
+    """Debug helper to understand config creation issues"""
+    print(f"🔧 DEBUG: Testing config creation for '{config_name}'")
+    print("=" * 50)
+    
+    try:
+        # Test the interface function directly
+        if config_name.lower() == "ollama":
+            config = get_ollama_config()
+        elif config_name.lower() == "groq":
+            config = get_groq_config()
+        else:
+            config = get_groq_config()  # Fallback
         
-        # Use groq as fallback
-        fallback_dict = get_groq_config()
-        return dict_to_gaia_config(fallback_dict)
+        print(f"✅ Config type: {type(config)}")
+        print(f"✅ Is GAIAConfig: {isinstance(config, GAIAConfig)}")
+        
+        # FIXED: Access attributes directly instead of using .get()
+        if isinstance(config, GAIAConfig):
+            print(f"✅ Model provider: {config.model_provider}")
+            print(f"✅ Model name: {config.model_name}")
+            print(f"✅ Smart routing: {config.enable_smart_routing}")
+        
+        # Test agent creation
+        agent = create_gaia_agent(config)
+        print(f"✅ Agent created successfully: {type(agent)}")
+        
+        # Test executor creation with string name (not config object)
+        executor = GAIATestExecutor(config_name)  # Pass string, not config object
+        print(f"✅ Executor created successfully")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Debug failed: {e}")
+        traceback.print_exc()
+        return False
 
 # ============================================================================
 # PHASE 1: BLIND EXECUTION (No Ground Truth Access)
@@ -141,22 +195,53 @@ def get_agent_config_by_name(config_name: str) -> GAIAConfig:
 class GAIAQuestionExecutor:
     """
     Execute GAIA questions WITHOUT access to ground truth to ensures 
-    blind testing. Test executor properly handles GAIAConfig objects.
+    blind testing.
     """
     
-    def __init__(self, agent_config: GAIAConfig, test_config: GAIATestConfig = None):
-        self.agent_config = agent_config
-        self.test_config = test_config or GAIATestConfig()
-        self.agent = GAIAAgent(agent_config)
+    def __init__(self, agent_config: Union[str, GAIAConfig], test_config=None):
+        """
+        Initialize test executor - FIXED to handle GAIAConfig objects properly
         
-        # Ensure results directory exists
-        os.makedirs(self.test_config.results_dir, exist_ok=True)
+        Args:
+            agent_config: Can be config name (str) or GAIAConfig object
+            test_config: Test execution parameters
+        """
         
-        print(f"🔒 BLIND EXECUTOR initialized - NO ground truth access")
-        print(f"   Model: {agent_config.model_provider}/{agent_config.model_name}")
-        print(f"   Results: {self.test_config.results_dir}")
-        print(f"   🛡️ Ground truth isolation: {'✅ ENABLED' if 
-              self.test_config.enable_ground_truth_isolation else '❌ DISABLED'}")
+        # Proper handling of GAIAConfig objects
+        if isinstance(agent_config, str):
+            self.gaia_config = get_agent_config_by_name(agent_config)
+            self.agent_config_name = agent_config
+        elif isinstance(agent_config, GAIAConfig):
+            self.gaia_config = agent_config
+            # FIXED: Access attributes directly, not with .get()
+            self.agent_config_name = f"{agent_config.model_provider}_{agent_config.model_name}"
+        else:
+            raise ValueError(f"Expected str or GAIAConfig, got {type(agent_config)}")
+        
+        # Create agent using the GAIAConfig object
+        self.agent = create_gaia_agent(self.gaia_config)
+        
+        # Setup test configuration
+        self.test_config = test_config or self._default_test_config()
+        
+        # Generate execution timestamp
+        self.execution_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        print(f"✅ GAIATestExecutor initialized:")
+        print(f"   Config: {self.agent_config_name}")
+        # FIXED: Access attributes directly
+        print(f"   Model: {self.gaia_config.model_provider}/{self.gaia_config.model_name}")
+        print(f"   Smart Routing: {self.gaia_config.enable_smart_routing}")
+
+    def _default_test_config(self):
+        """Create default test configuration"""
+        return {
+            "batch_size": 20,
+            "timeout_per_question": 120,
+            "enable_detailed_logging": True,
+            "save_execution_results": True,
+            "results_directory": "./test_results"
+        }
     
     def execute_questions_batch(self, blind_questions: List[Dict], batch_name: str = None) -> str:
         """
@@ -394,20 +479,20 @@ class GAIATestExecutor:
         
         # Handle different config types
         if isinstance(agent_config, str):
-            gaia_config = get_agent_config_by_name(agent_config)
+            # Get GAIAConfig object from string name
+            self.gaia_config = get_agent_config_by_name(agent_config)
             self.agent_config_name = agent_config
-        elif isinstance(agent_config, dict):
-            gaia_config = dict_to_gaia_config(agent_config)
-            self.agent_config_name = "custom"
         elif isinstance(agent_config, GAIAConfig):
-            gaia_config = agent_config
-            self.agent_config_name = "custom"
+            # Already a GAIAConfig object
+            self.gaia_config = agent_config
+            # FIXED: Access attributes directly, not with .get()
+            self.agent_config_name = f"{agent_config.model_provider}_{agent_config.model_name}"
         else:
-            raise TypeError(f"Invalid agent_config type: {type(agent_config)}")
+            raise ValueError(f"Expected str or GAIAConfig, got {type(agent_config)}")
         
         try:
-            self.agent = create_gaia_agent(gaia_config)
-            print(f"✅ Agent created successfully with {gaia_config.model_provider}/{gaia_config.model_name}")
+            self.agent = create_gaia_agent(self.gaia_config)
+            print(f"✅ Agent created successfully with {self.gaia_config.model_provider}/{self.gaia_config.model_name}")
         except Exception as e:
             print(f"❌ Agent creation failed: {e}")
             raise
@@ -478,8 +563,14 @@ class GAIATestExecutor:
     def execute_single_question(self, question_data: Dict, attempt: int = 1) -> Dict:
         """Execute single question with comprehensive tracking"""
         
+        task_id = question_data.get("task_id", str(uuid.uuid4()))
+        question = question_data.get("Question", question_data.get("question", ""))
+        level = question_data.get("Level", question_data.get("level", "unknown"))
+        
         start_time = time.time()
-        task_id = question_data.get('task_id', f'unknown_{int(time.time())}')
+        
+        print(f"🔄 Executing: {task_id} (Level {level})")
+        print(f"   Question: {question[:60]}...")
         
         execution_record = {
             'session_id': self.session_id,
@@ -854,7 +945,7 @@ class GAIATestExecutor:
         print(f"💾 Execution results saved: {filepath}")
 
 # ============================================================================
-# PHASE 2: EVALUATION (Ground Truth Comparison) - RESTORED
+# PHASE 2: EVALUATION (Ground Truth Comparison)
 # ============================================================================
 
 class GAIAAnswerEvaluator:
@@ -2080,6 +2171,55 @@ def _generate_improvement_recommendations(failure_patterns: Dict, incorrect_resu
     return recommendations
 
 # ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
+
+def test_config_types():
+    """Test that all config functions return GAIAConfig objects"""
+    
+    print("🔧 TESTING CONFIG TYPES")
+    print("=" * 30)
+    
+    config_functions = [
+        ("groq", get_groq_config),
+        ("google", get_google_config),
+        ("openrouter", get_openrouter_config),
+        ("ollama", get_ollama_config),
+        ("performance", get_performance_config),
+        ("accuracy", get_accuracy_config)
+    ]
+    
+    for name, func in config_functions:
+        try:
+            config = func()
+            is_gaia_config = isinstance(config, GAIAConfig)
+            print(f"✅ {name:12} -> {type(config).__name__:>15} {'✅' if is_gaia_config else '❌'}")
+            
+            if is_gaia_config:
+                print(f"   Provider: {config.model_provider}, Model: {config.model_name}")
+            
+        except Exception as e:
+            print(f"❌ {name:12} -> ERROR: {e}")
+    
+    print("\n🎯 All config functions should return GAIAConfig objects!")
+
+if __name__ == "__main__":
+    print("🧪 AGENT TESTING FRAMEWORK - FIXED VERSION")
+    print("=" * 50)
+    
+    # Test config types
+    test_config_types()
+    
+    # Test executor creation
+    print(f"\n🔧 Testing GAIATestExecutor creation...")
+    try:
+        executor = GAIATestExecutor("ollama")
+        print("✅ GAIATestExecutor works correctly!")
+    except Exception as e:
+        print(f"❌ GAIATestExecutor failed: {e}")
+        traceback.print_exc()
+
+# ============================================================================
 # MAIN EXECUTION AND EXAMPLES
 # ============================================================================
 
@@ -2147,3 +2287,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"   ❌ Import test failed: {e}")
         print("   💡 Check dependencies and agent_interface availability")
+    
