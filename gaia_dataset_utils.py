@@ -114,6 +114,52 @@ class GAIADatasetManager:
         except Exception as e:
             print(f"❌ Error loading metadata: {e}")
     
+    def _ensure_file_path_preserved(self, questions: List[Dict]) -> List[Dict]:
+        """
+        This method takes a list of questions and ensures each one has the file_path 
+        from the dataset.
+        """
+        enhanced_questions = []
+        
+        for question in questions:
+            # Start with the question as-is
+            enhanced_question = question.copy()
+            
+            # If it has a file but no file_path, get it from original metadata
+            task_id = question.get('task_id')
+            has_file = question.get('file_name') or (task_id in self.file_questions)
+            
+            if has_file and task_id:
+                # Check if file_path is already present and valid
+                current_file_path = enhanced_question.get('file_path', '')
+                
+                if not current_file_path:
+                    # Get file_path from original metadata
+                    if task_id in self.file_questions:
+                        original_file_path = self.file_questions[task_id].get('file_path', '')
+                        if original_file_path:
+                            enhanced_question['file_path'] = original_file_path
+                            print(f"   ✅ Added file_path for {task_id}")
+                        else:
+                            print(f"   ⚠️  No file_path found in metadata for {task_id}")
+                    else:
+                        # Fallback: search in full metadata
+                        for metadata_item in self.metadata:
+                            if metadata_item.get('task_id') == task_id:
+                                original_file_path = metadata_item.get('file_path', '')
+                                if original_file_path:
+                                    enhanced_question['file_path'] = original_file_path
+                                    print(f"   ✅ Added file_path for {task_id} (from full search)")
+                                break
+                        else:
+                            print(f"   ❌ Could not find file_path for {task_id}")
+                else:
+                    print(f"   ✅ file_path already present for {task_id}")
+            
+            enhanced_questions.append(enhanced_question)
+        
+        return enhanced_questions
+    
     # ============================================================================
     # CORE DATA OPERATIONS
     # ============================================================================
@@ -329,15 +375,67 @@ class GAIADatasetManager:
         
         return file_types
     
+    def test_file_path_preservation(self, num_questions: int = 5) -> bool:
+        """Test that file_path preservation is working correctly"""
+        
+        print(f"🧪 TESTING file_path preservation with {num_questions} questions")
+        print("=" * 50)
+        
+        # Create a test batch
+        test_batch = self.create_test_batch(num_questions, "balanced")
+        
+        if not test_batch:
+            print("❌ No test batch created")
+            return False
+        
+        # Check each question
+        success_count = 0
+        
+        for i, question in enumerate(test_batch):
+            task_id = question.get('task_id')
+            file_name = question.get('file_name', '')
+            file_path = question.get('file_path', '')
+            
+            print(f"\n📋 Question {i+1}: {task_id}")
+            print(f"   File name: {file_name or 'None'}")
+            
+            if file_name:
+                if file_path:
+                    print(f"   ✅ File path: {file_path[:60]}...")
+                    
+                    # Check if file exists at HF cache location
+                    from pathlib import Path
+                    if Path(file_path).exists():
+                        print(f"   ✅ File verified at HF cache location")
+                        success_count += 1
+                    else:
+                        print(f"   ⚠️  File not found at HF cache (path preserved but file missing)")
+                        success_count += 0.5  # Partial success
+                else:
+                    print(f"   ❌ No file_path found")
+            else:
+                print(f"   📝 Text-only question")
+                success_count += 1
+        
+        success_rate = success_count / len(test_batch)
+        print(f"\n📊 Success rate: {success_rate:.1%}")
+        
+        if success_rate >= 0.8:
+            print(f"🎉 file_path preservation is working correctly!")
+            return True
+        else:
+            print(f"⚠️  file_path preservation needs attention")
+            return False
+    
     # ============================================================================
     # TEST BATCH CREATION (DATA ONLY)
     # ============================================================================
     
     def create_test_batch(self, 
-                         size: int,
-                         strategy: str = "balanced",
-                         **kwargs) -> List[Dict]:
-        """Create test batches using various strategies"""
+                        size: int,
+                        strategy: str = "balanced",
+                        **kwargs) -> List[Dict]:
+        """Create test batches using various strategies - FIXED to preserve file_path"""
         
         if not self.metadata:
             print("❌ No metadata loaded")
@@ -358,10 +456,24 @@ class GAIADatasetManager:
         
         batch = strategies[strategy](size, **kwargs)
         
-        print(f"📦 Created {strategy} batch: {len(batch)} questions")
-        self._print_batch_summary(batch)
+        # *** CRITICAL FIX: Ensure file_path is preserved ***
+        enhanced_batch = self._ensure_file_path_preserved(batch)
         
-        return batch
+        # Verify the fix worked
+        file_questions_in_batch = [q for q in enhanced_batch if q.get('file_name')]
+        file_questions_with_path = [q for q in file_questions_in_batch if q.get('file_path')]
+        
+        print(f"📦 Created {strategy} batch: {len(enhanced_batch)} questions")
+        print(f"📁 File questions: {len(file_questions_in_batch)}")
+        print(f"📁 File questions with path: {len(file_questions_with_path)}")
+        
+        if file_questions_in_batch and len(file_questions_with_path) < len(file_questions_in_batch):
+            missing_paths = len(file_questions_in_batch) - len(file_questions_with_path)
+            print(f"⚠️  Warning: {missing_paths} file questions missing file_path")
+        
+        self._print_batch_summary(enhanced_batch)
+        
+        return enhanced_batch
     
     def _create_balanced_batch(self, size: int, **kwargs) -> List[Dict]:
         """Create balanced batch across levels and file types"""
@@ -672,7 +784,6 @@ class GAIADatasetManager:
         
         return report
 
-
 # ============================================================================
 # DATA-ONLY UTILITY FUNCTIONS
 # ============================================================================
@@ -803,6 +914,66 @@ def validate_gaia_format(answer: str) -> Dict:
     
     return validation
 
+def quick_test_file_path_fix(dataset_path: str = "./tests/gaia_data") -> bool:
+    """
+    UTILITY FUNCTION: Quick test of file_path fix without creating manager instance.
+    
+    This is a standalone utility function because it creates its own manager instance.
+    """
+    
+    print("🚀 QUICK TEST: File Path Fix")
+    print("=" * 40)
+    
+    try:
+        # Create manager instance for testing
+        manager = GAIADatasetManager(dataset_path)
+        
+        if not manager.metadata:
+            print("❌ Could not load dataset")
+            return False
+        
+        # Test the fix
+        return manager.test_file_path_preservation(3)
+        
+    except Exception as e:
+        print(f"❌ Test failed: {e}")
+        return False
+
+def validate_file_path_preservation_in_batch(questions: List[Dict]) -> Dict:
+    """
+    UTILITY FUNCTION: Validate that a batch has proper file_path preservation.
+    
+    This is a utility function because it operates on data without needing 
+    access to the manager instance.
+    """
+    
+    validation = {
+        'total_questions': len(questions),
+        'file_questions': 0,
+        'questions_with_file_path': 0,
+        'missing_file_paths': [],
+        'success_rate': 0.0
+    }
+    
+    for question in questions:
+        file_name = question.get('file_name', '')
+        file_path = question.get('file_path', '')
+        task_id = question.get('task_id', '')
+        
+        if file_name:
+            validation['file_questions'] += 1
+            
+            if file_path:
+                validation['questions_with_file_path'] += 1
+            else:
+                validation['missing_file_paths'].append(task_id)
+    
+    if validation['file_questions'] > 0:
+        validation['success_rate'] = validation['questions_with_file_path'] / validation['file_questions']
+    else:
+        validation['success_rate'] = 1.0  # No file questions = 100% success
+    
+    return validation
 
 # ============================================================================
 # EXAMPLE USAGE AND TESTING

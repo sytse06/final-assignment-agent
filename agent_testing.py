@@ -76,10 +76,8 @@ class GAIATestConfig:
     custom_agent_config: Dict = None
 
 # ============================================================================
-# CONFIGURATION HELPERS (Enhanced)
+# CONFIGURATION HELPERS 
 # ============================================================================
-
-# agent_testing.py - COMPLETE FIX for GAIAConfig handling
 
 import json
 import os
@@ -200,7 +198,7 @@ class GAIAQuestionExecutor:
     
     def __init__(self, agent_config: Union[str, GAIAConfig], test_config=None):
         """
-        Initialize test executor - FIXED to handle GAIAConfig objects properly
+        Initialize test executor
         
         Args:
             agent_config: Can be config name (str) or GAIAConfig object
@@ -242,6 +240,92 @@ class GAIAQuestionExecutor:
             "save_execution_results": True,
             "results_directory": "./test_results"
         }
+    
+    def _configure_tools_with_file_path(self, agent, task_id: str, question_data: Dict) -> int:
+        """
+        Configure GetAttachmentTool instances with file_path from question data.
+        
+        This is the key integration - we pass the HF cache path to tools.
+        """
+        
+        file_name = question_data.get('file_name', '')
+        file_path = question_data.get('file_path', '')
+        
+        tools_configured = 0
+        
+        if not file_name:
+            print(f"   📝 No file attachment for {task_id}")
+            return 0
+        
+        print(f"   📎 File: {file_name}")
+        if file_path:
+            print(f"   📁 HF cache path: {file_path[:60]}...")
+            
+            # Verify file exists
+            from pathlib import Path
+            if Path(file_path).exists():
+                print(f"   ✅ File found at HF cache location")
+            else:
+                print(f"   ⚠️  File not found at HF cache location")
+        else:
+            print(f"   ❌ No file_path in question data - this will fail!")
+            return 0
+        
+        # Configure all GetAttachmentTool instances
+        def configure_tool(tool):
+            nonlocal tools_configured
+            if hasattr(tool, 'attachment_for'):
+                # Set task_id
+                tool.attachment_for(task_id)
+                
+                # *** CRITICAL: Set the direct file path ***
+                if file_path:
+                    tool._direct_file_path = file_path
+                    
+                tools_configured += 1
+        
+        # Configure main agent tools
+        if hasattr(agent, 'tools'):
+            for tool in agent.tools:
+                configure_tool(tool)
+        
+        # Configure specialist tools (multi-agent setup)
+        if hasattr(agent, 'specialists'):
+            for specialist_name, specialist in agent.specialists.items():
+                if hasattr(specialist, 'tools'):
+                    for tool in specialist.tools:
+                        configure_tool(tool)
+        
+        print(f"   🔗 Configured {tools_configured} tools with file_path")
+        return tools_configured
+
+    def _ensure_attachment_tools_configured(self, task_id: str) -> int:
+        """
+        MINIMAL: Just ensure all GetAttachmentTool instances are configured with task_id.
+        Let the tools handle file access using their existing logic.
+        """
+        tools_configured = 0
+        
+        # Configure main agent tools
+        if hasattr(self.agent, 'tools'):
+            for tool in self.agent.tools:
+                if hasattr(tool, 'attachment_for'):
+                    tool.attachment_for(task_id)
+                    tools_configured += 1
+        
+        # Configure specialist tools
+        if hasattr(self.agent, 'specialists'):
+            for specialist_name, specialist in self.agent.specialists.items():
+                if hasattr(specialist, 'tools'):
+                    for tool in specialist.tools:
+                        if hasattr(tool, 'attachment_for'):
+                            tool.attachment_for(task_id)
+                            tools_configured += 1
+        
+        if tools_configured > 0:
+            print(f"   🔗 Configured {tools_configured} GetAttachmentTool instances")
+        
+        return tools_configured
     
     def execute_questions_batch(self, blind_questions: List[Dict], batch_name: str = None) -> str:
         """
@@ -334,71 +418,145 @@ class GAIAQuestionExecutor:
         else:
             print("✅ Verified: Questions are properly blind (no ground truth contamination)")
     
-    def _execute_single_question_blind(self, question_data: Dict, question_num: int) -> Dict:
-        """Execute single question without ground truth access"""
-        task_id = question_data.get('task_id', f"blind_{question_num}")
-        question = question_data.get('Question', question_data.get('question', ''))
-        level = question_data.get('Level', 'Unknown')
+def _execute_single_question_blind(self, question_data: Dict, question_num: int) -> Dict:
+    """
+    Execute single question without ground truth access
+    
+    BLIND TESTING COMPLIANCE:
+    - Agent has NO access to ground truth answers
+    - No 'Final answer' field passed to agent
+    - All execution metadata preserved for evaluation
+    - Blind testing verification markers maintained
+    
+    """
+    
+    # Extract question data
+    task_id = question_data.get('task_id', f"blind_{question_num}")
+    question = question_data.get('Question', question_data.get('question', ''))
+    level = question_data.get('Level', 'Unknown')
+    file_name = question_data.get('file_name', '')
+    file_path = question_data.get('file_path', '')
+    
+    start_time = time.time()
+    
+    try:
+        print(f"   🔒 Processing (BLIND): {question[:50]}...")
         
-        start_time = time.time()
+        # MINIMAL FIX: Just ensure tools are configured with task_id
+        tools_configured = 0
+        if file_name:
+            print(f"   📎 File: {file_name}")
+            if file_path:
+                print(f"   📁 HF cache available: {file_path[:50]}...")
+            
+            # Configure all GetAttachmentTool instances with task_id
+            tools_configured = self._configure_tools_with_hf_hint(task_id)
         
-        try:
-            print(f"   🔒 Processing (BLIND): {question[:50]}...")
-            
-            # CRITICAL: Execute question - agent has NO access to ground truth
-            result = self.agent.process_question(question, task_id=task_id)
-            
-            execution_time = time.time() - start_time
-            
-            # Determine strategy used
-            strategy_used = self._determine_strategy_used(result)
-            
-            # RESTORED: Complete blind execution record
-            return {
-                "question_number": question_num,
-                "task_id": task_id,
-                "question": question,
-                "level": level,
-                "final_answer": result.get("final_answer", ""),
-                "raw_answer": result.get("raw_answer", ""),
-                "steps": result.get("steps", []),
-                "execution_successful": result.get("execution_successful", False),
-                "execution_time": execution_time,
-                "strategy_used": strategy_used,
-                "complexity": result.get("complexity"),
-                "similar_examples_count": len(result.get("similar_examples", [])),
-                "context_bridge_used": result.get("context_bridge_used", False),
-                "model_provider": self.agent_config.model_provider,
-                "model_name": self.agent_config.model_name,
-                "execution_timestamp": datetime.now().isoformat(),
-                "blind_execution_verified": True  # RESTORED: Blind testing marker
-            }
-            
-        except Exception as e:
-            execution_time = time.time() - start_time
-            print(f"   ❌ Execution failed: {str(e)}")
-            
-            # RESTORED: Complete error record for blind testing
-            return {
-                "question_number": question_num,
-                "task_id": task_id,
-                "question": question,
-                "level": level,
-                "final_answer": "ERROR",
-                "raw_answer": f"Execution error: {str(e)}",
-                "steps": [],
-                "execution_successful": False,
-                "execution_time": execution_time,
-                "strategy_used": "error",
-                "complexity": "unknown",
-                "similar_examples_count": 0,
-                "context_bridge_used": False,
-                "model_provider": self.agent_config.model_provider,
-                "model_name": self.agent_config.model_name,
-                "execution_timestamp": datetime.now().isoformat(),
-                "error": str(e),
-                "blind_execution_verified": True  # RESTORED: Even errors are blind
-            }
+        # CRITICAL: Execute question - agent has NO access to ground truth
+        result = self.agent.process_question(question, task_id=task_id)
+        
+        execution_time = time.time() - start_time
+        
+        # Determine strategy used (preserve original logic)
+        strategy_used = self._determine_strategy_used(result)
+        
+        # COMPLETE blind execution record
+        return {
+            "question_number": question_num,
+            "task_id": task_id,
+            "question": question,
+            "level": level,
+            "file_name": file_name,
+            "file_path": file_path,
+            "has_file": bool(file_name),
+            "final_answer": result.get("final_answer", ""),
+            "raw_answer": result.get("raw_answer", ""),
+            "steps": result.get("steps", []),
+            "execution_successful": result.get("execution_successful", False),
+            "execution_time": execution_time,
+            "strategy_used": strategy_used,
+            "complexity": result.get("complexity"),
+            "similar_examples_count": len(result.get("similar_examples", [])),
+            "context_bridge_used": result.get("context_bridge_used", False),
+            "model_provider": self.gaia_config.model_provider,
+            "model_name": self.gaia_config.model_name,
+            "execution_timestamp": datetime.now().isoformat(),
+            "tools_configured": tools_configured,
+            "file_access_method": "hf_cache" if file_path else ("api" if file_name else "none"),  # NEW: Track access method
+            "blind_execution_verified": True,  # CRITICAL: Blind testing marker
+            "attachment_tool_configured": bool(file_name)
+        }
+        
+    except Exception as e:
+        execution_time = time.time() - start_time
+        print(f"   ❌ Execution failed: {str(e)}")
+        
+        # COMPLETE error record for blind testing 
+        return {
+            "question_number": question_num,
+            "task_id": task_id,
+            "question": question,
+            "level": level,
+            "file_name": file_name,
+            "file_path": file_path,
+            "has_file": bool(file_name),
+            "final_answer": "ERROR",
+            "raw_answer": f"Execution error: {str(e)}",
+            "steps": [],
+            "execution_successful": False,
+            "execution_time": execution_time,
+            "strategy_used": "error",
+            "complexity": "unknown",
+            "similar_examples_count": 0,
+            "context_bridge_used": False,
+            "model_provider": self.gaia_config.model_provider, 
+            "model_name": self.gaia_config.model_name,
+            "execution_timestamp": datetime.now().isoformat(),
+            "tools_configured": 0, 
+            "file_access_method": "error",
+            "error": str(e),
+            "error_type": self._categorize_error(str(e)) if hasattr(self, '_categorize_error') else 'unknown',
+            "blind_execution_verified": True,
+            "attachment_tool_configured": bool(file_name)
+        }
+
+    def _configure_tools_with_hf_hint(self, task_id: str, question_data: Dict):
+        """
+        MINIMAL: Configure tools with HF cache hint from question_data.
+        
+        This is the minimal change needed in agent_testing.py.
+        """
+        file_path = question_data.get('file_path', '')
+        
+        tools_configured = 0
+        
+        # Configure main agent tools
+        if hasattr(self.agent, 'tools'):
+            for tool in self.agent.tools:
+                if hasattr(tool, 'attachment_for'):
+                    tool.attachment_for(task_id)
+                    
+                    # NEW: Set HF cache hint if available
+                    if file_path and hasattr(tool, 'set_hf_cache_hint'):
+                        tool.set_hf_cache_hint(file_path)
+                    
+                    tools_configured += 1
+        
+        # Configure specialist tools
+        if hasattr(self.agent, 'specialists'):
+            for specialist in self.agent.specialists.values():
+                if hasattr(specialist, 'tools'):
+                    for tool in specialist.tools:
+                        if hasattr(tool, 'attachment_for'):
+                            tool.attachment_for(task_id)
+                            
+                            # NEW: Set HF cache hint if available
+                            if file_path and hasattr(tool, 'set_hf_cache_hint'):
+                                tool.set_hf_cache_hint(file_path)
+                            
+                            tools_configured += 1
+        
+        return tools_configured
     
     def _determine_strategy_used(self, result: Dict) -> str:
         """Determine which strategy was used based on result analysis"""
@@ -514,6 +672,64 @@ class GAIATestExecutor:
         print(f"🤖 Agent: {self.agent_config_name}")
         print(f"📊 Session: {self.session_id}")
         print(f"🔧 Features: Error detection, Strategy fallback, Real-time monitoring")
+
+    def _configure_tools_with_file_path(self, agent, task_id: str, question_data: Dict) -> int:
+        """
+        Configure GetAttachmentTool instances with file_path from question data.
+        
+        This is the key integration - we pass the HF cache path to tools.
+        """
+        
+        file_name = question_data.get('file_name', '')
+        file_path = question_data.get('file_path', '')  # *** CRITICAL: Get HF cache path ***
+        
+        tools_configured = 0
+        
+        if not file_name:
+            print(f"   📝 No file attachment for {task_id}")
+            return 0
+        
+        print(f"   📎 File: {file_name}")
+        if file_path:
+            print(f"   📁 HF cache path: {file_path[:60]}...")
+            
+            # Verify file exists
+            from pathlib import Path
+            if Path(file_path).exists():
+                print(f"   ✅ File found at HF cache location")
+            else:
+                print(f"   ⚠️  File not found at HF cache location")
+        else:
+            print(f"   ❌ No file_path in question data - this will fail!")
+            return 0
+        
+        # Configure all GetAttachmentTool instances
+        def configure_tool(tool):
+            nonlocal tools_configured
+            if hasattr(tool, 'attachment_for'):
+                # Set task_id
+                tool.attachment_for(task_id)
+                
+                # *** CRITICAL: Set the direct file path ***
+                if file_path:
+                    tool._direct_file_path = file_path
+                    
+                tools_configured += 1
+        
+        # Configure main agent tools
+        if hasattr(agent, 'tools'):
+            for tool in agent.tools:
+                configure_tool(tool)
+        
+        # Configure specialist tools (multi-agent setup)
+        if hasattr(agent, 'specialists'):
+            for specialist_name, specialist in agent.specialists.items():
+                if hasattr(specialist, 'tools'):
+                    for tool in specialist.tools:
+                        configure_tool(tool)
+        
+        print(f"   🔗 Configured {tools_configured} tools with file_path")
+        return tools_configured
     
     def execute_test_batch(self, questions: List[Dict]) -> List[Dict]:
         """Execute agent on provided questions with comprehensive tracking"""

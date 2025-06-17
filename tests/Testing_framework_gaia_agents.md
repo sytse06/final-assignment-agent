@@ -90,71 +90,274 @@ poetry run python tests/test_gaia_agent.py --skip-agent-test -v
 
 ---
 
-## 📊 Dataset Utils (`gaia_dataset_utils.py`)
+📊 Dataset Management Core (gaia_dataset_utils.py)
+🎯 Critical Role in Testing Framework
+gaia_dataset_utils.py is the foundational component that makes blind testing possible. It serves as the data integrity layer that:
 
-### **Functional Goals:**
+✅ Preserves blind testing requirements - Separates questions from answers
+✅ Manages file path integrity - Ensures HF cache paths reach GetAttachmentTool
+✅ Creates strategic test batches - Balanced, diverse, and reproducible question sets
+✅ Validates dataset integrity - Ensures all files and metadata are accessible
+✅ Enables performance analysis - Provides ground truth for evaluation
 
-- **Dataset Discovery & Validation**: Find and verify GAIA dataset integrity
-- **Data Access & Organization**: Provide clean interfaces to question data and files
-- **Test Batch Creation**: Generate strategically composed question sets for testing
-- **Ground Truth Management**: Safely store and provide expected answers for evaluation
-- **Data Export & Analysis**: Enable dataset inspection and batch reproducibility
+Without this component, agent_testing.py cannot function properly.
+🔗 Integration with Testing Framework
+mermaidgraph TD
+    A[metadata.json] --> B[GAIADatasetManager]
+    B --> C[create_test_batch()]
+    C --> D[agent_testing.py]
+    D --> E[GetAttachmentTool]
+    E --> F[Agent Execution]
+    
+    B -.-> G[Ground Truth Storage]
+    G -.-> H[Evaluation Phase]
+🛠️ Core Components
+GAIADatasetManager Class
+The central orchestrator for all dataset operations:
+python# Initialize and auto-discover dataset
+manager = GAIADatasetManager("./tests/gaia_data")
 
-### **🛠️ Core Methods:**
+# Verify dataset integrity
+if manager.metadata:
+    print(f"✅ Loaded {len(manager.metadata)} questions")
+    print(f"📁 {len(manager.file_questions)} have file attachments")
+Key Responsibilities:
 
-#### **Dataset Management**
+Dataset Discovery: Auto-finds GAIA dataset in common locations
+Metadata Parsing: Handles GAIA's {'validation': [...], 'test': [...]} structure
+File Path Preservation: CRITICAL - Maintains HF cache paths for file access
+Question Indexing: Fast lookup by task_id for evaluation
+Integrity Validation: Ensures files exist and are accessible
 
-```python
-GAIADatasetManager(dataset_path)          # Load and validate GAIA dataset
-._load_metadata()                         # Parse metadata.json structure  
-._find_dataset_path()                     # Auto-discover dataset location
-quick_dataset_check(path)                 # Validate dataset without agents
-```
+Test Batch Creation (Blind Testing Foundation)
+Why This Matters: Creates question batches without ground truth for fair evaluation.
+python# Create different types of test batches
+balanced_batch = manager.create_test_batch(15, "balanced")
+# Result: 15 questions with NO 'Final answer' field
 
-#### **Data Access**
+file_focused_batch = manager.create_test_batch(10, "file_type_diverse") 
+# Result: Questions spanning .xlsx, .pdf, .png, .csv, etc.
 
-```python
-.get_question_by_id(task_id)             # Retrieve specific question data
-.get_ground_truth(task_id)               # Get expected answer (evaluation only)
-.find_file_for_question(task_id)         # Locate associated files
-.get_questions_by_criteria(level=N, ...)  # Filter questions by attributes
-```
+quick_test = manager.create_test_batch(5, "small_sample")
+# Result: Fast validation set with verified file access
+Batch Strategies:
 
-#### **Test Batch Creation**
+"balanced" - Even distribution across levels (40% L1, 40% L2, 20% L3)
+"file_type_diverse" - Maximum file format coverage
+"small_sample" - Quick 5-question validation with verified files
+"level_focused" - Target specific difficulty level
+"large_comprehensive" - Thorough 25-question evaluation
 
-```python
-.create_test_batch(size, strategy)       # Generate strategic question sets
-._create_balanced_batch()                # Even distribution across levels/types
-._create_small_sample_batch()            # Quick 5-question validation set
-._create_large_comprehensive_batch()     # Thorough 25-question evaluation
-._create_level_focused_batch()           # Target specific difficulty level
-._create_file_diverse_batch()            # Maximize file type coverage
-```
+File Path Preservation (Critical Fix)
+The Problem: Original test batches missed HF cache file paths, causing GetAttachmentTool failures.
+The Solution: Enhanced create_test_batch() preserves file_path from metadata:
+python# BEFORE (broken):
+question = {
+    "task_id": "32102e3e-d12a-4209-9163-7b3a104efe5d",
+    "Question": "The attached spreadsheet shows...",
+    "file_name": "32102e3e-d12a-4209-9163-7b3a104efe5d.xlsx"
+    # ❌ Missing file_path - GetAttachmentTool can't find file
+}
 
-#### **Analysis & Validation**
+# AFTER (fixed):
+question = {
+    "task_id": "32102e3e-d12a-4209-9163-7b3a104efe5d",
+    "Question": "The attached spreadsheet shows...",
+    "file_name": "32102e3e-d12a-4209-9163-7b3a104efe5d.xlsx",
+    "file_path": "/Users/user/.cache/huggingface/datasets/downloads/..."
+    # ✅ HF cache path preserved - GetAttachmentTool can access file
+}
+Implementation:
+pythondef _ensure_file_path_preserved(self, questions: List[Dict]) -> List[Dict]:
+    """CRITICAL: Preserve HF cache paths from metadata for file access"""
+    
+    for question in questions:
+        task_id = question.get('task_id')
+        if task_id in self.file_questions and not question.get('file_path'):
+            # Get file_path from original metadata
+            original_file_path = self.file_questions[task_id].get('file_path')
+            if original_file_path:
+                question['file_path'] = original_file_path
+    
+    return questions
+Ground Truth Management (Evaluation Phase)
+Blind Testing Compliance: Ground truth is completely isolated during execution.
+python# During execution (Phase 1): NO access to answers
+test_batch = manager.create_test_batch(10, "balanced")
+# Questions have: task_id, Question, Level, file_name, file_path
+# Questions DO NOT have: "Final answer" field
 
-```python
-.analyze_dataset_distribution()          # Statistical breakdown of questions
-.validate_answer_format(answer)          # Check GAIA formatting compliance
-.get_file_types_distribution()           # Available file format analysis
-.generate_dataset_report()               # Comprehensive dataset summary
-```
+# During evaluation (Phase 2): Access to ground truth
+ground_truth = manager.get_ground_truth(task_id)
+# Returns: final_answer, level, annotator_metadata, etc.
+🧪 Validation and Analysis
+Dataset Integrity Checking
+python# Quick validation without agent execution
+success = quick_dataset_check("./tests/gaia_data")
 
-#### **Export & Utilities**
+# Detailed analysis
+manager = GAIADatasetManager("./tests/gaia_data")
+analysis = manager.analyze_dataset_distribution()
 
-```python
-.export_test_batch(questions, path, fmt) # Save batches as JSON/CSV/JSONL
-generate_test_batches(configs)           # Bulk batch generation
-compare_dataset_versions(path1, path2)   # Dataset comparison analysis
-```
+print(f"📊 Dataset Analysis:")
+print(f"   Total questions: {analysis['total_questions']}")
+print(f"   File questions: {analysis['questions_with_files']}")
+print(f"   Level distribution: {analysis['level_distribution']}")
+print(f"   File types: {analysis['file_type_distribution']}")
+File Access Verification
+python# Test file path preservation fix
+manager = GAIADatasetManager("./tests/gaia_data")
+success = manager.test_file_path_preservation(5)
 
-**`gaia_dataset_utils.py` - Pure Data Layer**
+if success:
+    print("✅ File paths preserved - GetAttachmentTool should work")
+else:
+    print("❌ File path issues detected")
+🔄 Integration Patterns
+Pattern 1: Standard GAIA Testing
+python# Step 1: Create blind test batch (gaia_dataset_utils.py)
+manager = GAIADatasetManager("./tests/gaia_data")
+blind_questions = manager.create_test_batch(20, "balanced")
 
-- ✅ Dataset loading, validation, and file operations
-- ✅ Test batch creation with multiple strategies
-- ✅ Ground truth access and answer validation
-- ❌ **NO** agent execution or evaluation logic
+# Step 2: Execute without ground truth (agent_testing.py)
+executor = GAIAQuestionExecutor(config)
+execution_file = executor.execute_questions_batch(blind_questions)
 
+# Step 3: Evaluate with ground truth (agent_testing.py + gaia_dataset_utils.py)
+evaluator = GAIAAnswerEvaluator(manager)  # Manager provides ground truth
+results = evaluator.evaluate_execution_results(execution_file)
+Pattern 2: Custom Test Scenarios
+python# File-focused testing
+manager = GAIADatasetManager("./tests/gaia_data")
+
+# Get Excel-only questions
+excel_questions = manager.get_questions_by_criteria(file_type="xlsx")
+
+# Get Level 1 questions without files  
+easy_text_questions = manager.get_questions_by_criteria(level=1, has_files=False)
+
+# Create custom batch
+custom_batch = excel_questions[:3] + easy_text_questions[:2]
+enhanced_batch = manager._ensure_file_path_preserved(custom_batch)
+Pattern 3: Debugging File Access
+python# Debug specific file question
+manager = GAIADatasetManager("./tests/gaia_data")
+question = manager.get_question_by_id("32102e3e-d12a-4209-9163-7b3a104efe5d")
+
+print(f"📋 Question: {question['Question'][:50]}...")
+print(f"📎 File: {question.get('file_name')}")
+print(f"📁 HF cache: {question.get('file_path')}")
+
+# Verify file exists
+file_path = question.get('file_path')
+if file_path and Path(file_path).exists():
+    print(f"✅ File accessible at: {file_path}")
+else:
+    print(f"❌ File not found - GetAttachmentTool will fail")
+🛡️ Error Prevention
+Common Issues and Solutions
+Issue 1: Missing file_path in test batches
+python# WRONG: Creating test batches manually
+questions = [{"task_id": "...", "Question": "...", "file_name": "..."}]
+# ❌ Missing file_path - will cause GetAttachmentTool failures
+
+# RIGHT: Using GAIADatasetManager
+manager = GAIADatasetManager("./tests/gaia_data")
+questions = manager.create_test_batch(5, "balanced")
+# ✅ file_path automatically preserved
+Issue 2: Ground truth contamination
+python# WRONG: Including answers in test batches
+questions = manager.metadata  # Contains "Final answer" field
+# ❌ Agent can see ground truth - invalidates blind testing
+
+# RIGHT: Using create_test_batch()
+questions = manager.create_test_batch(10, "balanced")
+# ✅ No "Final answer" field - true blind testing
+Issue 3: File access failures
+python# DEBUG: Check file path preservation
+batch = manager.create_test_batch(5, "balanced")
+file_questions = [q for q in batch if q.get('file_name')]
+
+for q in file_questions:
+    if not q.get('file_path'):
+        print(f"❌ Missing file_path: {q['task_id']}")
+    elif not Path(q['file_path']).exists():
+        print(f"❌ File not found: {q['file_path']}")
+    else:
+        print(f"✅ File OK: {q['task_id']}")
+📈 Performance Considerations
+Efficient Dataset Operations
+python# EFFICIENT: Use indexed lookups
+manager = GAIADatasetManager("./tests/gaia_data")
+question = manager.get_question_by_id(task_id)  # O(1) lookup
+
+# INEFFICIENT: Linear search
+for q in manager.metadata:  # O(n) search
+    if q['task_id'] == task_id:
+        break
+Batch Size Recommendations
+python# Development: Quick validation
+quick_batch = manager.create_test_batch(5, "small_sample")
+
+# Testing: Comprehensive evaluation  
+test_batch = manager.create_test_batch(20, "balanced")
+
+# Research: Thorough analysis
+research_batch = manager.create_test_batch(50, "large_comprehensive")
+🔗 Dependencies and Requirements
+Required for Full Functionality
+python# Core dependencies
+import json, os, pandas as pd
+from pathlib import Path
+from typing import Dict, List, Optional
+from collections import defaultdict
+
+# Integration with testing framework
+from agent_testing import GAIAQuestionExecutor, GAIAAnswerEvaluator
+Dataset Requirements
+./tests/gaia_data/
+├── metadata.json           # REQUIRED: Question data with file_path fields
+├── files/                  # OPTIONAL: Local file copies
+│   ├── task_001.xlsx
+│   └── task_002.pdf
+└── validation/             # OPTIONAL: Alternative file location
+Critical: metadata.json must contain file_path fields pointing to HF cache locations.
+🎯 Best Practices
+1. Always Use GAIADatasetManager for Test Batches
+python# GOOD: Proper batch creation
+manager = GAIADatasetManager("./tests/gaia_data")
+batch = manager.create_test_batch(10, "balanced")
+
+# BAD: Manual batch creation
+batch = manager.metadata[:10]  # Missing file_path preservation
+2. Verify File Access Before Testing
+python# Validate before running expensive tests
+manager = GAIADatasetManager("./tests/gaia_data")
+if manager.test_file_path_preservation(3):
+    # Proceed with full testing
+    results = run_gaia_test("groq", max_questions=20)
+else:
+    print("Fix file access issues first")
+3. Use Appropriate Batch Strategies
+python# Quick development testing
+batch = manager.create_test_batch(5, "small_sample")
+
+# Performance evaluation
+batch = manager.create_test_batch(20, "balanced")
+
+# File type coverage testing
+batch = manager.create_test_batch(15, "file_type_diverse")
+
+🔗 Integration Summary
+gaia_dataset_utils.py is not just a utility - it's the foundation that enables:
+
+Blind Testing Integrity - Separates questions from answers
+File Access Reliability - Preserves HF cache paths for GetAttachmentTool
+Test Reproducibility - Consistent, strategic question sampling
+Evaluation Accuracy - Provides clean ground truth for comparison
+Debugging Support - Validates dataset integrity and file access
+
+Without proper gaia_dataset_utils.py integration, agent_testing.py cannot function correctly.
 ---
 
 ## 🔧 Debug Metadata (`/tests/debug_metadata.py`)
