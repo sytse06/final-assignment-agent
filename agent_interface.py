@@ -617,7 +617,7 @@ def get_performance_config() -> GAIAConfig:
         debug_mode=False  # Less verbose for performance
     )
 
-def get_ollama_config(model_name: str = "qwen-agent-custom") -> GAIAConfig:
+def get_ollama_config(model_name: str = "devstral-16k") -> GAIAConfig:
     """Get Ollama configuration with enhanced defaults"""
     return GAIAConfig(
         model_provider="ollama",

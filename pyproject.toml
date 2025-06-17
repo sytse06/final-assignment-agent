@@ -31,9 +31,9 @@ pandas = "^2.0.0"
 python-dotenv = "^1.0.0"
 
 # AI/ML framework - Compatible versions for Gradio 5.x
-smolagents = "^1.15.0"
+smolagents = "^1.17.0"
 transformers = "^4.40.0"
-huggingface-hub = "^0.30.0"  # Required by Gradio 5.x
+huggingface-hub = "^0.33.0"  # Required by Gradio 5.x
 torch = "^2.1.0"
 datasets = "^2.14.0"
 evaluate = "^0.4.0" 

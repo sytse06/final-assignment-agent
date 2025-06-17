@@ -371,6 +371,7 @@ class GAIAAgent:
                 "numpy", "pandas", "matplotlib", "seaborn", "scipy", 
                 "json", "csv", "statistics", "math", "re"
             ],
+            use_structured_outputs_internally=True,
             model=self.model,
             max_steps=self.config.max_agent_steps,
             logger=logger
