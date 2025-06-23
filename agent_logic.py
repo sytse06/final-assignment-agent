@@ -193,7 +193,7 @@ def validate_gaia_format(answer: str) -> bool:
 # ============================================================================
 
 class GAIAAgent:
-    """GAIA agent using SmolagAgents manager pattern with context sharing"""
+    """GAIA agent using direct specialist execution with context sharing"""
     
     def __init__(self, config: GAIAConfig = None):
         if config is None:
@@ -217,7 +217,7 @@ class GAIAAgent:
         self.shared_tools = self._create_shared_tools()
         print(f"🔍 DEBUG: shared_tools keys: {list(self.shared_tools.keys())}")
         
-        # Create context-aware tools (now returns proper Tool objects)
+        # Create context-aware tools
         if config.enable_context_bridge and self.shared_tools:
             self.context_aware_tools = create_context_aware_tools(self.shared_tools)
             print(f"🌉 Context-aware tools created: {len(self.context_aware_tools)} tools")
@@ -227,13 +227,10 @@ class GAIAAgent:
         # Create specialist agents
         self.specialists = self._create_specialist_agents()
         
-        # Create manager agent
-        self.manager = self._create_manager_agent()
-        
-        # Build workflow
+        # Build workflow (no manager needed)
         self.workflow = self._build_workflow()
         
-        print("🚀 GAIA Manager Agent initialized!")
+        print("🚀 GAIA Agent initialized with direct specialist execution!")
     
     def _initialize_retriever(self):
         """Initialize retriever for similar questions in manager context."""
@@ -340,19 +337,21 @@ class GAIAAgent:
                         return tool
             return None
 
-        # Data Analyst - SPECIALIZED for computation and structured data analysis
+        # Data Analyst
         data_tools = []
         
         # Only file access - no web search distractions
         if attachment_tool := get_context_tool("get_attachment"):
             data_tools.append(attachment_tool)
+        if content_tool := get_context_tool("content_retriever"):
+            data_tools.append(content_tool)
         
         specialists["data_analyst"] = CodeAgent(
             name="data_analyst",
-            description="Specialized data analyst focused on Excel/CSV analysis, calculations, and statistical processing. Does not perform web research - delegates that to web_researcher.",
-            tools=data_tools,  # Only file access, no web tools
+            description="Specialized data analyst for Excel/CSV analysis, calculations, and file processing. Has both file access and content processing tools.",
+            tools=data_tools,
             additional_authorized_imports=[
-                "numpy", "pandas", "matplotlib", "seaborn", "scipy", 
+                "numpy", "pandas", "matplotlib", "seaborn", "scipy", "io",
                 "json", "csv", "statistics", "math", "re", "openpyxl", "xlrd"
             ],
             use_structured_outputs_internally=True,
@@ -361,7 +360,7 @@ class GAIAAgent:
             logger=logger
         )
         
-        # Web Researcher - SPECIALIZED for information gathering and content processing
+        # Web Researcher - SPECIALIZED for information gathering and analysis
         web_tools = []
         
         # Add LangChain research tools - core specialty
@@ -369,10 +368,10 @@ class GAIAAgent:
             web_tools.extend(ALL_LANGCHAIN_TOOLS)
         
         # Add content processing tools
-        if content_tool := get_context_tool("retrieve_content"):
+        if content_tool := get_context_tool("content_retriever"):
             web_tools.append(content_tool)
         
-        # Add file access for document research (but delegates computation to data_analyst)
+        # Add file access for document research
         if attachment_tool := get_context_tool("get_attachment"):
             web_tools.append(attachment_tool)
 
@@ -416,40 +415,6 @@ class GAIAAgent:
         
         return shared_tools
     
-    def _create_manager_agent(self):
-        """Create manager agent with context-aware file access tools"""
-        manager_tools = []
-        
-        # Manager gets file access tools (context-aware versions)
-        if self.context_aware_tools and isinstance(self.context_aware_tools, list):
-            for tool in self.context_aware_tools:
-                if hasattr(tool, 'name') and tool.name == "get_attachment":
-                    manager_tools.append(tool)
-                    print("✅ Manager gets context-aware GetAttachmentTool")
-                    break
-        else:
-            print(f"⚠️  Context-aware tools not available for manager: {type(self.context_aware_tools)}")
-        
-        # Setup logging
-        logger = None
-        if self.logging and hasattr(self.logging, 'logger'):
-            logger = self.logging.logger
-        
-        # Manager is ToolCallingAgent with file access specialization
-        manager = ToolCallingAgent(
-            name="gaia_manager",
-            description="GAIA task coordinator that manages file access and coordinates specialist agents",
-            model=self.model,
-            tools=manager_tools,
-            managed_agents=list(self.specialists.values()),
-            planning_interval=self.config.planning_interval,
-            max_steps=self.config.max_agent_steps,
-            logger=logger
-        )
-        
-        print("✅ Manager agent created with context-aware file access tools")
-        return manager
-    
     def _build_workflow(self):
         """Build LangGraph workflow with smart routing"""
         builder = StateGraph(GAIAState)
@@ -459,7 +424,7 @@ class GAIAAgent:
             builder.add_node("read_question", self._read_question_node)
             builder.add_node("complexity_check", self._complexity_check_node)
             builder.add_node("one_shot_answering", self._one_shot_answering_node)
-            builder.add_node("manager_execution", self._manager_execution_node)
+            builder.add_node("agent_selector", self._agent_selector_node)
             builder.add_node("format_answer", self._format_answer_node)
             
             # Routing flow
@@ -472,22 +437,22 @@ class GAIAAgent:
                 self._route_by_complexity,
                 {
                     "simple": "one_shot_answering",
-                    "complex": "manager_execution"
+                    "complex": "agent_selector"
                 }
             )
             
             # Both paths converge to formatting
             builder.add_edge("one_shot_answering", "format_answer")
-            builder.add_edge("manager_execution", "format_answer")
+            builder.add_edge("agent_selector", "format_answer")
             builder.add_edge("format_answer", END)
         else:
             # Original linear workflow
             builder.add_node("read_question", self._read_question_node)
-            builder.add_node("manager_execution", self._manager_execution_node)
+            builder.add_node("agent_selector", self._agent_selector_node)
             builder.add_node("format_answer", self._format_answer_node)
             
             builder.add_edge(START, "read_question")
-            builder.add_edge("read_question", "manager_execution")
+            builder.add_edge("read_question", "agent_selector")
             builder.add_edge("manager_execution", "format_answer")
             builder.add_edge("format_answer", END)
         
@@ -799,98 +764,110 @@ class GAIAAgent:
             }
 
     def _agent_selector_node(self, state: GAIAState):
-        """LLM selects and directly executes specialist - based on inspiration code pattern"""
-        print("🎯 LLM selecting and executing specialist")
+        """Select and execute specialist agent using LLM + RAG examples"""
         
-        # Update context bridge routing
+        question = state["question"]
+        task_id = state.get("task_id", "")
+        similar_examples = state.get("similar_examples", [])
+        
+        # Update context and logging
         if self.config.enable_context_bridge:
             ContextVariableFlow.update_routing_path("agent_selector")
         
         if self.logging:
             self.logging.set_routing_path("agent_selector")
-            self.logging.log_step("agent_selector_start", "Starting LLM agent selection and execution")
+            self.logging.log_step("agent_selector_start", "Starting agent selection")
         
-        question = state["question"]
-        task_id = state.get("task_id", "")
-        
-        # Ensure context is set for file access
+        # Set context for file access
         if self.config.enable_context_bridge and task_id:
             ContextVariableFlow.set_task_context(
                 task_id=task_id,
                 question=question,
                 metadata={
                     "complexity": state.get("complexity", "complex"),
-                    "routing_path": "agent_selector",
-                    "execution_phase": "specialist_execution"
+                    "routing_path": "agent_selector"
                 }
             )
-            print(f"🌉 Context set for specialist execution: {task_id}")
         
         try:
-            # STEP 1: LLM selects agent (exactly like inspiration code)
-            selected_agent_name = self._llm_select_agent(question, task_id)
+            # LLM selects agent using RAG examples
+            selected_agent = self._llm_select_agent(question, similar_examples)
             
             if self.logging:
-                self.logging.log_step("agent_selection", None, f"LLM selected: {selected_agent_name}")
+                self.logging.log_step("agent_selected", f"Selected: {selected_agent}")
             
-            print(f"🤖 LLM selected: {selected_agent_name}")
+            # Execute selected agent directly
+            specialist = self.specialists[selected_agent]
+            result = specialist.run(question)
             
-            # STEP 2: Execute selected agent directly (like inspiration code delegate_to_agent)
-            if selected_agent_name and selected_agent_name in self.specialists:
-                specialist = self.specialists[selected_agent_name]
-                
-                if self.logging:
-                    self.logging.log_step("agent_execution_start", selected_agent_name, f"Executing {selected_agent_name}")
-                
-                print(f"🚀 Executing {selected_agent_name}...")
-                
-                # 🎯 THE KEY FIX: Direct agent.run() like inspiration code
-                result = specialist.run(question)
-                
-                print(f"✅ {selected_agent_name} completed")
-                
-                if self.logging:
-                    result_preview = str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
-                    self.logging.log_step("agent_execution_complete", selected_agent_name, f"Result: {result_preview}")
-                
-                # Get step count for logging
-                step_count = self.get_agent_step_count_safely(specialist)
-                
-                return {
-                    "raw_answer": str(result),
-                    "selected_agent": selected_agent_name,
-                    "execution_successful": True,
-                    "steps": state["steps"] + [f"LLM selected and executed {selected_agent_name} - {step_count} steps"]
-                }
-                
-            elif selected_agent_name == "no agent needed":
-                # LLM decided no specialist needed - use direct LLM (like inspiration one_shot)
-                print("🤖 LLM decided: no specialist needed - using direct LLM")
-                
-                if self.logging:
-                    self.logging.log_step("direct_llm_selected", None, "LLM chose direct answering")
-                
-                return self._direct_llm_execution(question, state)
+            if self.logging:
+                self.logging.log_step("agent_complete", "Execution completed")
             
-            else:
-                # Invalid selection - fallback to direct LLM
-                print(f"⚠️  Invalid agent selection: {selected_agent_name} - using direct LLM")
-                
-                if self.logging:
-                    self.logging.log_step("selection_fallback", None, f"Invalid selection {selected_agent_name}, using direct LLM")
-                
-                return self._direct_llm_execution(question, state)
-                
+            step_count = 0  # Simplified - remove problematic step counting
+            
+            return {
+                "raw_answer": str(result),
+                "selected_agent": selected_agent,
+                "execution_successful": True,
+                "steps": state["steps"] + [f"Agent {selected_agent} executed successfully"]
+            }
+            
         except Exception as e:
-            error_msg = f"Agent selection/execution failed: {str(e)}"
-            print(f"❌ {error_msg}")
+            error_msg = f"Agent selection failed: {str(e)}"
             
             if self.logging:
-                self.logging.log_step("selector_error", None, error_msg)
+                self.logging.log_step("agent_error", error_msg)
             
-            # Fallback to direct LLM on any error
-            print("🔄 Falling back to direct LLM execution")
-            return self._direct_llm_execution(question, state)
+            return {
+                "raw_answer": error_msg,
+                "execution_successful": False,
+                "steps": state["steps"] + [error_msg]
+            }
+
+    def _llm_select_agent(self, question: str, similar_examples: List[Dict] = None) -> str:
+        """LLM selects agent using RAG examples - no hard-coded rules"""
+        
+        # Build agent descriptions
+        agents_description = "\n".join([
+            f"{name}: {agent.description}"
+            for name, agent in self.specialists.items()
+        ])
+        
+        # Add similar examples context
+        examples_context = ""
+        if similar_examples:
+            examples_context = "\n\nSimilar GAIA examples:\n"
+            for i, example in enumerate(similar_examples[:3], 1):
+                examples_context += f"{i}. Q: {example.get('question', '')}\n"
+                examples_context += f"   A: {example.get('answer', '')}\n"
+        
+        # LLM selection prompt
+        prompt = f"""Select the best specialist for this question.
+
+    Question: {question}
+
+    Available specialists:
+    {agents_description}{examples_context}
+
+    Choose: {' or '.join(self.specialists.keys())}
+
+    Your choice:"""
+        
+        try:
+            response = llm_invoke_with_retry(self.orchestration_model, [HumanMessage(content=prompt)])
+            choice = response.content.strip().lower()
+            
+            # Parse LLM response
+            for agent_name in self.specialists.keys():
+                if agent_name in choice:
+                    return agent_name
+            
+            # Default if unclear
+            return list(self.specialists.keys())[0]
+            
+        except Exception as e:
+            # Fallback to first agent
+            return list(self.specialists.keys())[0]
 
     def _get_current_temporal_context(self) -> str:
         """Get current date/time context for temporal awareness"""

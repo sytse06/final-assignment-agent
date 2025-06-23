@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from typing import Dict, Any, Optional, List
 import time
 import uuid
+import inspect
 
 # Import SmolagAgents Tool base class
 from smolagents import Tool
@@ -284,42 +285,127 @@ class ContextAwareContentRetrieverTool(Tool):
             print(f"❌ {error_msg}")
             return error_msg
 
-
-def create_context_aware_tools(original_tools: Dict[str, Any]) -> List[Tool]:
-    """
-    Create context-aware versions of tools that are proper SmolagAgents Tools.
+def create_context_aware_tools(shared_tools: Dict) -> List:
+    """Create context-aware tool wrappers with automatic parameter filtering"""
     
-    Args:
-        original_tools: Dictionary of original tool instances
-        
-    Returns:
-        List of context-aware tool instances (proper Tool objects)
-    """
     context_aware_tools = []
     
-    if not original_tools:
-        print("⚠️  No original tools provided to create_context_aware_tools")
-        return context_aware_tools
+    for tool_name, base_tool in shared_tools.items():
+        context_tool = create_safe_context_wrapper(base_tool)
+        context_aware_tools.append(context_tool)
+        print(f"✅ Created context-aware {tool_name} with parameter filtering")
     
-    for tool_name, tool_instance in original_tools.items():
-        if tool_name == 'get_attachment' and tool_instance:
-            try:
-                context_tool = ContextAwareGetAttachmentTool(tool_instance)
-                context_aware_tools.append(context_tool)
-                print(f"✅ Created context-aware GetAttachmentTool")
-            except Exception as e:
-                print(f"❌ Failed to create context-aware GetAttachmentTool: {e}")
-            
-        elif tool_name == 'content_retriever' and tool_instance:
-            try:
-                context_tool = ContextAwareContentRetrieverTool(tool_instance)
-                context_aware_tools.append(context_tool)
-                print(f"✅ Created context-aware ContentRetrieverTool")
-            except Exception as e:
-                print(f"❌ Failed to create context-aware ContentRetrieverTool: {e}")
-    
-    print(f"🔧 Created {len(context_aware_tools)} context-aware tools total")
     return context_aware_tools
+
+def create_safe_context_wrapper(base_tool):
+    """Create context-aware wrapper that automatically filters unknown parameters"""
+    
+    class SafeContextAwareTool(Tool):
+        def __init__(self, base_tool):
+            self.base_tool = base_tool
+            self.name = getattr(base_tool, 'name', 'unknown_tool')
+            self.description = getattr(base_tool, 'description', '')
+            
+            # Required Tool attributes - copy from base tool or use defaults
+            self.inputs = getattr(base_tool, 'inputs', {
+                "query": {"type": "string", "description": "Input for the tool"}
+            })
+            self.output_type = getattr(base_tool, 'output_type', "string")
+            
+            # Initialize base Tool class AFTER setting required attributes
+            super().__init__()
+            
+            # Cache the base tool's parameter signature for efficiency
+            self._cached_signature = None
+            
+            # Dynamically create forward method with correct signature
+            self._create_dynamic_forward_method()
+        
+        def _create_dynamic_forward_method(self):
+            """Dynamically create forward method that matches inputs exactly"""
+            
+            # Get the expected parameters from inputs
+            expected_params = list(self.inputs.keys())
+            
+            # Create parameter string for the method signature
+            if expected_params:
+                params_str = ", ".join(f"{param}=None" for param in expected_params)
+                method_code = f"""
+def forward(self, {params_str}):
+    return self._execute_with_context({', '.join(f'{param}={param}' for param in expected_params)})
+"""
+            else:
+                method_code = """
+def forward(self):
+    return self._execute_with_context()
+"""
+            
+            # Execute the dynamic method creation
+            namespace = {'self': self}
+            exec(method_code, namespace)
+            
+            # Bind the method to this instance
+            import types
+            self.forward = types.MethodType(namespace['forward'], self)
+        
+        def _execute_with_context(self, **kwargs):
+            """Execute the base tool with context and parameter filtering"""
+            
+            # Get context information
+            try:
+                context = ContextVariableFlow.get_task_context()
+                task_id = context.get('task_id') if context else None
+                question = context.get('question') if context else None
+            except:
+                task_id = None
+                question = None
+            
+            # Set task_id for tools that need it (like GetAttachmentTool)
+            if task_id and hasattr(self.base_tool, 'attachment_for'):
+                try:
+                    self.base_tool.attachment_for(task_id)
+                    print(f"🔧 Set task_id {task_id} for {self.name}")
+                except Exception as e:
+                    print(f"⚠️ Could not set task_id for {self.name}: {e}")
+            
+            # Filter kwargs to only include parameters the base tool accepts
+            valid_params = self._get_valid_parameters()
+            filtered_kwargs = {}
+            
+            for param_name, param_value in kwargs.items():
+                if param_value is not None and param_name in valid_params:
+                    filtered_kwargs[param_name] = param_value
+                elif param_value is not None:
+                    # Log filtered parameters for debugging
+                    print(f"🔧 {self.name}: Filtered parameter '{param_name}'")
+            
+            # Enhance query with context if possible
+            if 'query' in valid_params and question:
+                if 'query' not in filtered_kwargs or not filtered_kwargs['query']:
+                    filtered_kwargs['query'] = question
+            
+            try:
+                # Call base tool with filtered parameters
+                result = self.base_tool.forward(**filtered_kwargs)
+                return result
+                
+            except Exception as e:
+                print(f"❌ {self.name} execution failed: {e}")
+                raise
+        
+        def _get_valid_parameters(self):
+            """Get the parameter names that the base tool's forward method accepts"""
+            if self._cached_signature is None:
+                try:
+                    sig = inspect.signature(self.base_tool.forward)
+                    self._cached_signature = set(sig.parameters.keys())
+                except Exception:
+                    # Fallback: assume common parameters
+                    self._cached_signature = {'url', 'query', 'task', 'question', 'fmt', 'format'}
+            
+            return self._cached_signature
+    
+    return SafeContextAwareTool(base_tool)
 
 
 # Convenience functions for common patterns
