@@ -591,13 +591,13 @@ def get_google_config(model_name: str = "gemini-2.5-flash-preview") -> GAIAConfi
         debug_mode=True
     )
 
-def get_openrouter_config(model_name: str = "qwen/qwen3-32b") -> GAIAConfig:
+def get_openrouter_config(model_name: str = "google/gemini-2.5-flash") -> GAIAConfig:
     """Get OpenRouter configuration with enhanced defaults"""
     return GAIAConfig(
         model_provider="openrouter",
         model_name=model_name,
-        temperature=0.3,
-        max_agent_steps=15,
+        temperature=0.1,
+        max_agent_steps=10,
         enable_smart_routing=True,
         skip_rag_for_simple=True,
         enable_csv_logging=True,

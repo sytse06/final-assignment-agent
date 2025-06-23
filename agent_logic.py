@@ -327,49 +327,33 @@ class GAIAAgent:
             raise
             
     def _create_specialist_agents(self):
-        """Create specialist agents with context-aware tools"""
+        """Create specialized agents with focused tool distribution"""
         
-        logger = None
-        if self.logging and hasattr(self.logging, 'logger'):
-            logger = self.logging.logger
-
-        try:
-            temporal_ctx = self._get_current_temporal_context()
-            if not isinstance(temporal_ctx, dict):
-                raise ValueError("Temporal context is not a dictionary")
-                
-            web_researcher_prompt = f"""You are a web research specialist.
-
-        CURRENT TEMPORAL CONTEXT:
-        - Today's date: {temporal_ctx['current_date']}
-        - Current year: {temporal_ctx['current_year']}
-        - Current month: {temporal_ctx['current_month']}
-
-        CRITICAL: When searching for "current", "recent", "latest", or "now" information, always use {temporal_ctx['current_year']} in your search queries. Do NOT use 2023.
-
-        Your role is to find accurate, up-to-date information using web search tools."""
-
-        except Exception as e:
-            print(f"⚠️  Temporal context failed, using fallback: {e}")
-
+        logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         specialists = {}
-        env_tools = []
 
-        # Add LangChain research tools
-        if LANGCHAIN_TOOLS_AVAILABLE:
-            env_tools.extend(ALL_LANGCHAIN_TOOLS)
-            print(f"✅ Added {len(ALL_LANGCHAIN_TOOLS)} LangChain tools")
+        # Helper function to get context-aware tools
+        def get_context_tool(tool_name):
+            if self.context_aware_tools and isinstance(self.context_aware_tools, list):
+                for tool in self.context_aware_tools:
+                    if hasattr(tool, 'name') and tool.name == tool_name:
+                        return tool
+            return None
+
+        # Data Analyst - SPECIALIZED for computation and structured data analysis
+        data_tools = []
         
-        # Data Analyst - computation focus, no file tools
-        data_tools = env_tools.copy()  # Base tools only
+        # Only file access - no web search distractions
+        if attachment_tool := get_context_tool("get_attachment"):
+            data_tools.append(attachment_tool)
         
         specialists["data_analyst"] = CodeAgent(
             name="data_analyst",
-            description="Data analyst with Python skills for calculations, statistics, and data processing",
-            tools=data_tools,
+            description="Specialized data analyst focused on Excel/CSV analysis, calculations, and statistical processing. Does not perform web research - delegates that to web_researcher.",
+            tools=data_tools,  # Only file access, no web tools
             additional_authorized_imports=[
                 "numpy", "pandas", "matplotlib", "seaborn", "scipy", 
-                "json", "csv", "statistics", "math", "re"
+                "json", "csv", "statistics", "math", "re", "openpyxl", "xlrd"
             ],
             use_structured_outputs_internally=True,
             model=self.model,
@@ -377,25 +361,25 @@ class GAIAAgent:
             logger=logger
         )
         
-        # Web Researcher - gets context-aware content tools
-        web_tools = env_tools.copy()
+        # Web Researcher - SPECIALIZED for information gathering and content processing
+        web_tools = []
         
-        # Add context-aware content retriever tool if available
-        if self.context_aware_tools and isinstance(self.context_aware_tools, list):
-            for tool in self.context_aware_tools:
-                if hasattr(tool, 'name') and tool.name == "retrieve_content":
-                    web_tools.append(tool)
-                    print("✅ Web researcher gets context-aware ContentRetrieverTool")
-                    break
-                elif isinstance(tool, str) and "content_retriever" in tool:
-                    print(f"⚠️  Context tool is string: {tool}")
-        else:
-            print(f"⚠️  Context-aware tools not available or invalid: {type(self.context_aware_tools)}")
+        # Add LangChain research tools - core specialty
+        if LANGCHAIN_TOOLS_AVAILABLE:
+            web_tools.extend(ALL_LANGCHAIN_TOOLS)
         
+        # Add content processing tools
+        if content_tool := get_context_tool("retrieve_content"):
+            web_tools.append(content_tool)
+        
+        # Add file access for document research (but delegates computation to data_analyst)
+        if attachment_tool := get_context_tool("get_attachment"):
+            web_tools.append(attachment_tool)
+
         specialists["web_researcher"] = ToolCallingAgent(
             name="web_researcher",
-            description="Web researcher for current information and content processing",
-            tools=web_tools,
+            description="Specialized web researcher for information gathering, content processing, and document analysis. Focuses on finding and processing information, delegates computational analysis to data_analyst.",
+            tools=web_tools,  # Web search + content processing + file access
             model=self.model,
             max_steps=self.config.max_agent_steps,
             planning_interval=self.config.planning_interval,
@@ -403,7 +387,10 @@ class GAIAAgent:
             logger=logger
         )
         
-        print(f"✅ Created {len(specialists)} specialist agents")
+        print(f"🎯 Created {len(specialists)} specialized agents:")
+        print(f"   data_analyst: {len(data_tools)} tools (computation focus)")
+        print(f"   web_researcher: {len(web_tools)} tools (research focus)")
+        
         return specialists
 
     def _create_shared_tools(self):
@@ -754,16 +741,25 @@ class GAIAAgent:
             self.logging.log_step("one_shot_prompt_prep", f"Preparing direct prompt for: {question[:30]}...")
         
         # Simple prompt for direct answering
-        prompt = f"""You are a general AI assistant. Answer this question directly and concisely.
-
+        prompt = f"""You are a general AI assistant. You must provide specific, factual answers.
+        
         Question: {question}
 
-        Provide your answer in the format: FINAL ANSWER: [YOUR ANSWER]
+        CRITICAL: Never use placeholder text like "[your answer]" or "[Title of...]". Always give the actual answer.
 
-        Remember:
-        - Numbers: no commas, no units unless specified
-        - Strings: no articles (the, a, an), concise wording
-        - Keep it as brief as possible"""
+        When analyzing files:
+        1. Use get_attachment tool to access file content
+        2. Process the actual data thoroughly  
+        3. Provide specific numerical or text answers
+
+        Report your thoughts, and finish with: FINAL ANSWER: [YOUR SPECIFIC ANSWER]
+
+        YOUR FINAL ANSWER should be a number OR as few words as possible OR a comma separated list.
+        - Numbers: no commas, no units ($ %) unless specified
+        - Strings: no articles (the, a, an), no abbreviations, digits as text unless specified  
+        - Lists: apply above rules to each element
+
+        NEVER use placeholder text. Always give real, specific answers."""
         
         try:
             if self.logging:
@@ -802,89 +798,99 @@ class GAIAAgent:
                 "steps": state["steps"] + [error_msg]
             }
 
-    def _manager_execution_node(self, state: GAIAState):
-        """Manager execution with context bridge coordination"""
-        print("🎯 Using manager coordination with context bridge")
+    def _agent_selector_node(self, state: GAIAState):
+        """LLM selects and directly executes specialist - based on inspiration code pattern"""
+        print("🎯 LLM selecting and executing specialist")
         
         # Update context bridge routing
         if self.config.enable_context_bridge:
-            ContextVariableFlow.update_routing_path("manager_coordination")
+            ContextVariableFlow.update_routing_path("agent_selector")
         
         if self.logging:
-            self.logging.set_routing_path("manager_coordination")
-            self.logging.log_step("manager_start", "Starting manager coordination")
+            self.logging.set_routing_path("agent_selector")
+            self.logging.log_step("agent_selector_start", "Starting LLM agent selection and execution")
         
         question = state["question"]
         task_id = state.get("task_id", "")
-        rag_examples = state.get("similar_examples", [])
         
-        # Ensure context is properly set before manager execution
+        # Ensure context is set for file access
         if self.config.enable_context_bridge and task_id:
-            # Refresh context to ensure it's active during manager execution
             ContextVariableFlow.set_task_context(
                 task_id=task_id,
                 question=question,
                 metadata={
                     "complexity": state.get("complexity", "complex"),
-                    "routing_path": "manager_coordination",
-                    "execution_phase": "manager_delegation"
+                    "routing_path": "agent_selector",
+                    "execution_phase": "specialist_execution"
                 }
             )
-            print(f"🌉 Context refreshed for manager execution: {task_id}")
-        
-        # Prepare context for manager with curated delegation format
-        context = self._prepare_manager_context(question, rag_examples, task_id)
+            print(f"🌉 Context set for specialist execution: {task_id}")
         
         try:
+            # STEP 1: LLM selects agent (exactly like inspiration code)
+            selected_agent_name = self._llm_select_agent(question, task_id)
+            
             if self.logging:
-                self.logging.log_step("manager_execution", "Executing manager with fixed context")
+                self.logging.log_step("agent_selection", None, f"LLM selected: {selected_agent_name}")
             
-            # Run manager agent with proper context
-            result = self.manager.run(context)
+            print(f"🤖 LLM selected: {selected_agent_name}")
             
-            # Check if result contains FINAL ANSWER - if so, stop here
-            if "FINAL ANSWER:" in str(result).upper():
-                print("✅ FINAL ANSWER detected - terminating manager execution")
+            # STEP 2: Execute selected agent directly (like inspiration code delegate_to_agent)
+            if selected_agent_name and selected_agent_name in self.specialists:
+                specialist = self.specialists[selected_agent_name]
+                
+                if self.logging:
+                    self.logging.log_step("agent_execution_start", selected_agent_name, f"Executing {selected_agent_name}")
+                
+                print(f"🚀 Executing {selected_agent_name}...")
+                
+                # 🎯 THE KEY FIX: Direct agent.run() like inspiration code
+                result = specialist.run(question)
+                
+                print(f"✅ {selected_agent_name} completed")
+                
+                if self.logging:
+                    result_preview = str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
+                    self.logging.log_step("agent_execution_complete", selected_agent_name, f"Result: {result_preview}")
+                
+                # Get step count for logging
+                step_count = self.get_agent_step_count_safely(specialist)
+                
                 return {
                     "raw_answer": str(result),
-                    "steps": state["steps"] + ["Manager found final answer and terminated"]
-    }
+                    "selected_agent": selected_agent_name,
+                    "execution_successful": True,
+                    "steps": state["steps"] + [f"LLM selected and executed {selected_agent_name} - {step_count} steps"]
+                }
+                
+            elif selected_agent_name == "no agent needed":
+                # LLM decided no specialist needed - use direct LLM (like inspiration one_shot)
+                print("🤖 LLM decided: no specialist needed - using direct LLM")
+                
+                if self.logging:
+                    self.logging.log_step("direct_llm_selected", None, "LLM chose direct answering")
+                
+                return self._direct_llm_execution(question, state)
             
-            # Adopt new memory access method
-            step_count = GAIAAgent.get_agent_step_count_safely(self.manager)
-            
-            if self.logging:
-                self.logging.log_step("manager_complete", f"Manager execution completed - {step_count} steps")
-            
-            return {
-                "raw_answer": str(result),
-                "steps": state["steps"] + [
-                    f"Manager coordination with fixed delegation complete - {step_count} steps"
-                ]
-            }
-            
+            else:
+                # Invalid selection - fallback to direct LLM
+                print(f"⚠️  Invalid agent selection: {selected_agent_name} - using direct LLM")
+                
+                if self.logging:
+                    self.logging.log_step("selection_fallback", None, f"Invalid selection {selected_agent_name}, using direct LLM")
+                
+                return self._direct_llm_execution(question, state)
+                
         except Exception as e:
-            error_msg = f"Manager execution failed: {str(e)}"
+            error_msg = f"Agent selection/execution failed: {str(e)}"
             print(f"❌ {error_msg}")
             
-            # Enhanced error debugging
-            if self.config.context_bridge_debug:
-                context_summary = ContextVariableFlow.get_context_summary()
-                print(f"🔍 Context during error: {context_summary}")
-            
             if self.logging:
-                self.logging.log_step("manager_error", error_msg)
+                self.logging.log_step("selector_error", None, error_msg)
             
-            return {
-                "raw_answer": f"Manager execution error: {str(e)}",
-                "steps": state["steps"] + [error_msg]
-            }
-            
-        finally:
-            # Context bridge cleanup happens automatically via context variables
-            if self.config.context_bridge_debug:
-                context_summary = ContextVariableFlow.get_context_summary()
-                print(f"🌉 Context during manager execution: {context_summary}")
+            # Fallback to direct LLM on any error
+            print("🔄 Falling back to direct LLM execution")
+            return self._direct_llm_execution(question, state)
 
     def _get_current_temporal_context(self) -> str:
         """Get current date/time context for temporal awareness"""
@@ -900,61 +906,66 @@ class GAIAAgent:
             "",
             f"Question: {question}",
             f"Task ID: {task_id}",
-            "🌉 Context bridge is ACTIVE - tools automatically access task context",
+            " Context bridge is active - tools automatically access task context",
             "",
-            "🎯 YOUR MISSION: Solve this step by step",
+            " YOUR MISSION:",
+            "Solve this question step by step and provide a final answer.",
             "",
             "AVAILABLE TOOLS and SPECIALISTS:",
-            "1. get_attachment() - Access files",
-            "2. data_analyst - For calculations", 
-            "3. web_researcher - For checking info",
+            "- get_attachment to access files",
+            "- data_analyst for calculations and data processing",
+            "- web_researcher for current information and web search",
             "",
-            "SIMPLE WORKFLOW:",
-            "1. If files exist → Use get_attachment() first",
-            "2. Read/analyze file content yourself",
-            "3. Do calculations yourself OR delegate simply",
-            "4. Check content yourself OR delegate simply",
-            "4. Provide FINAL ANSWER: [NUMBER]",
+            "WORKFLOW:",
+            "1. If files mentioned use get_attachment first",
+            "2. Read and understand file content",
+            "3. Analyze the problem step by step",
+            "4. Get help from specialists if needed",
+            "5. Provide final answer",
             "",
-            "DELEGATION (if needed):",
-            "Just say: 'I need data_analyst help with calculations'",
-            "Or: 'I need web_researcher to help with checking info'",
+            "GETTING HELP:",
+            "- For calculations ask data_analyst",
+            "- For research ask web_researcher",
+            "- Use simple natural language",
             "",
-            "⚠️  CRITICAL SUCCESS FACTORS:",
-            "- You MUST end with: FINAL ANSWER: [your number]", 
-            "- For this task, answer should be a single integer",
-            "- Don't overthink the delegation format",
-            "- Focus on solving the problem",
+            "IMPORTANT NOTES:",
+            "- Files are automatically linked to this task",
+            "- Focus on solving the problem correctly",
+            "- Work through the solution step by step",
         ]
-        
-        # Add the specific task context
-        if "cell phone towers" in question:
-            context_parts.extend([
-                "",
-                "🗼 CELL TOWER PROBLEM HINTS:",
-                "- Read the file to see house positions",
-                "- Each tower covers 4-mile radius", 
-                "- Find minimum towers to cover all houses",
-                "- This is a classic coverage optimization problem",
-                "- Answer format: FINAL ANSWER: 3 (or whatever you calculate)",
-            ])
         
         # Add RAG examples simply
         if rag_examples:
             context_parts.extend([
                 "",
-                "📚 SIMILAR EXAMPLES:",
+                " SIMILAR EXAMPLES:",
                 f"Previous answer for similar question: {rag_examples[0].get('answer', 'Unknown')}",
                 ""
             ])
         
+        # Clean completion requirements
         context_parts.extend([
             "",
-            "🎯 REMEMBER:",
-            "- End with FINAL ANSWER: [NUMBER]",
-            "- Stop immediately after providing final answer",
-            f"- Your task: {task_id}",
-            ""
+            "FINAL ANSWER REQUIREMENTS:",
+            "",
+            "Format: FINAL ANSWER: [your answer]",
+            "",
+            "Answer guidelines:",
+            "- Numbers: Use integers when specified",
+            "- Text: Be concise",
+            "- No unnecessary words",
+            "",
+            "Examples:",
+            "- FINAL ANSWER: 3",
+            "- FINAL ANSWER: Time-Parking 2: Parallel Universe", 
+            "- FINAL ANSWER: 17.056",
+            "",
+            "SUCCESS FACTORS:",
+            "1. You MUST provide a FINAL ANSWER",
+            "2. Stop after giving your answer",
+            "3. Answer the question directly",
+            "",
+            f"Start solving task {task_id} now"
         ])
         
         final_context = "\n".join(context_parts)
