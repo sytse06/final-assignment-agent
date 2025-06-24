@@ -30,9 +30,7 @@ from smolagents import (
 # Import agent context system
 from agent_context import (
     ContextVariableFlow,
-    create_context_aware_tools,
-    with_context,
-    ensure_task_context
+    create_context_aware_tools
 )
 
 # Import retriever system
@@ -1085,84 +1083,6 @@ class GAIAAgent:
             self.logging.log_step("gaia_format_final", f"Final GAIA formatted answer: '{answer}'")
         
         return answer
-    
-    # ============================================================================
-    # CONVENIENCE FUNCTION WITH CONTEXT
-    # ============================================================================
-    
-    @with_context
-    def process_question(self, question: str, task_id: str = None) -> Dict:
-        """Core production method to process a single question with context"""
-        if task_id is None:
-            task_id = str(uuid.uuid4())
-        
-        initial_state = {
-            "task_id": task_id,
-            "question": question,
-            "steps": []
-        }
-        
-        # Start logging if available
-        if self.logging:
-            self.logging.start_task(task_id, model_used=self.config.model_name)
-            self.logging.log_step("question_received", f"Processing question with context bridge: {question}")
-        
-        try:
-            if self.logging:
-                self.logging.log_step("workflow_start", "Starting LangGraph workflow with context bridge")
-            
-            result = self.workflow.invoke(initial_state)
-            
-            if self.logging:
-                self.logging.log_step("workflow_complete", "Workflow completed successfully")
-            
-            # Add metadata with context bridge info
-            result.update({
-                "task_id": task_id,
-                "question": question,
-                "execution_successful": True,
-                "context_bridge_used": self.config.enable_context_bridge
-            })
-            
-            # Log completion
-            if self.logging:
-                manual_steps = len(self.logging.manual_steps)
-                self.logging.log_question_result(
-                    task_id=task_id,
-                    question=question,
-                    final_answer=result.get("final_answer", ""),
-                    total_steps=manual_steps,
-                    success=True
-                )
-                self.logging.log_step("execution_complete", f"Question execution with context bridge completed - {manual_steps} logged steps")
-            
-            return result
-            
-        except Exception as e:
-            error_msg = f"Workflow execution failed: {str(e)}"
-            
-            if self.logging:
-                self.logging.log_step("execution_error", error_msg)
-                self.logging.log_question_result(
-                    task_id=task_id,
-                    question=question,
-                    final_answer="ERROR",
-                    total_steps=len(self.logging.manual_steps) if self.logging else 0,
-                    success=False
-                )
-            
-            return {
-                "task_id": task_id,
-                "question": question,
-                "final_answer": "Execution failed",
-                "error": error_msg,
-                "execution_successful": False,
-                "context_bridge_used": self.config.enable_context_bridge
-            }
-        finally:
-            # Ensure context cleanup
-            if self.config.enable_context_bridge:
-                ContextVariableFlow.clear_context()
 
 # ============================================================================
 # MAIN EXECUTION

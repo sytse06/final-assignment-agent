@@ -20,8 +20,7 @@ except ImportError:
 class ContextVariableFlow:
     """
     Thread-safe context management for LangGraph → SmolagAgents information flow.
-    Solves the critical problem of passing task_id and context from LangGraph state
-    to SmolagAgent tools that need this information to function correctly.
+    Passes task_id and context from LangGraph state to SmolagAgent tools.
     """
     
     # Core context variables
@@ -291,157 +290,168 @@ def create_context_aware_tools(shared_tools: Dict) -> List:
     context_aware_tools = []
     
     for tool_name, base_tool in shared_tools.items():
-        context_tool = create_safe_context_wrapper(base_tool)
+        context_tool = create_context_wrapper(base_tool)
         context_aware_tools.append(context_tool)
         print(f"✅ Created context-aware {tool_name} with parameter filtering")
     
     return context_aware_tools
 
-def create_safe_context_wrapper(base_tool):
-    """Create context-aware wrapper that automatically filters unknown parameters"""
+def create_context_wrapper(base_tool):
+    """Create SmolagAgents-compliant context-aware tool wrapper"""
     
-    class SafeContextAwareTool(Tool):
+    class ContextAwareTool(Tool):
+        """SmolagAgents-compliant Tool wrapper with context bridge integration"""
+        
         def __init__(self, base_tool):
             self.base_tool = base_tool
-            self.name = getattr(base_tool, 'name', 'unknown_tool')
-            self.description = getattr(base_tool, 'description', '')
             
-            # Required Tool attributes - copy from base tool or use defaults
+            # Set required Tool attributes BEFORE super().__init__()
+            self.name = getattr(base_tool, 'name', 'unknown_tool')
+            self.description = getattr(base_tool, 'description', 'Context-aware tool wrapper')
             self.inputs = getattr(base_tool, 'inputs', {
-                "query": {"type": "string", "description": "Input for the tool"}
+                "query": {"type": "string", "description": "Input query"}
             })
             self.output_type = getattr(base_tool, 'output_type', "string")
             
-            # Initialize base Tool class AFTER setting required attributes
+            # Ensure inputs have proper nullable flags for SmolagAgents validation
+            self._ensure_inputs_have_nullable_flags()
+            
+            # Initialize parent Tool class (validation occurs here)
             super().__init__()
             
-            # Cache the base tool's parameter signature for efficiency
-            self._cached_signature = None
-            
-            # Dynamically create forward method with correct signature
-            self._create_dynamic_forward_method()
+            # Create compliant forward method
+            self._create_compliant_forward_method()
         
-        def _create_dynamic_forward_method(self):
-            """Dynamically create forward method that matches inputs exactly"""
+        def _ensure_inputs_have_nullable_flags(self):
+            """Ensure all inputs have proper nullable flags for SmolagAgents validation"""
+            updated_inputs = {}
             
-            # Get the expected parameters from inputs
-            expected_params = list(self.inputs.keys())
+            for key, input_schema in self.inputs.items():
+                updated_schema = input_schema.copy()
+                
+                # Add nullable flag if missing (assume nullable for compatibility)
+                if 'nullable' not in updated_schema:
+                    updated_schema['nullable'] = True
+                    
+                updated_inputs[key] = updated_schema
             
-            # Create parameter string for the method signature
-            if expected_params:
-                params_str = ", ".join(f"{param}=None" for param in expected_params)
-                method_code = f"""
-def forward(self, {params_str}):
-    return self._execute_with_context({', '.join(f'{param}={param}' for param in expected_params)})
-"""
+            self.inputs = updated_inputs
+        
+        def _create_compliant_forward_method(self):
+            """Create forward method with exact signature matching self.inputs"""
+            input_keys = list(self.inputs.keys())
+            
+            if not input_keys:
+                def forward_impl(self) -> Any:
+                    return self._execute_with_context(**{})
             else:
-                method_code = """
-def forward(self):
-    return self._execute_with_context()
-"""
+                def forward_impl(self, **kwargs) -> Any:
+                    filtered_kwargs = {k: v for k, v in kwargs.items() if k in input_keys}
+                    return self._execute_with_context(**filtered_kwargs)
             
-            # Execute the dynamic method creation
-            namespace = {'self': self}
-            exec(method_code, namespace)
+            # Set signature that matches SmolagAgents validation requirements
+            if input_keys:
+                import inspect
+                parameters = [inspect.Parameter('self', inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+                
+                for key in input_keys:
+                    # Check if input is nullable in schema
+                    input_schema = self.inputs.get(key, {})
+                    is_nullable = input_schema.get('nullable', False)
+                    
+                    if is_nullable:
+                        # If input is nullable, use default=None
+                        param = inspect.Parameter(key, inspect.Parameter.KEYWORD_ONLY, default=None)
+                    else:
+                        # If input is required, no default value
+                        param = inspect.Parameter(key, inspect.Parameter.KEYWORD_ONLY)
+                    
+                    parameters.append(param)
+                
+                # Set signature on function before binding
+                forward_impl.__signature__ = inspect.Signature(parameters)
             
-            # Bind the method to this instance
+            # Bind method to instance
             import types
-            self.forward = types.MethodType(namespace['forward'], self)
+            self.forward = types.MethodType(forward_impl, self)
         
         def _execute_with_context(self, **kwargs):
-            """Execute the base tool with context and parameter filtering"""
+            """Execute base tool with context bridge and parameter filtering"""
             
-            # Get context information
+            # Get context from bridge
             try:
                 context = ContextVariableFlow.get_task_context()
-                task_id = context.get('task_id') if context else None
-                question = context.get('question') if context else None
-            except:
+                task_id = context.get('task_id')
+                question = context.get('question')
+            except Exception:
                 task_id = None
                 question = None
             
-            # Set task_id for tools that need it (like GetAttachmentTool)
+            # Set task_id for GetAttachmentTool
             if task_id and hasattr(self.base_tool, 'attachment_for'):
                 try:
-                    self.base_tool.attachment_for(task_id)
+                    self.base_tool.attachment_tool(task_id)
                     print(f"🔧 Set task_id {task_id} for {self.name}")
                 except Exception as e:
                     print(f"⚠️ Could not set task_id for {self.name}: {e}")
             
-            # Filter kwargs to only include parameters the base tool accepts
-            valid_params = self._get_valid_parameters()
-            filtered_kwargs = {}
+            # Filter parameters to base tool's signature
+            valid_params = self._get_base_tool_parameters()
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_params and v is not None}
             
-            for param_name, param_value in kwargs.items():
-                if param_value is not None and param_name in valid_params:
-                    filtered_kwargs[param_name] = param_value
-                elif param_value is not None:
-                    # Log filtered parameters for debugging
-                    print(f"🔧 {self.name}: Filtered parameter '{param_name}'")
+            # Add context query if needed
+            if 'query' in valid_params and question and 'query' not in filtered_kwargs:
+                filtered_kwargs['query'] = question
             
-            # Enhance query with context if possible
-            if 'query' in valid_params and question:
-                if 'query' not in filtered_kwargs or not filtered_kwargs['query']:
-                    filtered_kwargs['query'] = question
-            
+            # Execute with fallback strategy
             try:
-                # Call base tool with filtered parameters
-                result = self.base_tool.forward(**filtered_kwargs)
-                return result
-                
-            except Exception as e:
-                print(f"❌ {self.name} execution failed: {e}")
-                raise
+                return self.base_tool.forward(**filtered_kwargs)
+            except TypeError as e:
+                if "unexpected keyword argument" in str(e):
+                    return self._fallback_execution(**filtered_kwargs)
+                else:
+                    raise
         
-        def _get_valid_parameters(self):
-            """Get the parameter names that the base tool's forward method accepts"""
-            if self._cached_signature is None:
-                try:
-                    sig = inspect.signature(self.base_tool.forward)
-                    self._cached_signature = set(sig.parameters.keys())
-                except Exception:
-                    # Fallback: assume common parameters
-                    self._cached_signature = {'url', 'query', 'task', 'question', 'fmt', 'format'}
+        def _get_base_tool_parameters(self):
+            """Get base tool's accepted parameters"""
+            try:
+                import inspect
+                sig = inspect.signature(self.base_tool.forward)
+                return {name for name in sig.parameters.keys() if name != 'self'}
+            except Exception:
+                # Fallback based on tool type
+                tool_name = self.name.lower()
+                if 'search' in tool_name or 'web' in tool_name:
+                    return {'query', 'url'}
+                elif 'attachment' in tool_name or 'file' in tool_name:
+                    return {'query', 'task_id'}
+                elif 'content' in tool_name:
+                    return {'query', 'url', 'format'}
+                else:
+                    return {'query', 'question', 'input'}
+        
+        def _fallback_execution(self, **kwargs):
+            """Progressive parameter fallback"""
+            param_order = ['query', 'question', 'input', 'url', 'task_id']
             
-            return self._cached_signature
+            for num_params in range(len(kwargs), 0, -1):
+                test_params = {}
+                for param in param_order:
+                    if param in kwargs and len(test_params) < num_params:
+                        test_params[param] = kwargs[param]
+                
+                try:
+                    return self.base_tool.forward(**test_params)
+                except TypeError:
+                    continue
+            
+            # Final attempt with no parameters
+            try:
+                return self.base_tool.forward()
+            except Exception as e:
+                raise RuntimeError(f"All parameter combinations failed for {self.name}: {e}")
     
-    return SafeContextAwareTool(base_tool)
-
-
-# Convenience functions for common patterns
-def with_context(func):
-    """
-    Decorator to ensure function runs with proper context handling.
-    """
-    def wrapper(*args, **kwargs):
-        if not ContextVariableFlow.is_context_active():
-            print("⚠️  Function called without active context")
-        
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            current_context = ContextVariableFlow.get_context_summary()
-            print(f"❌ Function failed with context: {current_context}")
-            raise
-    
-    return wrapper
-
-
-def ensure_task_context(task_id: str = None, question: str = None):
-    """
-    Ensure minimum context is available, creating if necessary.
-    """
-    if not ContextVariableFlow.is_context_active():
-        if not task_id:
-            task_id = str(uuid.uuid4())
-        if not question:
-            question = "Context restoration"
-        
-        ContextVariableFlow.set_task_context(task_id, question, {"restored": True})
-        print(f"🔄 Context restored: {task_id}")
-    
-    return ContextVariableFlow.get_task_context()
-
+    return ContextAwareTool(base_tool)
 
 if __name__ == "__main__":
     print("🌉 Context Bridge Module - FIXED VERSION")
