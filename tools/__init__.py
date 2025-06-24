@@ -1,62 +1,65 @@
-# tools/__init__.py
-# Simple tool collection for GAIA agent system
-
-# Core GAIA tools
+# Import custom tools
 try:
     from .get_attachment_tool import GetAttachmentTool
-    print("✅ GetAttachmentTool loaded successfully")
-except ImportError as e:
-    print(f"⚠️  GetAttachmentTool import failed: {e}")
-    GetAttachmentTool = None
-
-try:
     from .content_retriever_tool import ContentRetrieverTool
-    print("✅ ContentRetrieverTool loaded successfully")
+    print("✅ Custom tools loaded in __init__.py")
 except ImportError as e:
-    print(f"⚠️  ContentRetrieverTool import failed: {e}")
+    print(f"⚠️ Custom tools failed to load in __init__.py: {e}")
+    GetAttachmentTool = None
     ContentRetrieverTool = None
 
-# Research tools (optional)
+# Import LangChain tools - ONLY what actually exists
 try:
-    from .langchain_tools import (
-        search_wikipedia, 
-        search_arxiv,
-        search_web_serper,
-        final_answer,
-        ALL_LANGCHAIN_TOOLS
-    )
-    print("✅ Langchain research tools (Serper/Wikipedia/ArXiv) loaded successfully")
-    LANGCHAIN_TOOLS_AVAILABLE = True
+    from .langchain_tools import ALL_LANGCHAIN_TOOLS, get_langchain_tools
+    LANGCHAIN_TOOLS_AVAILABLE = len(ALL_LANGCHAIN_TOOLS) > 1  # More than just final_answer
+    print(f"✅ LangChain tools re-exported in __init__.py: {len(ALL_LANGCHAIN_TOOLS)} tools")
 except ImportError as e:
-    print(f"⚠️ Langchain research tools not available: {e}")
-    search_wikipedia = None
-    search_arxiv = None
-    search_web_serper = None
-    final_answer= None
+    print(f"⚠️ LangChain tools failed to load in __init__.py: {e}")
     ALL_LANGCHAIN_TOOLS = []
+    get_langchain_tools = lambda: []
     LANGCHAIN_TOOLS_AVAILABLE = False
 
-# Export available tools
-__all__ = []
+# Define what gets exported - ONLY what actually exists
+__all__ = [
+    # Custom tools
+    'GetAttachmentTool',
+    'ContentRetrieverTool',
+    
+    # LangChain tools - only the list, not individual tools
+    'ALL_LANGCHAIN_TOOLS',
+    'get_langchain_tools',
+    'LANGCHAIN_TOOLS_AVAILABLE'
+]
 
-if GetAttachmentTool:
-    __all__.append('GetAttachmentTool')
-
-if ContentRetrieverTool:
-    __all__.append('ContentRetrieverTool')
-
-if LANGCHAIN_TOOLS_AVAILABLE:
-    __all__.extend(['search_wikipedia', 'search_arxiv', 'search_web_serper', 'ALL_LANGCHAIN_TOOLS'])
-
-# Tool status for debugging
 def get_tool_status():
-    """Returns status of tool availability"""
+    """Get tool availability status"""
     return {
         'GetAttachmentTool': GetAttachmentTool is not None,
         'ContentRetrieverTool': ContentRetrieverTool is not None,
         'research_tools': LANGCHAIN_TOOLS_AVAILABLE,
-        'total_core_tools': sum([GetAttachmentTool is not None, ContentRetrieverTool is not None]),
-        'total_research_tools': 4 if LANGCHAIN_TOOLS_AVAILABLE else 0
+        'total_core_tools': sum([
+            GetAttachmentTool is not None,
+            ContentRetrieverTool is not None
+        ]),
+        'total_research_tools': len(ALL_LANGCHAIN_TOOLS) - 1 if LANGCHAIN_TOOLS_AVAILABLE else 0  # Exclude final_answer
     }
 
+# Print status on import
 print(f"🔧 GAIA Tools Status: {get_tool_status()}")
+
+def get_all_tools():
+    """Get all available tools (custom + langchain)"""
+    tools = []
+    
+    # Add custom tools
+    if GetAttachmentTool:
+        tools.append(GetAttachmentTool())
+    if ContentRetrieverTool:
+        tools.append(ContentRetrieverTool())
+    
+    # Add LangChain tools
+    tools.extend(ALL_LANGCHAIN_TOOLS)
+    
+    return tools
+
+print(f"🔧 Tools package initialized successfully")

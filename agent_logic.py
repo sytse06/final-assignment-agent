@@ -21,8 +21,6 @@ from smolagents import (
     CodeAgent,
     ToolCallingAgent,
     LiteLLMModel,
-    GoogleSearchTool,
-    VisitWebpageTool,
     AgentLogger,
     LogLevel
 )
@@ -43,13 +41,16 @@ from agent_logging import AgentLoggingSetup
 try:
     from tools import GetAttachmentTool, ContentRetrieverTool
     CUSTOM_TOOLS_AVAILABLE = True
+    print("✅ Custom tools imported successfully")
 except ImportError:
     print("⚠️  Custom tools not available - using base tools only")
     CUSTOM_TOOLS_AVAILABLE = False
+
 try:
-    from tools import ALL_LANGCHAIN_TOOLS
+    # Fixed: Import from the specific langchain_tools submodule
+    from tools.langchain_tools import ALL_LANGCHAIN_TOOLS
     LANGCHAIN_TOOLS_AVAILABLE = True
-    print("✅ LangChain tools imported successfully")
+    print(f"✅ LangChain tools imported successfully: {len(ALL_LANGCHAIN_TOOLS)} tools")
 except ImportError as e:
     print(f"⚠️  LangChain tools not available: {e}")
     ALL_LANGCHAIN_TOOLS = []
@@ -87,6 +88,7 @@ class GAIAConfig:
     # Context settings
     enable_context_bridge: bool = True
     context_bridge_debug: bool = True
+    enable_grounding_tools: bool = False
     
     # Logging
     enable_csv_logging: bool = True
@@ -390,7 +392,15 @@ class GAIAAgent:
 
         specialists["web_researcher"] = ToolCallingAgent(
             name="web_researcher",
-            description="Specialized web researcher for information gathering, content processing, and document analysis. Focuses on finding and processing information, delegates computational analysis to data_analyst.",
+            description="""SPECIALIZED INFORMATION RESEARCHER. Your role is to find information using search tools, NOT to write code.
+
+Available tools:
+- search_wikipedia: For reliable information lookup
+- search_web_serper: For current web information  
+- search_arxiv: For academic research
+- final_answer: When you have the definitive answer
+
+CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code executor.""",
             tools=web_tools,  # Web search + content processing + file access
             model=self.model,
             max_steps=self.config.max_agent_steps,
@@ -406,22 +416,33 @@ class GAIAAgent:
         return specialists
 
     def _create_shared_tools(self):
-        """Create shared tool instance"""
+        """Create shared tool instances with specialized architecture"""
         shared_tools = {}
         
         if CUSTOM_TOOLS_AVAILABLE:
             try:
+                # Core GAIA-optimized content retriever
+                shared_tools['content_retriever'] = ContentRetrieverTool()
+                print("✅ ContentRetrieverTool (GAIA-optimized) created successfully")
+            except Exception as e:
+                print(f"❌ ContentRetrieverTool failed: {e}")
+            
+            try:
+                # File attachment tool
                 shared_tools['get_attachment'] = GetAttachmentTool()
                 print("✅ GetAttachmentTool created successfully")
             except Exception as e:
                 print(f"❌ GetAttachmentTool failed: {e}")
-                
-            try:
-                shared_tools['content_retriever'] = ContentRetrieverTool()
-                print("✅ ContentRetrieverTool created successfully")
-            except Exception as e:
-                print(f"❌ ContentRetrieverTool failed: {e}")
-                
+            
+            # Optional: Add grounding tool if enabled
+            if getattr(self.config, 'enable_grounding_tools', False):
+                try:
+                    from tools.content_grounding_tool import ContentGroundingTool
+                    shared_tools['content_grounding'] = ContentGroundingTool()
+                    print("✅ ContentGroundingTool created successfully")
+                except Exception as e:
+                    print(f"❌ ContentGroundingTool failed: {e}")
+            
             print(f"🔧 Final shared_tools keys: {list(shared_tools.keys())}")
         else:
             print("⚠️  Custom tools not available - shared_tools will be empty")
@@ -429,15 +450,16 @@ class GAIAAgent:
         return shared_tools
     
     def _build_workflow(self):
-        """Build LangGraph workflow with smart routing"""
+        """Build LangGraph workflow with smart routing - Updated with SmolagAgents pattern"""
         builder = StateGraph(GAIAState)
         
         if self.config.enable_smart_routing:
-            # Smart routing workflow
+            # Smart routing workflow with proper agent selection/delegation separation
             builder.add_node("read_question", self._read_question_node)
             builder.add_node("complexity_check", self._complexity_check_node)
             builder.add_node("one_shot_answering", self._one_shot_answering_node)
             builder.add_node("agent_selector", self._agent_selector_node)
+            builder.add_node("delegate_to_agent", self._delegate_to_agent_node)  # NEW
             builder.add_node("format_answer", self._format_answer_node)
             
             # Routing flow
@@ -450,23 +472,32 @@ class GAIAAgent:
                 self._route_by_complexity,
                 {
                     "simple": "one_shot_answering",
-                    "complex": "agent_selector"
+                    "complex": "agent_selector"  # First select agent
                 }
             )
             
-            # Both paths converge to formatting
+            # Agent workflow: select → delegate → format
+            builder.add_edge("agent_selector", "delegate_to_agent")  # NEW: Selection → Execution
+            builder.add_edge("delegate_to_agent", "format_answer")    # NEW: Execution → Format
+            
+            # Simple path: direct to formatting
             builder.add_edge("one_shot_answering", "format_answer")
-            builder.add_edge("agent_selector", "format_answer")
+            
+            # Both paths end at formatting
             builder.add_edge("format_answer", END)
+            
         else:
-            # Original linear workflow
+            # Original linear workflow - Updated with proper separation
             builder.add_node("read_question", self._read_question_node)
             builder.add_node("agent_selector", self._agent_selector_node)
+            builder.add_node("delegate_to_agent", self._delegate_to_agent_node)  # NEW
             builder.add_node("format_answer", self._format_answer_node)
             
+            # Linear flow: read → select → delegate → format
             builder.add_edge(START, "read_question")
             builder.add_edge("read_question", "agent_selector")
-            builder.add_edge("manager_execution", "format_answer")
+            builder.add_edge("agent_selector", "delegate_to_agent")  # NEW: Proper separation
+            builder.add_edge("delegate_to_agent", "format_answer")   # NEW: Execution → Format
             builder.add_edge("format_answer", END)
         
         return builder.compile()
@@ -767,91 +798,133 @@ class GAIAAgent:
             }
 
     def _agent_selector_node(self, state: GAIAState):
-        """Select and execute specialist agent using LLM + RAG examples"""
+        """Select appropriate agent based on question type - SELECTION ONLY with step logging"""
         
-        question = state["question"]
-        task_id = state.get("task_id", "")
+        # Log agent selection start
+        if self.logging:
+            self.logging.log_step("agent_selector", "Selecting appropriate specialist agent")
+        
+        print(f"🎯 Agent Selection for: {state['question'][:100]}...")
+        
+        # Use existing similar examples from state (retrieved in earlier nodes)
         similar_examples = state.get("similar_examples", [])
         
-        # Update context and logging
-        if self.config.enable_context_bridge:
-            ContextVariableFlow.update_routing_path("agent_selector")
-            ContextVariableFlow.add_workflow_step(task_id, "agent_selector", "Starting agent selection and execution")
+        # Build examples context for LLM
+        examples_context = ""
+        if similar_examples:
+            examples_context = "\n\nSimilar GAIA examples:\n"
+            for i, example in enumerate(similar_examples[:3], 1):
+                examples_context += f"{i}. Q: {example.get('question', '')[:100]}...\n"
+                examples_context += f"   A: {example.get('answer', '')}\n"
         
-        if self.logging:
-            self.logging.set_routing_path("agent_selector")
-            self.logging.log_step("agent_selector_start", "Starting agent selection")
+        selection_prompt = f"""
+        Based on these successful GAIA examples, select the best agent for this question:
         
-        # Set context for file access
-        if self.config.enable_context_bridge and task_id:
-            ContextVariableFlow.set_task_context(
-                task_id=task_id,
-                question=question,
-                metadata={
-                    "complexity": state.get("complexity", "complex"),
-                    "routing_path": "agent_selector"
-                }
-            )
+        QUESTION: {state["question"]}
+        {examples_context}
+        
+        Available agents:
+        - data_analyst: Python code execution, file analysis, calculations
+        - web_researcher: Google search, web browsing, current information
+        
+        Consider:
+        1. Does the question require file processing? → data_analyst
+        2. Does it need web search or current information? → web_researcher
+        3. What type of question succeeded in similar examples?
+        
+        Reply with just: data_analyst OR web_researcher
+        """
         
         try:
-            # LLM selects agent using RAG examples
-            selected_agent = self._llm_select_agent(question, similar_examples)
-            
+            # Log agent selection step
             if self.logging:
-                self.logging.log_step("agent_selected", f"Selected: {selected_agent}")
+                self.logging.log_step("agent_selection_prompt", "LLM selecting best agent based on question analysis")
             
-            # Execute selected agent directly
-            specialist = self.specialists[selected_agent]
+            # Get agent selection from LLM
+            response = self.orchestration_model.invoke([HumanMessage(content=selection_prompt)])
+            selected_agent = response.content.strip().lower()
             
-            # Get initial step count
-            initial_steps = get_agent_step_count(specialist)
+            # Validate selection
+            if selected_agent not in self.specialists:
+                print(f"⚠️ Invalid agent selection '{selected_agent}', using data_analyst")
+                selected_agent = "data_analyst"
             
+            print(f"🤖 Selected agent: {selected_agent}")
+            
+            # Log successful selection
             if self.logging:
-                self.logging.log_step("agent_execution_start", f"Agent starting with {initial_steps} existing steps")
+                self.logging.log_step("agent_selected", f"Selected agent: {selected_agent}")
             
-            # Execute agent
-            result = specialist.run(question)
-            
-            # Calculate agent steps executed
-            final_steps = get_agent_step_count(specialist)
-            agent_steps_executed = final_steps - initial_steps
-            
-            # Bring agent steps back to context bridge
-            if self.config.enable_context_bridge:
-                ContextVariableFlow.add_agent_steps(
-                    task_id, 
-                    selected_agent, 
-                    agent_steps_executed, 
-                    f"Agent execution: {selected_agent}"
-                )
-            
-            if self.logging:
-                self.logging.log_step("agent_execution_complete", f"Agent executed {agent_steps_executed} steps")
-                self.logging.log_step("agent_complete", "Execution completed")
-            
+            # ONLY RETURN SELECTION - NO EXECUTION
             return {
-                "raw_answer": str(result),
+                **state,
                 "selected_agent": selected_agent,
-                "agent_steps_executed": agent_steps_executed,  # For backward compatibility
-                "execution_successful": True,
-                "steps": state["steps"] + [f"Agent {selected_agent} executed {agent_steps_executed} steps"]
+                "similar_examples": similar_examples
             }
             
         except Exception as e:
-            error_msg = f"Agent selection failed: {str(e)}"
+            print(f"❌ Agent selection failed: {e}")
+            print("🔄 Falling back to data_analyst")
             
-            # NEW: Log error via context bridge
-            if self.config.enable_context_bridge:
-                ContextVariableFlow.add_workflow_step(task_id, "agent_error", error_msg)
-            
+            # Log the failure and fallback
             if self.logging:
-                self.logging.log_step("agent_error", error_msg)
+                self.logging.log_step("agent_selection_failed", f"Selection failed: {e}, using data_analyst fallback")
             
             return {
-                "raw_answer": error_msg,
+                **state,
+                "selected_agent": "data_analyst",
+                "similar_examples": similar_examples,
+                "selection_fallback": True
+            }
+
+    def _delegate_to_agent_node(self, state: GAIAState):
+        """Execute the pre-selected agent - EXECUTION ONLY"""
+        selected_agent = state.get("selected_agent", "data_analyst")
+        
+        # Log agent execution start
+        if self.logging:
+            self.logging.log_step("delegate_to_agent", f"Executing agent: {selected_agent}")
+        
+        print(f"🚀 Executing agent: {selected_agent}")
+        
+        try:
+            # Get the specialist agent
+            specialist = self.specialists[selected_agent]
+            
+            # Log agent execution start
+            if self.logging:
+                self.logging.log_step("agent_execution_start", f"Agent execution: {selected_agent}")
+            
+            # Execute using SmolagAgents pattern
+            result = specialist.run(task=state["question"])
+            
+            # Log agent execution complete (without estimating steps)
+            if self.logging:
+                self.logging.log_step("agent_execution_complete", f"Agent {selected_agent} completed")
+            
+            print(f"✅ Agent {selected_agent} completed execution")
+            
+            return {
+                **state,
+                "agent_used": selected_agent,
+                "raw_answer": result,
+                "execution_successful": True
+            }
+            
+        except Exception as e:
+            print(f"❌ Agent execution failed: {e}")
+            print("🔄 Falling back to error response")
+            
+            # Log the failure
+            if self.logging:
+                self.logging.log_step("agent_execution_failed", f"Agent {selected_agent} failed: {str(e)}")
+            
+            return {
+                **state,
+                "agent_used": selected_agent,
+                "raw_answer": f"Agent execution failed: {str(e)}",
                 "execution_successful": False,
-                "agent_steps_executed": 0,
-                "steps": state["steps"] + [error_msg]
+                "execution_error": True
             }
 
     def _llm_select_agent(self, question: str, similar_examples: List[Dict] = None) -> str:

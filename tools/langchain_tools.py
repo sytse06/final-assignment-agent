@@ -1,124 +1,96 @@
 # tools/langchain_tools.py
+# Simple LangChain tools using load_tools() approach
 
-from smolagents import tool
-import requests
-from urllib.parse import urljoin
-import tempfile
-import base64
-from typing import Optional, Dict, Any
 import os
-from langchain_community.document_loaders import WikipediaLoader
-from langchain_community.document_loaders import ArxivLoader
-from langchain_community.utilities import GoogleSerperAPIWrapper
+from smolagents import Tool, tool
 
-@tool
-def search_web_serper(query: str, num_results: int = 5) -> str:
-    """Search the web using Serper API for current information and real-time data.
+# LangChain imports
+try:
+    from langchain.agents import load_tools
+    from langchain_community.document_loaders import WikipediaLoader, ArxivLoader
+    from langchain_community.utilities import GoogleSerperAPIWrapper, WikipediaAPIWrapper
+    from langchain_community.tools import WikipediaQueryRun
+    from langchain_core.tools import Tool as LangChainTool
+    LANGCHAIN_IMPORTS_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ LangChain imports failed: {e}")
+    LANGCHAIN_IMPORTS_AVAILABLE = False
+
+# ============================================================================
+# SIMPLE LANGCHAIN TOOLS USING load_tools()
+# ============================================================================
+
+def create_simple_langchain_tools():
+    """Create LangChain tools using the simple load_tools() approach"""
+    tools = []
     
-    Perfect for current events, recent news, real-time information.
+    if not LANGCHAIN_IMPORTS_AVAILABLE:
+        print("❌ LangChain imports not available - skipping tool creation")
+        return tools
     
-    Args:
-        query: Search query for current/recent information
-        num_results: Number of results to return (1-10)
-    """
     try:
-        api_key = os.getenv("SERPER_API_KEY")
-        if not api_key:
-            return "❌ SERPER_API_KEY not set"
+        # 1. Wikipedia tool (no API key required)
+        try:
+            wikipedia_tools = load_tools(["wikipedia"])
+            if wikipedia_tools:
+                wikipedia_tool = Tool.from_langchain(wikipedia_tools[0])
+                tools.append(wikipedia_tool)
+                print("✅ Wikipedia tool loaded successfully")
+        except Exception as e:
+            print(f"⚠️ Wikipedia tool failed: {e}")
+        
+        # 2. SerpAPI tool (requires SERPAPI_API_KEY or SERPER_API_KEY)
+        serpapi_key = os.getenv("SERPERAPI_API_KEY") or os.getenv("SERP_API_KEY")
+        if serpapi_key:
+            try:
+                serpapi_tools = load_tools(["serpapi"])
+                if serpapi_tools:
+                    search_tool = Tool.from_langchain(serpapi_tools[0])
+                    tools.append(search_tool)
+                    print("✅ SerpAPI search tool loaded successfully")
+            except Exception as e:
+                print(f"⚠️ SerpAPI tool failed: {e}")
+        else:
+            print("⚠️ SERPAPI_API_KEY or SERPER_API_KEY not set, skipping web search tool")
+        
+        # 3. ArXiv tool (requires arxiv + pymupdf packages)
+        try:
+            # Check for required dependencies
+            import arxiv
+            import fitz  # PyMuPDF
+            
+            arxiv_tools = load_tools(["arxiv"])
+            if arxiv_tools:
+                arxiv_tool = Tool.from_langchain(arxiv_tools[0])
+                tools.append(arxiv_tool)
+                print("✅ ArXiv tool loaded successfully")
+        except ImportError as e:
+            missing_deps = []
+            try:
+                import arxiv
+            except ImportError:
+                missing_deps.append("arxiv")
+            
+            try:
+                import fitz
+            except ImportError:
+                missing_deps.append("pymupdf")
+            
+            print(f"⚠️ ArXiv tool failed - missing dependencies: {', '.join(missing_deps)}")
+            print(f"   Install with: pip install arxiv pymupdf langchain-community")
+        except Exception as e:
+            print(f"⚠️ ArXiv tool failed: {e}")
+            
+    except ImportError as e:
+        print(f"❌ langchain.agents not available: {e}")
+        print("   Install with: pip install langchain")
+    
+    return tools
 
-        # Validate and limit num_results
-        num_results = min(max(1, num_results), 3)
-        
-        search = GoogleSerperAPIWrapper()
-        
-        # Get structured results
-        results = search.results(query)
-        formatted_results = []
-        
-        # Add knowledge graph, answer box, and search results
-        if "knowledgeGraph" in results:
-            kg = results["knowledgeGraph"]
-            formatted_results.append(f"Knowledge: {kg.get('description', '')}")
-        
-        if "answerBox" in results:
-            ab = results["answerBox"]
-            formatted_results.append(f"Answer: {ab.get('answer', ab.get('snippet', ''))}")
-        
-        if "organic" in results:
-            for i, result in enumerate(results["organic"][:num_results], 1):
-                formatted_results.append(f"{i}. {result.get('title')}: {result.get('snippet')}")
-        
-        if not formatted_results:
-            return f"No web search results found for: {query}"
-        
-        return f"Web search for '{query}':\n" + "\n".join(formatted_results)
-        
-    except Exception as e:
-        return f"Web search error: {str(e)}"
+# ============================================================================
+# NATIVE SMOLAGENTS TOOL
+# ============================================================================
 
-@tool
-def search_wikipedia(query: str, max_docs: int = 2) -> str:
-    """Search Wikipedia for reliable information.
-    
-    Perfect for general knowledge questions, historical facts, scientific concepts.
-    
-    Args:
-        query: What to search for on Wikipedia
-        max_docs: Maximum number of articles to return (1-5)
-    """
-    try:
-        
-        max_docs = min(max(1, max_docs), 5)  # Limit between 1-5
-        search_docs = WikipediaLoader(query=query, load_max_docs=max_docs).load()
-        
-        if not search_docs:
-            return f"No Wikipedia articles found for: {query}"
-        
-        formatted_results = "\n\n---\n\n".join([
-            f'<Document source="{doc.metadata["source"]}" title="{doc.metadata.get("title", "")}">\n{doc.page_content[:1500]}\n</Document>'
-            for doc in search_docs
-        ])
-        
-        return f"Wikipedia search results for '{query}':\n\n{formatted_results}"
-        
-    except ImportError:
-        return "WikipediaLoader not available. Install: pip install langchain-community"
-    except Exception as e:
-        return f"Wikipedia search error: {str(e)}"
-
-
-@tool
-def search_arxiv(query: str, max_papers: int = 3) -> str:
-    """Search ArXiv for scientific papers and research.
-    
-    Excellent for academic questions, scientific methodology, recent research.
-    
-    Args:
-        query: Scientific topic or paper to search for
-        max_papers: Maximum number of papers to return (1-5)
-    """
-    try:        
-        max_papers = min(max(1, max_papers), 5)  # Limit between 1-5
-        search_docs = ArxivLoader(query=query, load_max_docs=max_papers).load()
-        
-        if not search_docs:
-            return f"No ArXiv papers found for: {query}"
-        
-        formatted_results = "\n\n---\n\n".join([
-            f'<Paper source="{doc.metadata["source"]}" authors="{doc.metadata.get("authors", "")}">\n'
-            f'Title: {doc.metadata.get("title", "")}\n'
-            f'Summary: {doc.page_content[:1000]}\n'
-            f'</Paper>'
-            for doc in search_docs
-        ])
-        
-        return f"ArXiv search results for '{query}':\n\n{formatted_results}"
-        
-    except ImportError:
-        return "ArxivLoader not available. Install: pip install langchain-community"
-    except Exception as e:
-        return f"ArXiv search error: {str(e)}"
-    
 @tool
 def final_answer(answer: str) -> str:
     """Provide the final answer to the GAIA question.
@@ -131,11 +103,102 @@ def final_answer(answer: str) -> str:
     """
     return f"FINAL ANSWER: {answer}"
 
+# ============================================================================
+# INITIALIZE AND EXPORT
+# ============================================================================
+
+# Create tools on import
+ALL_LANGCHAIN_TOOLS = []
+
+try:
+    langchain_tools = create_simple_langchain_tools()
+    ALL_LANGCHAIN_TOOLS = langchain_tools + [final_answer]
+    print(f"🎯 Simple LangChain tools loaded: {len(ALL_LANGCHAIN_TOOLS)} total")
+except Exception as e:
+    print(f"❌ Failed to load LangChain tools: {e}")
+    ALL_LANGCHAIN_TOOLS = [final_answer]
+    print("🔄 Fallback: Using only final_answer tool")
+
+# For backwards compatibility
+def get_langchain_tools():
+    """Get all available LangChain tools"""
+    return ALL_LANGCHAIN_TOOLS
+
+# Export the list
+__all__ = ['ALL_LANGCHAIN_TOOLS', 'get_langchain_tools', 'final_answer']
+
+# ============================================================================
+# ALTERNATIVE: Manual tool creation for specific providers
+# ============================================================================
+
+def create_serper_tool():
+    """Create Serper API tool if available"""
+    if not LANGCHAIN_IMPORTS_AVAILABLE:
+        return None
+        
+    serper_key = os.getenv("SERPER_API_KEY") or os.getenv("SERPAPI_API_KEY")
+    if not serper_key:
+        return None
+        
+    try:
+        search = GoogleSerperAPIWrapper(serper_api_key=serper_key)
+        
+        langchain_tool = LangChainTool(
+            name="search_serper",
+            description="Search the web for current information",
+            func=search.run
+        )
+        
+        return Tool.from_langchain(langchain_tool)
+    except Exception as e:
+        print(f"⚠️ Serper tool creation failed: {e}")
+        return None
+
+def create_manual_wikipedia_tool():
+    """Create Wikipedia tool manually if load_tools fails"""
+    if not LANGCHAIN_IMPORTS_AVAILABLE:
+        return None
+        
+    try:
+        wikipedia = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
+        return Tool.from_langchain(wikipedia)
+    except Exception as e:
+        print(f"⚠️ Manual Wikipedia tool creation failed: {e}")
+        return None
+
+# ============================================================================
+# TESTING AND VALIDATION
+# ============================================================================
+
+def test_simple_approach():
+    """Test the simple load_tools approach"""
+    print("🧪 Testing simple LangChain tools approach")
+    print("=" * 45)
     
-# Export all tools
-ALL_LANGCHAIN_TOOLS = [
-    search_wikipedia,
-    search_web_serper,
-    search_arxiv,
-    final_answer
-]
+    # Test environment
+    print("Environment check:")
+    serpapi_key = os.getenv("SERPAPI_API_KEY")
+    serper_key = os.getenv("SERPER_API_KEY") 
+    print(f"  SERPAPI_API_KEY: {'✅ Set' if serpapi_key else '❌ Not set'}")
+    print(f"  SERPER_API_KEY: {'✅ Set' if serper_key else '❌ Not set'}")
+    
+    if serpapi_key or serper_key:
+        print(f"  🔑 Using: {'SERPAPI_API_KEY' if serpapi_key else 'SERPER_API_KEY'}")
+    else:
+        print(f"  ⚠️ No web search API key available")
+        print(f"     Get free key at: https://serpapi.com/")
+    
+    # Test tool creation
+    tools = create_simple_langchain_tools()
+    print(f"\nTools created: {len(tools)}")
+    
+    for i, tool in enumerate(tools):
+        print(f"  {i+1}. {tool.name} - {tool.description[:60]}...")
+    
+    # Test imports
+    print(f"\nALL_LANGCHAIN_TOOLS: {len(ALL_LANGCHAIN_TOOLS)} tools")
+    
+    return len(tools) > 0
+
+if __name__ == "__main__":
+    test_simple_approach()
