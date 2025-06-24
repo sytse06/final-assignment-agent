@@ -118,7 +118,7 @@ def llm_invoke_with_retry(llm, messages):
     return llm.invoke(messages)
 
 # ============================================================================
-# COMPLEXITY DETECTION HELPERS
+# COMPLEXITY AND STEP HELPERS
 # ============================================================================
 
 def is_simple_math(question: str) -> bool:
@@ -170,6 +170,21 @@ def needs_web_search(question: str) -> bool:
     ]
     
     return any(keyword in question_lower for keyword in web_keywords)
+
+def get_agent_step_count(agent) -> int:
+    """Get step count from SmolagAgent memory"""
+    try:
+        # Current SmolagAgents API
+        if hasattr(agent, 'memory') and agent.memory and hasattr(agent.memory, 'steps'):
+            return len(agent.memory.steps)
+        
+        # Fallback for older API
+        if hasattr(agent, 'logs'):
+            return len(agent.logs)
+        
+        return 0
+    except:
+        return 0
 
 # ============================================================================
 # GAIA FORMATTING VALIDATION
@@ -495,24 +510,6 @@ class GAIAAgent:
         except Exception as e:
             print(f"⚠️  Error accessing agent memory: {e}")
             return {'steps': []}
-
-    def get_agent_step_count_safely(agent) -> int:
-        """
-        Safely get step count from agent memory.
-        
-        Args:
-            agent: SmolagAgent instance
-            
-        Returns:
-            Number of steps executed by the agent
-        """
-        try:
-            memory = get_agent_memory_safely(agent)
-            steps = memory.get('steps', [])
-            return len(steps) if steps else 0
-        except Exception as e:
-            print(f"⚠️  Error getting step count: {e}")
-            return 0
     
     # ============================================================================
     # WORKFLOW NODES WITH CONTEXT
@@ -530,6 +527,7 @@ class GAIAAgent:
                 "routing_path": "initializing"
             }
             ContextVariableFlow.set_task_context(task_id, question, metadata)
+            ContextVariableFlow.add_workflow_step(task_id, "read_question", "Processing question and RAG setup")
             
             if self.config.context_bridge_debug:
                 print(f"🌉 Context bridge activated: {ContextVariableFlow.get_context_summary()}")
@@ -578,6 +576,9 @@ class GAIAAgent:
         question = state["question"]
         task_id = state.get("task_id", "")
         
+        if self.config.enable_context_bridge:
+            ContextVariableFlow.add_workflow_step(task_id, "complexity_check", "Analyzing question complexity")
+        
         if self.logging:
             self.logging.log_step("complexity_analysis", f"Analyzing complexity for: {question[:50]}...")
         
@@ -609,6 +610,7 @@ class GAIAAgent:
         # Update context bridge with complexity
         if self.config.enable_context_bridge:
             ContextVariableFlow.update_complexity(complexity)
+            ContextVariableFlow.add_workflow_step(task_id, "complexity_result", f"Complexity: {complexity} - {reason}")
         
         if self.logging:
             self.logging.set_complexity(complexity)
@@ -686,12 +688,15 @@ class GAIAAgent:
         return state.get("complexity", "complex")
     
     def _one_shot_answering_node(self, state: GAIAState):
-        """Direct LLM answering for simple questions with context bridge"""
+        """Direct LLM answering for simple questions"""
+        task_id = state.get("task_id", "")
+        
         print("⚡ Using one-shot direct answering")
         
         # Update context bridge routing
         if self.config.enable_context_bridge:
             ContextVariableFlow.update_routing_path("one_shot_llm")
+            ContextVariableFlow.add_workflow_step(task_id, "one_shot_answering", "Direct LLM answering for simple question")
         
         if self.logging:
             self.logging.set_routing_path("one_shot_llm")
@@ -771,6 +776,7 @@ class GAIAAgent:
         # Update context and logging
         if self.config.enable_context_bridge:
             ContextVariableFlow.update_routing_path("agent_selector")
+            ContextVariableFlow.add_workflow_step(task_id, "agent_selector", "Starting agent selection and execution")
         
         if self.logging:
             self.logging.set_routing_path("agent_selector")
@@ -796,22 +802,47 @@ class GAIAAgent:
             
             # Execute selected agent directly
             specialist = self.specialists[selected_agent]
-            result = specialist.run(question)
+            
+            # Get initial step count
+            initial_steps = get_agent_step_count(specialist)
             
             if self.logging:
-                self.logging.log_step("agent_complete", "Execution completed")
+                self.logging.log_step("agent_execution_start", f"Agent starting with {initial_steps} existing steps")
             
-            step_count = 0  # Simplified - remove problematic step counting
+            # Execute agent
+            result = specialist.run(question)
+            
+            # Calculate agent steps executed
+            final_steps = get_agent_step_count(specialist)
+            agent_steps_executed = final_steps - initial_steps
+            
+            # Bring agent steps back to context bridge
+            if self.config.enable_context_bridge:
+                ContextVariableFlow.add_agent_steps(
+                    task_id, 
+                    selected_agent, 
+                    agent_steps_executed, 
+                    f"Agent execution: {selected_agent}"
+                )
+            
+            if self.logging:
+                self.logging.log_step("agent_execution_complete", f"Agent executed {agent_steps_executed} steps")
+                self.logging.log_step("agent_complete", "Execution completed")
             
             return {
                 "raw_answer": str(result),
                 "selected_agent": selected_agent,
+                "agent_steps_executed": agent_steps_executed,  # For backward compatibility
                 "execution_successful": True,
-                "steps": state["steps"] + [f"Agent {selected_agent} executed successfully"]
+                "steps": state["steps"] + [f"Agent {selected_agent} executed {agent_steps_executed} steps"]
             }
             
         except Exception as e:
             error_msg = f"Agent selection failed: {str(e)}"
+            
+            # NEW: Log error via context bridge
+            if self.config.enable_context_bridge:
+                ContextVariableFlow.add_workflow_step(task_id, "agent_error", error_msg)
             
             if self.logging:
                 self.logging.log_step("agent_error", error_msg)
@@ -819,6 +850,7 @@ class GAIAAgent:
             return {
                 "raw_answer": error_msg,
                 "execution_successful": False,
+                "agent_steps_executed": 0,
                 "steps": state["steps"] + [error_msg]
             }
 
@@ -873,7 +905,7 @@ class GAIAAgent:
         return f"Current date: {now.strftime('%Y-%m-%d')} ({now.strftime('%B %d, %Y')})"
     
     def _prepare_manager_context(self, question: str, rag_examples: List[Dict], task_id: str) -> str:
-        """Ultra-simplified manager context to avoid JSON issues"""
+        """Simplified agent selector context mindful of JSON issues"""
         
         context_parts = [
             "GAIA TASK COORDINATOR",
@@ -955,8 +987,13 @@ class GAIAAgent:
         return final_context
     
     def _format_answer_node(self, state: GAIAState):
-        """Final answer formatting and validation with context bridge cleanup"""
+        """Final answer formatting  with context bridge step counting and cleanup"""
         raw_answer = state.get("raw_answer", "")
+        task_id = state.get("task_id", "")
+        
+        # Log workflow step via context bridge
+        if self.config.enable_context_bridge:
+            ContextVariableFlow.add_workflow_step(task_id, "format_answer", "Formatting final answer")
         
         if self.logging:
             self.logging.log_step("format_start", f"Formatting answer: {raw_answer[:50]}...")
@@ -976,33 +1013,48 @@ class GAIAAgent:
             if self.logging:
                 self.logging.log_step("format_complete", f"Final formatted answer: {formatted_answer}")
             
+            # NEW: Get final step count from context bridge before cleanup
+            final_step_data = {}
+            if self.config.enable_context_bridge:
+                ContextVariableFlow.add_workflow_step(task_id, "answer_complete", f"Final answer: {formatted_answer}")
+                final_step_data = ContextVariableFlow.get_step_count(task_id)
+                
+                if self.config.context_bridge_debug:
+                    print(f"🌉 Final step count: {final_step_data}")
+            
             return {
                 "final_answer": formatted_answer,
+                "context_step_data": final_step_data,  # NEW: Step data from context bridge
                 "steps": state["steps"] + ["Final answer formatting applied"]
             }
             
         except Exception as e:
             error_msg = f"Answer formatting error: {str(e)}"
             
+            # NEW: Log error and get step data
+            if self.config.enable_context_bridge:
+                ContextVariableFlow.add_workflow_step(task_id, "format_error", error_msg)
+                final_step_data = ContextVariableFlow.get_step_count(task_id)
+            else:
+                final_step_data = {}
+            
             if self.logging:
                 self.logging.log_step("format_error", error_msg)
             
             return {
                 "final_answer": raw_answer.strip() if raw_answer else "No answer",
+                "context_step_data": final_step_data,  # NEW: Even for errors
                 "steps": state["steps"] + [error_msg]
             }
         finally:
-            # Context cleanup
+            # Context cleanup - clear specific task
             if self.config.enable_context_bridge:
                 if self.config.context_bridge_debug:
                     final_context = ContextVariableFlow.get_context_summary()
                     print(f"🌉 Final context before cleanup: {final_context}")
                 
                 ContextVariableFlow.clear_context()
-                
-                if self.config.context_bridge_debug:
-                    print("🧹 Context bridge cleaned up")
-            
+                        
     def _extract_final_answer(self, raw_answer: str) -> str:
         """Extract final answer from manager response"""
         if not raw_answer:
@@ -1083,6 +1135,154 @@ class GAIAAgent:
             self.logging.log_step("gaia_format_final", f"Final GAIA formatted answer: '{answer}'")
         
         return answer
+
+    def process_question(self, question: str, task_id: str = None) -> Dict:
+        """
+        Main entry point for processing a GAIA question.
+        Uses context bridge as single step source + performance metrics.
+        
+        Args:
+            question: The question to process
+            task_id: Optional task identifier (generates one if not provided)
+            
+        Returns:
+            Dictionary with complete processing results including step counts from context bridge
+        """
+        import time
+        
+        if task_id is None:
+            task_id = str(uuid.uuid4())[:8]
+        
+        # Start timing for performance metrics
+        total_start_time = time.time()
+        
+        if self.logging:
+            self.logging.start_task(task_id, model_used=self.config.model_name)
+        
+        try:
+            # Run workflow
+            initial_state = {
+                "task_id": task_id,
+                "question": question,
+                "steps": []
+            }
+            
+            result = self.workflow.invoke(initial_state)
+            
+            # NEW: Get authoritative step count from context bridge
+            if self.config.enable_context_bridge and result.get("context_step_data"):
+                context_step_data = result.get("context_step_data", {})
+                total_steps = context_step_data.get("total_steps", 0)
+                workflow_steps = context_step_data.get("workflow_steps", 0)
+                agent_steps = context_step_data.get("agent_steps", 0)
+                step_source = "context_bridge"
+            else:
+                # Fallback to traditional counting
+                agent_steps = result.get("agent_steps_executed", 0)
+                workflow_steps = len(result.get("steps", []))
+                total_steps = workflow_steps + agent_steps
+                step_source = "fallback_calculation"
+            
+            # Calculate performance metrics
+            total_time = time.time() - total_start_time
+            
+            performance_metrics = {
+                "total_execution_time": total_time,
+                "step_breakdown": {
+                    "workflow_steps": workflow_steps,
+                    "agent_steps": agent_steps,
+                    "total_steps": total_steps,
+                    "step_source": step_source
+                },
+                "efficiency_metrics": {
+                    "steps_per_second": total_steps / total_time if total_time > 0 else 0,
+                    "workflow_efficiency": workflow_steps / total_steps if total_steps > 0 else 0,
+                    "agent_efficiency": agent_steps / total_steps if total_steps > 0 else 0
+                },
+                "routing_metrics": {
+                    "complexity": result.get("complexity", "unknown"),
+                    "selected_agent": result.get("selected_agent", "unknown"),
+                    "routing_successful": result.get("execution_successful", False)
+                }
+            }
+            
+            success = result.get("execution_successful", True)
+            final_answer = result.get("final_answer", "No answer")
+            
+            # Log with context bridge step count
+            if self.logging:
+                self.logging.log_question_result(
+                    task_id=task_id,
+                    question=question,
+                    final_answer=final_answer,
+                    total_steps=total_steps,  # NEW: Authoritative from context bridge
+                    success=success
+                )
+            
+            return {
+                "task_id": task_id,
+                "question": question,
+                "final_answer": final_answer,
+                "raw_answer": result.get("raw_answer", ""),
+                "steps": result.get("steps", []),
+                "complexity": result.get("complexity", "unknown"),
+                "similar_examples": result.get("similar_examples", []),
+                "execution_successful": success,
+                "total_steps": total_steps,        # NEW: From context bridge
+                "workflow_steps": workflow_steps,  # NEW: From context bridge
+                "agent_steps": agent_steps,        # NEW: From context bridge
+                "performance_metrics": performance_metrics,  # NEW: Enhanced metrics
+                "selected_agent": result.get("selected_agent", "unknown"),
+                "step_source": step_source         # NEW: Transparency
+            }
+            
+        except Exception as e:
+            total_time = time.time() - total_start_time
+            error_msg = f"Processing failed: {str(e)}"
+            
+            # Error performance metrics
+            error_performance_metrics = {
+                "total_execution_time": total_time,
+                "step_breakdown": {
+                    "workflow_steps": 0,
+                    "agent_steps": 0,
+                    "total_steps": 0,
+                    "step_source": "error"
+                },
+                "efficiency_metrics": {
+                    "steps_per_second": 0.0,
+                    "workflow_efficiency": 0.0,
+                    "agent_efficiency": 0.0
+                },
+                "routing_metrics": {
+                    "complexity": "error",
+                    "selected_agent": "none",
+                    "routing_successful": False
+                },
+                "error": True
+            }
+            
+            if self.logging:
+                self.logging.log_question_result(
+                    task_id=task_id,
+                    question=question,
+                    final_answer=error_msg,
+                    total_steps=0,
+                    success=False
+                )
+            
+            return {
+                "task_id": task_id,
+                "question": question,
+                "final_answer": error_msg,
+                "execution_successful": False,
+                "total_steps": 0,
+                "workflow_steps": 0,
+                "agent_steps": 0,
+                "performance_metrics": error_performance_metrics,
+                "selected_agent": "error",
+                "step_source": "error"
+            }
 
 # ============================================================================
 # MAIN EXECUTION

@@ -4,6 +4,7 @@
 from contextvars import ContextVar
 from typing import Dict, Any, Optional, List
 import time
+from datetime import datetime
 import uuid
 import inspect
 
@@ -19,9 +20,12 @@ except ImportError:
 
 class ContextVariableFlow:
     """
-    Thread-safe context management for LangGraph → SmolagAgents information flow.
-    Passes task_id and context from LangGraph state to SmolagAgent tools.
+    Thread-safe context management for LangGraph → SmolagAgents data flow
+    and metrics tracking. Passes task_id, steps from LangGraph state 
+    to SmolagAgent tools.
     """
+    _task_context = {}
+    _step_counter = {}  # ← Already in your code, just using it now
     
     # Core context variables
     current_task_id: ContextVar[Optional[str]] = ContextVar('current_task_id', default=None)
@@ -32,7 +36,7 @@ class ContextVariableFlow:
     execution_start_time: ContextVar[Optional[float]] = ContextVar('execution_start_time', default=None)
     routing_path: ContextVar[Optional[str]] = ContextVar('routing_path', default=None)
     complexity_level: ContextVar[Optional[str]] = ContextVar('complexity_level', default=None)
-    
+
     @classmethod
     def set_task_context(cls, task_id: str, question: str, metadata: Dict[str, Any] = None):
         """
@@ -54,6 +58,14 @@ class ContextVariableFlow:
                 cls.complexity_level.set(metadata['complexity'])
             if 'routing_path' in metadata:
                 cls.routing_path.set(metadata['routing_path'])
+        
+        # NEW: Initialize step counter for this task
+        cls._step_counter[task_id] = {
+            "workflow_steps": 0,
+            "agent_steps": 0,
+            "total_steps": 0,
+            "step_log": []
+        }
         
         print(f"🔧 Context set: task_id={task_id}, question='{question[:30]}...', metadata={metadata}")
     
@@ -119,6 +131,13 @@ class ContextVariableFlow:
     @classmethod
     def clear_context(cls):
         """Clear all context variables"""
+        # NEW: Clear step counter for current task
+        task_id = cls.current_task_id.get()
+        if task_id and task_id in cls._step_counter:
+            final_count = cls._step_counter[task_id]["total_steps"]
+            del cls._step_counter[task_id]
+            print(f"🧹 Step counter cleared for task {task_id}: {final_count} total steps")
+        
         cls.current_task_id.set(None)
         cls.current_question.set(None)
         cls.current_metadata.set(None)
@@ -142,6 +161,13 @@ class ContextVariableFlow:
         context = cls.get_task_context()
         execution_time = cls.get_execution_time()
         
+        # NEW: Include step count in summary
+        step_info = ""
+        task_id = context["task_id"]
+        if task_id and task_id in cls._step_counter:
+            step_data = cls._step_counter[task_id]
+            step_info = f" | Steps: {step_data['total_steps']} ({step_data['workflow_steps']}w+{step_data['agent_steps']}a)"
+        
         summary = [
             f"Task ID: {context['task_id']}",
             f"Question: {context['question'][:50]}..." if context['question'] else "No question",
@@ -150,9 +176,78 @@ class ContextVariableFlow:
             f"Runtime: {execution_time:.2f}s" if execution_time else "Unknown runtime"
         ]
         
-        return " | ".join(summary)
-
-
+        return " | ".join(summary) + step_info
+      
+    @classmethod
+    def add_workflow_step(cls, task_id: str, step_name: str, details: str = ""):
+        """Add a workflow step to the step counter"""
+        if task_id not in cls._step_counter:
+            cls._step_counter[task_id] = {
+                "workflow_steps": 0,
+                "agent_steps": 0, 
+                "total_steps": 0,
+                "step_log": []
+            }
+        
+        cls._step_counter[task_id]["workflow_steps"] += 1
+        cls._step_counter[task_id]["total_steps"] += 1
+        
+        step_entry = {
+            "step_number": cls._step_counter[task_id]["total_steps"],
+            "type": "workflow",
+            "name": step_name,
+            "details": details,
+            "timestamp": datetime.now()
+        }
+        
+        cls._step_counter[task_id]["step_log"].append(step_entry)
+        print(f"📝 Step {cls._step_counter[task_id]['total_steps']}: {step_name}")
+    
+    @classmethod
+    def add_agent_steps(cls, task_id: str, agent_name: str, step_count: int, details: str = ""):
+        """Add agent steps to the step counter"""
+        if task_id not in cls._step_counter:
+            cls._step_counter[task_id] = {
+                "workflow_steps": 0,
+                "agent_steps": 0,
+                "total_steps": 0, 
+                "step_log": []
+            }
+        
+        cls._step_counter[task_id]["agent_steps"] += step_count
+        cls._step_counter[task_id]["total_steps"] += step_count
+        
+        # Add agent steps to log
+        for i in range(step_count):
+            step_entry = {
+                "step_number": cls._step_counter[task_id]["total_steps"] - step_count + i + 1,
+                "type": "agent",
+                "name": f"{agent_name}_step_{i+1}",
+                "details": details,
+                "timestamp": datetime.now()
+            }
+            cls._step_counter[task_id]["step_log"].append(step_entry)
+        
+        print(f"🤖 Added {step_count} agent steps from {agent_name} (total: {cls._step_counter[task_id]['total_steps']})")
+    
+    @classmethod
+    def get_step_count(cls, task_id: str) -> Dict:
+        """Get current step count for task"""
+        if task_id not in cls._step_counter:
+            return {
+                "workflow_steps": 0,
+                "agent_steps": 0,
+                "total_steps": 0,
+                "step_log": []
+            }
+        
+        return cls._step_counter[task_id].copy()
+    
+    @classmethod
+    def get_total_steps(cls, task_id: str) -> int:
+        """Get total step count for task"""
+        return cls.get_step_count(task_id)["total_steps"]
+    
 class ContextAwareGetAttachmentTool(Tool):
     """
     Context-aware wrapper for GetAttachmentTool that automatically uses
@@ -390,7 +485,7 @@ def create_context_wrapper(base_tool):
             # Set task_id for GetAttachmentTool
             if task_id and hasattr(self.base_tool, 'attachment_for'):
                 try:
-                    self.base_tool.attachment_tool(task_id)
+                    self.base_tool.attachment_for(task_id)
                     print(f"🔧 Set task_id {task_id} for {self.name}")
                 except Exception as e:
                     print(f"⚠️ Could not set task_id for {self.name}: {e}")
