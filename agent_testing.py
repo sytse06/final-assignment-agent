@@ -418,107 +418,107 @@ class GAIAQuestionExecutor:
         else:
             print("✅ Verified: Questions are properly blind (no ground truth contamination)")
     
-def _execute_single_question_blind(self, question_data: Dict, question_num: int) -> Dict:
-    """
-    Execute single question without ground truth access
-    
-    BLIND TESTING COMPLIANCE:
-    - Agent has NO access to ground truth answers
-    - No 'Final answer' field passed to agent
-    - All execution metadata preserved for evaluation
-    - Blind testing verification markers maintained
-    
-    """
-    
-    # Extract question data
-    task_id = question_data.get('task_id', f"blind_{question_num}")
-    question = question_data.get('Question', question_data.get('question', ''))
-    level = question_data.get('Level', 'Unknown')
-    file_name = question_data.get('file_name', '')
-    file_path = question_data.get('file_path', '')
-    
-    start_time = time.time()
-    
-    try:
-        print(f"   🔒 Processing (BLIND): {question[:50]}...")
+    def _execute_single_question_blind(self, question_data: Dict, question_num: int) -> Dict:
+        """
+        Execute single question without ground truth access
         
-        # MINIMAL FIX: Just ensure tools are configured with task_id
-        tools_configured = 0
-        if file_name:
-            print(f"   📎 File: {file_name}")
-            if file_path:
-                print(f"   📁 HF cache available: {file_path[:50]}...")
+        BLIND TESTING COMPLIANCE:
+        - Agent has NO access to ground truth answers
+        - No 'Final answer' field passed to agent
+        - All execution metadata preserved for evaluation
+        - Blind testing verification markers maintained
+        
+        """
+        
+        # Extract question data
+        task_id = question_data.get('task_id', f"blind_{question_num}")
+        question = question_data.get('Question', question_data.get('question', ''))
+        level = question_data.get('Level', 'Unknown')
+        file_name = question_data.get('file_name', '')
+        file_path = question_data.get('file_path', '')
+        
+        start_time = time.time()
+        
+        try:
+            print(f"   🔒 Processing (BLIND): {question[:50]}...")
             
-            # Configure all GetAttachmentTool instances with task_id
-            tools_configured = self._configure_tools_with_hf_hint(task_id)
-        
-        # CRITICAL: Execute question - agent has NO access to ground truth
-        result = self.agent.process_question(question, task_id=task_id)
-        
-        execution_time = time.time() - start_time
-        
-        # Determine strategy used (preserve original logic)
-        strategy_used = self._determine_strategy_used(result)
-        
-        # COMPLETE blind execution record
-        return {
-            "question_number": question_num,
-            "task_id": task_id,
-            "question": question,
-            "level": level,
-            "file_name": file_name,
-            "file_path": file_path,
-            "has_file": bool(file_name),
-            "final_answer": result.get("final_answer", ""),
-            "raw_answer": result.get("raw_answer", ""),
-            "steps": result.get("steps", []),
-            "execution_successful": result.get("execution_successful", False),
-            "execution_time": execution_time,
-            "strategy_used": strategy_used,
-            "complexity": result.get("complexity"),
-            "similar_examples_count": len(result.get("similar_examples", [])),
-            "context_bridge_used": result.get("context_bridge_used", False),
-            "model_provider": self.gaia_config.model_provider,
-            "model_name": self.gaia_config.model_name,
-            "execution_timestamp": datetime.now().isoformat(),
-            "tools_configured": tools_configured,
-            "file_access_method": "hf_cache" if file_path else ("api" if file_name else "none"),  # NEW: Track access method
-            "blind_execution_verified": True,  # CRITICAL: Blind testing marker
-            "attachment_tool_configured": bool(file_name)
-        }
-        
-    except Exception as e:
-        execution_time = time.time() - start_time
-        print(f"   ❌ Execution failed: {str(e)}")
-        
-        # COMPLETE error record for blind testing 
-        return {
-            "question_number": question_num,
-            "task_id": task_id,
-            "question": question,
-            "level": level,
-            "file_name": file_name,
-            "file_path": file_path,
-            "has_file": bool(file_name),
-            "final_answer": "ERROR",
-            "raw_answer": f"Execution error: {str(e)}",
-            "steps": [],
-            "execution_successful": False,
-            "execution_time": execution_time,
-            "strategy_used": "error",
-            "complexity": "unknown",
-            "similar_examples_count": 0,
-            "context_bridge_used": False,
-            "model_provider": self.gaia_config.model_provider, 
-            "model_name": self.gaia_config.model_name,
-            "execution_timestamp": datetime.now().isoformat(),
-            "tools_configured": 0, 
-            "file_access_method": "error",
-            "error": str(e),
-            "error_type": self._categorize_error(str(e)) if hasattr(self, '_categorize_error') else 'unknown',
-            "blind_execution_verified": True,
-            "attachment_tool_configured": bool(file_name)
-        }
+            # MINIMAL FIX: Just ensure tools are configured with task_id
+            tools_configured = 0
+            if file_name:
+                print(f"   📎 File: {file_name}")
+                if file_path:
+                    print(f"   📁 HF cache available: {file_path[:50]}...")
+                
+                # Configure all GetAttachmentTool instances with task_id
+                tools_configured = self._configure_tools_with_hf_hint(task_id)
+            
+            # CRITICAL: Execute question - agent has NO access to ground truth
+            result = self.agent.process_question(question, task_id=task_id)
+            
+            execution_time = time.time() - start_time
+            
+            # Determine strategy used (preserve original logic)
+            strategy_used = self._determine_strategy_used(result)
+            
+            # COMPLETE blind execution record
+            return {
+                "question_number": question_num,
+                "task_id": task_id,
+                "question": question,
+                "level": level,
+                "file_name": file_name,
+                "file_path": file_path,
+                "has_file": bool(file_name),
+                "final_answer": result.get("final_answer", ""),
+                "raw_answer": result.get("raw_answer", ""),
+                "steps": result.get("steps", []),
+                "execution_successful": result.get("execution_successful", False),
+                "execution_time": execution_time,
+                "strategy_used": strategy_used,
+                "complexity": result.get("complexity"),
+                "similar_examples_count": len(result.get("similar_examples", [])),
+                "context_bridge_used": result.get("context_bridge_used", False),
+                "model_provider": self.gaia_config.model_provider,
+                "model_name": self.gaia_config.model_name,
+                "execution_timestamp": datetime.now().isoformat(),
+                "tools_configured": tools_configured,
+                "file_access_method": "hf_cache" if file_path else ("api" if file_name else "none"),  # NEW: Track access method
+                "blind_execution_verified": True,  # CRITICAL: Blind testing marker
+                "attachment_tool_configured": bool(file_name)
+            }
+            
+        except Exception as e:
+            execution_time = time.time() - start_time
+            print(f"   ❌ Execution failed: {str(e)}")
+            
+            # COMPLETE error record for blind testing 
+            return {
+                "question_number": question_num,
+                "task_id": task_id,
+                "question": question,
+                "level": level,
+                "file_name": file_name,
+                "file_path": file_path,
+                "has_file": bool(file_name),
+                "final_answer": "ERROR",
+                "raw_answer": f"Execution error: {str(e)}",
+                "steps": [],
+                "execution_successful": False,
+                "execution_time": execution_time,
+                "strategy_used": "error",
+                "complexity": "unknown",
+                "similar_examples_count": 0,
+                "context_bridge_used": False,
+                "model_provider": self.gaia_config.model_provider, 
+                "model_name": self.gaia_config.model_name,
+                "execution_timestamp": datetime.now().isoformat(),
+                "tools_configured": 0, 
+                "file_access_method": "error",
+                "error": str(e),
+                "error_type": self._categorize_error(str(e)) if hasattr(self, '_categorize_error') else 'unknown',
+                "blind_execution_verified": True,
+                "attachment_tool_configured": bool(file_name)
+            }
 
     def _configure_tools_with_hf_hint(self, task_id: str, question_data: Dict):
         """
@@ -586,11 +586,11 @@ def _execute_single_question_blind(self, question_data: Dict, question_num: int)
             "batch_name": batch_name,
             "execution_timestamp": datetime.now().isoformat(),
             "agent_config": {
-                "provider": self.agent_config.model_provider,
-                "model": self.agent_config.model_name,
-                "temperature": self.agent_config.temperature,
-                "smart_routing": self.agent_config.enable_smart_routing,
-                "context_bridge": self.agent_config.enable_context_bridge
+                "provider": self.gaia_config.model_provider,
+                "model": self.gaia_config.model_name,
+                "temperature": self.gaia_config.temperature,
+                "smart_routing": self.gaia_config.enable_smart_routing,
+                "context_bridge": getattr(self.gaia_config, 'enable_context_bridge', False)
             },
             "execution_summary": {
                 "total_questions": len(results),
@@ -616,6 +616,30 @@ def _execute_single_question_blind(self, question_data: Dict, question_num: int)
             with open(fallback_file, 'w', encoding='utf-8') as f:
                 json.dump(execution_data, f, indent=2, ensure_ascii=False)
             return fallback_file
+        
+    def _categorize_error(self, error_message: str) -> str:
+        """Categorize error types for analysis"""
+        
+        error_message_lower = error_message.lower()
+        
+        if 'unexpected keyword argument' in error_message_lower:
+            return 'interface_mismatch'
+        elif 'attributeerror' in error_message_lower:
+            return 'attribute_error'
+        elif 'timeout' in error_message_lower:
+            return 'timeout'
+        elif 'api' in error_message_lower or 'rate limit' in error_message_lower:
+            return 'api_error'
+        elif 'file not found' in error_message_lower:
+            return 'file_error'
+        elif 'authentication' in error_message_lower or 'permission' in error_message_lower:
+            return 'auth_error'
+        elif 'tool' in error_message_lower:
+            return 'tool_error'
+        elif any(word in error_message_lower for word in ['manager', 'execution', 'agent']):
+            return 'execution_error'
+        else:
+            return 'unknown_error'
 
 # ============================================================================
 # ENHANCED AGENT EXECUTION (With Improved Error Detection) - RESTORED
@@ -2043,7 +2067,19 @@ def run_gaia_test(agent_config_name: str = "groq", dataset_path: str = "./tests/
         print(f"❌ Complete GAIA test failed: {str(e)}")
         import traceback
         traceback.print_exc()
-        return None
+        
+        # FIXED: Return dict instead of None
+        return {
+            "error": str(e),
+            "overall_performance": {
+                "total_questions": 0,
+                "correct_answers": 0,
+                "accuracy": 0.0,
+                "successful_executions": 0
+            },
+            "level_performance": {},
+            "strategy_analysis": {}
+        }
 
 def run_quick_gaia_test(agent_config_name: str = "groq", **kwargs) -> Optional[Dict]:
     """Quick GAIA test with proper blind testing"""
@@ -2055,11 +2091,24 @@ def run_quick_gaia_test(agent_config_name: str = "groq", **kwargs) -> Optional[D
     print(f"🚀 Quick GAIA Test (Blind): {agent_config_name}")
     print(f"   Questions: {num_questions}")
     
-    return run_gaia_test(
+    result = run_gaia_test(
         agent_config_name=agent_config_name,
         dataset_path=dataset_path,
         max_questions=num_questions
     )
+    
+    if result is None:
+        return {
+            "error": "Test failed to return results",
+            "overall_performance": {
+                "total_questions": 0,
+                "correct_answers": 0,
+                "accuracy": 0.0,
+                "successful_executions": 0
+            }
+        }
+    
+    return result
 
 def run_small_batch_test(agent_config: Union[str, Dict] = "groq", 
                         dataset_path: str = "./tests/gaia_data") -> Dict:
@@ -2440,14 +2489,14 @@ if __name__ == "__main__":
 # ============================================================================
 
 if __name__ == "__main__":
-    print("🧪 GAIA Testing Framework v3.0 - COMPLETE VERSION")
+    print("🧪 GAIA Testing Framework")
     print("=" * 60)
-    print("✅ ALL CLASSES RESTORED:")
+    print("✅ ALL CLASSES AVAILABLE:")
     print("   ├── GAIAQuestionExecutor (Blind execution)")
     print("   ├── GAIATestExecutor (Enhanced execution)")
     print("   ├── GAIAAnswerEvaluator (Blind testing evaluation)")
     print("   ├── GAIATestEvaluator (Production evaluation)")
-    print("   └── All convenience functions")
+    print("   └── Convenience functions")
     print("")
     print("🔧 Key Features:")
     features = [
