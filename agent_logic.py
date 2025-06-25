@@ -396,16 +396,31 @@ class GAIAAgent:
         # Add file access for document research
         if attachment_tool := get_context_tool("get_attachment"):
             web_tools.append(attachment_tool)
+        
+        # Add content grounding for source verification
+        if CONTENT_GROUNDING_AVAILABLE:
+            try:
+                grounding_tool = ContentGroundingTool()
+                web_tools.append(grounding_tool)
+                print("✅ ContentGroundingTool added to web_researcher")
+            except Exception as e:
+                print(f"⚠️ ContentGroundingTool failed to initialize: {e}")
 
         specialists["web_researcher"] = ToolCallingAgent(
             name="web_researcher",
             description="""SPECIALIZED INFORMATION RESEARCHER. Your role is to find information using search tools, NOT to write code.
 
 Available tools:
-- search_wikipedia: For reliable information lookup
-- search_web_serper: For current web information  
+- retrieve_content: For processing documents
+- get_attachment: For accessing files
+- search_web_serper: For current web information
+- search_wikipedia: For reliable information lookup  
 - search_arxiv: For academic research
+- ground_content: For source verification and content grounding
 - final_answer: When you have the definitive answer
+
+ENHANCED WORKFLOW:
+Search for information using appropriate tools
 
 CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code executor.""",
             tools=web_tools,  # Web search + content processing + file access
@@ -418,7 +433,7 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
         
         print(f"🎯 Created {len(specialists)} specialized agents:")
         print(f"   data_analyst: {len(data_tools)} tools (computation focus)")
-        print(f"   web_researcher: {len(web_tools)} tools (research focus)")
+        print(f"   web_researcher: {len(web_tools)} tools (research + verification focus)")
         
         return specialists
 
