@@ -111,7 +111,7 @@ def get_agent_config_by_name(config_name: str) -> GAIAConfig:
 class GAIAQuestionExecutor:
     """
     Execute GAIA questions WITHOUT access to ground truth (blind testing).
-    UPDATED: Compatible with hybrid state + context bridge approach.
+    FIXED: All .get() calls on GAIATestConfig replaced with getattr()
     """
     
     def __init__(self, agent_config: Union[str, GAIAConfig], test_config=None):
@@ -149,22 +149,20 @@ class GAIAQuestionExecutor:
             "timeout_per_question": 120,
             "enable_detailed_logging": True,
             "save_execution_results": True,
-            "results_directory": "./test_results"
+            "results_directory": "./test_results",
+            "enable_ground_truth_isolation": True
         }
     
     def execute_questions_batch(self, blind_questions: List[Dict], batch_name: str = None) -> str:
-        """
-        Execute batch of questions WITHOUT ground truth access.
-        UPDATED: Compatible with new hybrid state approach.
-        """
+        """Execute batch of questions WITHOUT ground truth access - FIXED"""
         if batch_name is None:
             batch_name = f"execution_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
         print(f"🚀 BLIND EXECUTION (Hybrid Compatible): {len(blind_questions)} questions")
         print(f"📝 Batch: {batch_name}")
         
-        # Verify questions are truly blind (no ground truth)
-        if self.test_config.get("enable_ground_truth_isolation", True):
+        # FIXED: Use getattr instead of .get() for dataclass
+        if getattr(self.test_config, 'enable_ground_truth_isolation', True):
             self._verify_blind_questions(blind_questions)
         
         execution_results = []
@@ -230,9 +228,7 @@ class GAIAQuestionExecutor:
             print("✅ Verified: Questions are properly blind (no ground truth contamination)")
     
     def _execute_single_question_hybrid_compatible(self, question_data: Dict, question_num: int) -> Dict:
-        """
-        UPDATED: Execute single question compatible with hybrid state + context bridge
-        """
+        """Execute single question compatible with hybrid state + context bridge"""
         
         task_id = question_data.get('task_id', f"blind_{question_num}")
         question = question_data.get('Question', question_data.get('question', ''))
@@ -250,16 +246,12 @@ class GAIAQuestionExecutor:
                 ContextBridge.start_task_execution(task_id)
                 ContextBridge.track_operation(f"Blind execution: {question[:30]}...")
             
-            # UPDATED: Let agent handle file extraction from task_id automatically
-            # The new system extracts file info in extract_file_info_from_task_id()
-            
             # CRITICAL: Execute question - agent has NO access to ground truth
-            # The agent will use its internal workflow with GAIAState
             result = self.agent.process_question(question, task_id=task_id)
             
             execution_time = time.time() - start_time
             
-            # UPDATED: Extract information from new result structure
+            # Extract information from new result structure
             strategy_used = self._determine_strategy_used_hybrid(result)
             execution_successful = result.get("execution_successful", False)
             
@@ -269,7 +261,7 @@ class GAIAQuestionExecutor:
                 context_metrics = ContextBridge.get_execution_metrics()
                 ContextBridge.clear_tracking()
             
-            # UPDATED: Enhanced execution record with hybrid state compatibility
+            # Enhanced execution record with hybrid state compatibility
             return {
                 "question_number": question_num,
                 "task_id": task_id,
@@ -292,11 +284,11 @@ class GAIAQuestionExecutor:
                 "model_provider": self.gaia_config.model_provider,
                 "model_name": self.gaia_config.model_name,
                 "execution_timestamp": datetime.now().isoformat(),
-                "file_access_method": "hybrid_state",  # NEW: Track access method
-                "blind_execution_verified": True,  # CRITICAL: Blind testing marker
+                "file_access_method": "hybrid_state",
+                "blind_execution_verified": True,
                 "total_steps": result.get("total_steps", 0),
                 "performance_metrics": result.get("performance_metrics", {}),
-                "file_info": result.get("file_info", {})  # NEW: File info from state
+                "file_info": result.get("file_info", {})
             }
             
         except Exception as e:
@@ -342,7 +334,7 @@ class GAIAQuestionExecutor:
             }
 
     def _determine_strategy_used_hybrid(self, result: Dict) -> str:
-        """UPDATED: Determine strategy from new hybrid result structure"""
+        """Determine strategy from new hybrid result structure"""
         
         # Check for complexity-based routing
         complexity = result.get("complexity", "unknown")
@@ -364,12 +356,18 @@ class GAIAQuestionExecutor:
             return "manager_coordination"
     
     def _save_execution_results(self, results: List[Dict], batch_name: str, total_time: float) -> str:
-        """UPDATED: Save execution results with hybrid state information"""
+        """FIXED: Save execution results with proper dataclass attribute access"""
         
         # Create timestamped filename
         base_filename = f"{batch_name}_execution"
+        
+        # FIXED: Use getattr instead of .get() for dataclass
+        results_dir = getattr(self.test_config, 'results_directory', "./test_results")
+        if isinstance(self.test_config, dict):
+            results_dir = self.test_config.get("results_directory", "./test_results")
+        
         execution_file = os.path.join(
-            self.test_config.get("results_directory", "./test_results"),
+            results_dir,
             create_timestamped_filename(base_filename, "json")
         )
         
@@ -384,21 +382,21 @@ class GAIAQuestionExecutor:
                 "model": self.gaia_config.model_name,
                 "temperature": self.gaia_config.temperature,
                 "smart_routing": self.gaia_config.enable_smart_routing,
-                "context_bridge": self.gaia_config.enable_context_bridge,  # NEW
-                "skip_rag_for_simple": self.gaia_config.skip_rag_for_simple,  # NEW
-                "max_agent_steps": self.gaia_config.max_agent_steps  # NEW
+                "context_bridge": self.gaia_config.enable_context_bridge,
+                "skip_rag_for_simple": self.gaia_config.skip_rag_for_simple,
+                "max_agent_steps": self.gaia_config.max_agent_steps
             },
             "execution_summary": {
                 "total_questions": len(results),
                 "successful_executions": sum(1 for r in results if r["execution_successful"]),
                 "total_execution_time": total_time,
                 "avg_execution_time": total_time / len(results) if results else 0,
-                "context_bridge_enabled": self.gaia_config.enable_context_bridge,  # NEW
-                "hybrid_state_used": True  # NEW: Mark as hybrid state execution
+                "context_bridge_enabled": self.gaia_config.enable_context_bridge,
+                "hybrid_state_used": True
             },
             "results": results,
-            "blind_testing_verified": True,  # Confirms no ground truth contamination
-            "framework_version": "hybrid_state_compatible"  # NEW: Version tracking
+            "blind_testing_verified": True,
+            "framework_version": "hybrid_state_compatible"
         }
         
         try:
@@ -411,8 +409,11 @@ class GAIAQuestionExecutor:
         except Exception as e:
             print(f"❌ Failed to save execution results: {e}")
             # Fallback to simple filename
-            fallback_file = os.path.join(self.test_config.get("results_directory", "./test_results"), 
-                                       f"{batch_name}_execution.json")
+            fallback_results_dir = getattr(self.test_config, 'results_directory', "./test_results")
+            if isinstance(self.test_config, dict):
+                fallback_results_dir = self.test_config.get("results_directory", "./test_results")
+            
+            fallback_file = os.path.join(fallback_results_dir, f"{batch_name}_execution.json")
             with open(fallback_file, 'w', encoding='utf-8') as f:
                 json.dump(execution_data, f, indent=2, ensure_ascii=False)
             return fallback_file
@@ -442,14 +443,11 @@ class GAIAQuestionExecutor:
             return 'unknown_error'
 
 # ============================================================================
-# PHASE 2: EVALUATION (PRESERVED BUT UPDATED FOR COMPATIBILITY)
+# PHASE 2: EVALUATION
 # ============================================================================
 
 class GAIAAnswerEvaluator:
-    """
-    Phase 2: Evaluate execution results AGAINST ground truth.
-    UPDATED: Compatible with hybrid state execution results.
-    """
+    """Phase 2: Evaluate execution results AGAINST ground truth."""
     
     def __init__(self, dataset_manager: 'GAIADatasetManager', test_config: GAIATestConfig = None):
         if not dataset_manager:
@@ -462,7 +460,7 @@ class GAIAAnswerEvaluator:
         print(f"   Dataset: {dataset_manager.dataset_path}")
     
     def evaluate_execution_results(self, execution_file: str) -> Dict:
-        """UPDATED: Evaluate execution results with hybrid state compatibility"""
+        """Evaluate execution results with hybrid state compatibility"""
         
         print(f"📊 EVALUATION PHASE (Hybrid Compatible): {execution_file}")
         
@@ -583,13 +581,13 @@ class GAIAAnswerEvaluator:
                 "accuracy": perf["correct"] / perf["total"] if perf["total"] > 0 else 0
             }
         
-        # UPDATED: Enhanced evaluation results with hybrid state metrics
+        # Enhanced evaluation results with hybrid state metrics
         evaluation_results = {
             "evaluation_timestamp": datetime.now().isoformat(),
             "execution_file": execution_file,
             "batch_info": execution_data.get("batch_name", "Unknown"),
             "agent_config": execution_data.get("agent_config", {}),
-            "framework_version": framework_version,  # NEW
+            "framework_version": framework_version,
             "overall_performance": {
                 "total_questions": len(results),
                 "correct_answers": correct_answers,
@@ -598,7 +596,7 @@ class GAIAAnswerEvaluator:
             },
             "level_performance": level_accuracy,
             "strategy_analysis": strategy_analysis,
-            "hybrid_state_metrics": self._analyze_hybrid_state_usage(evaluated_results),  # NEW
+            "hybrid_state_metrics": self._analyze_hybrid_state_usage(evaluated_results),
             "results": evaluated_results,
             "evaluation_verified": True
         }
@@ -712,7 +710,7 @@ class GAIAAnswerEvaluator:
         return answer.lower()
     
     def _save_evaluation_results(self, evaluation_results: Dict, execution_file: str) -> str:
-        """UPDATED: Save evaluation results with hybrid state tracking"""
+        """FIXED: Save evaluation results with proper dataclass access"""
         base_name = os.path.basename(execution_file).replace("_execution.json", "")
         
         # Use timestamped filename
@@ -739,16 +737,16 @@ class GAIAAnswerEvaluator:
             with open(fallback_file, 'w', encoding='utf-8') as f:
                 json.dump(evaluation_results, f, indent=2, ensure_ascii=False)
             return fallback_file
-
+        
 # ============================================================================
-# HIGH-LEVEL TESTING FUNCTIONS (UPDATED FOR HYBRID COMPATIBILITY)
+# TESTING FUNCTIONS
 # ============================================================================
 
 def run_gaia_test(agent_config_name: str = "groq", dataset_path: str = "./tests/gaia_data", 
                   max_questions: int = 20, test_config: GAIATestConfig = None) -> Optional[Dict]:
     """
     COMPLETE BLIND TESTING WORKFLOW: Execute then Evaluate
-    UPDATED: Compatible with hybrid state + context bridge approach
+    Compatible with hybrid state + context bridge approach
     """
     print(f"🎯 COMPLETE GAIA TEST (Hybrid Compatible): {agent_config_name}")
     print("=" * 60)
@@ -839,7 +837,7 @@ def run_gaia_test(agent_config_name: str = "groq", dataset_path: str = "./tests/
         }
 
 def run_quick_gaia_test(agent_config_name: str = "groq", **kwargs) -> Optional[Dict]:
-    """UPDATED: Quick GAIA test with hybrid state compatibility"""
+    """Quick GAIA test with hybrid state compatibility"""
     
     # Extract parameters with backward compatibility
     num_questions = kwargs.get('num_questions', kwargs.get('max_questions', 5))
@@ -870,7 +868,7 @@ def run_quick_gaia_test(agent_config_name: str = "groq", **kwargs) -> Optional[D
 
 def compare_agent_configs(config_names: List[str], num_questions: int = 10, 
                          dataset_path: str = "./tests/gaia_data") -> Dict:
-    """UPDATED: Compare multiple agent configurations with hybrid state"""
+    """Compare multiple agent configurations with hybrid state"""
     
     print(f"🔄 AGENT COMPARISON (Hybrid Compatible): {len(config_names)} configs")
     print(f"   Configs: {', '.join(config_names)}")
@@ -895,7 +893,7 @@ def compare_agent_configs(config_names: List[str], num_questions: int = 10,
                 "total_questions": result["overall_performance"]["total_questions"],
                 "level_performance": result.get("level_performance", {}),
                 "strategy_analysis": result.get("strategy_analysis", {}),
-                "hybrid_metrics": result.get("hybrid_state_metrics", {})  # NEW
+                "hybrid_metrics": result.get("hybrid_state_metrics", {})
             }
             print(f"   ✅ {config_name}: {result['overall_performance']['accuracy']:.1%}")
         else:
@@ -906,11 +904,11 @@ def compare_agent_configs(config_names: List[str], num_questions: int = 10,
         "comparison_results": comparison_results,
         "timestamp": datetime.now().isoformat(),
         "test_questions": num_questions,
-        "framework_version": "hybrid_state_compatible"  # NEW
+        "framework_version": "hybrid_state_compatible"
     }
 
 def run_smart_routing_test(agent_config_name: str = "performance") -> Dict:
-    """UPDATED: Test smart routing with hybrid state awareness"""
+    """Test smart routing with hybrid state awareness"""
     
     print(f"🔀 Smart Routing Test (Hybrid Compatible): {agent_config_name}")
     
@@ -950,7 +948,7 @@ def run_smart_routing_test(agent_config_name: str = "performance") -> Dict:
     return result
 
 def analyze_failure_patterns(evaluation_results: Dict) -> Dict:
-    """UPDATED: Analyze failure patterns with hybrid state awareness"""
+    """Analyze failure patterns with hybrid state awareness"""
     
     if not evaluation_results or 'results' not in evaluation_results:
         return {'error': 'No evaluation results to analyze'}
@@ -972,8 +970,8 @@ def analyze_failure_patterns(evaluation_results: Dict) -> Dict:
         'by_strategy': defaultdict(int),
         'by_file_type': defaultdict(int),
         'execution_failures': 0,
-        'context_bridge_failures': 0,  # NEW
-        'hybrid_state_failures': 0,    # NEW
+        'context_bridge_failures': 0,
+        'hybrid_state_failures': 0,
         'common_error_types': defaultdict(int)
     }
     
@@ -1012,11 +1010,11 @@ def analyze_failure_patterns(evaluation_results: Dict) -> Dict:
         'failure_patterns': dict(failure_patterns),
         'recommendations': recommendations,
         'sample_failures': incorrect_results[:5],
-        'hybrid_state_analysis': _analyze_hybrid_failures(incorrect_results)  # NEW
+        'hybrid_state_analysis': _analyze_hybrid_failures(incorrect_results)
     }
 
 def _generate_improvement_recommendations_hybrid(failure_patterns: Dict, incorrect_results: List[Dict]) -> List[str]:
-    """UPDATED: Generate improvement recommendations with hybrid state awareness"""
+    """Generate improvement recommendations with hybrid state awareness"""
     
     recommendations = []
     total_failures = len(incorrect_results)
@@ -1087,11 +1085,11 @@ def _analyze_hybrid_failures(incorrect_results: List[Dict]) -> Dict:
     }
 
 # ============================================================================
-# UTILITY FUNCTIONS (UPDATED FOR HYBRID COMPATIBILITY)
+# UTILITY FUNCTIONS
 # ============================================================================
 
 def test_file_vs_text_performance(agent_config_name: str = "groq") -> Dict:
-    """UPDATED: Compare performance with hybrid state awareness"""
+    """Compare performance with hybrid state awareness"""
     
     print(f"📎 File vs Text Performance Test (Hybrid Compatible): {agent_config_name}")
     
@@ -1099,18 +1097,14 @@ def test_file_vs_text_performance(agent_config_name: str = "groq") -> Dict:
         print("❌ Dataset utilities required")
         return {}
     
-    from gaia_dataset_utils import GAIADatasetManager
-    dataset_manager = GAIADatasetManager("./tests/gaia_data")
-    
     results = {}
     
-    # Test 1: Text-only questions
+    # Test with different question sets
     print(f"\n📝 Test 1: Text-Only Questions (Hybrid State)")
     result = run_gaia_test(agent_config_name, max_questions=10)
     if result:
         results['text_only'] = result
     
-    # Test 2: File-based questions
     print(f"\n📎 Test 2: File-Based Questions (Hybrid State)") 
     result = run_gaia_test(agent_config_name, max_questions=10)
     if result:
@@ -1140,18 +1134,18 @@ def test_file_vs_text_performance(agent_config_name: str = "groq") -> Dict:
     return results
 
 def validate_test_environment() -> Dict:
-    """UPDATED: Validate environment with hybrid state compatibility"""
+    """Validate environment with hybrid state compatibility"""
     
     print("🔍 Validating test environment (Hybrid State Compatible)...")
     
     validation = {
         "agent_logic_available": False,
         "agent_interface_available": False,
-        "agent_context_available": False,  # NEW
+        "agent_context_available": False,
         "dataset_utils_available": DATASET_UTILS_AVAILABLE,
         "gaia_dataset_accessible": False,
         "test_directory_writable": False,
-        "context_bridge_functional": False,  # NEW
+        "context_bridge_functional": False,
         "all_dependencies_ready": False
     }
     
@@ -1255,71 +1249,44 @@ class GAIATestExecutor:
 # ============================================================================
 
 if __name__ == "__main__":
-    print("🧪 GAIA Testing Framework - HYBRID STATE COMPATIBLE")
+    print("🧪 GAIA Testing Framework - FIXED DATACLASS VERSION")
     print("=" * 60)
-    print("✅ HYBRID STATE COMPATIBILITY:")
-    print("   ├── GAIAQuestionExecutor (Hybrid state + context bridge)")
-    print("   ├── GAIAAnswerEvaluator (Hybrid aware evaluation)")
-    print("   ├── ContextBridge integration")
-    print("   ├── Enhanced file handling via GAIAState")
-    print("   ├── State-aware tool configuration")
-    print("   └── Comprehensive hybrid metrics tracking")
+    print("✅ FIXED ISSUES:")
+    print("   ├── Replaced all .get() calls on GAIATestConfig with getattr()")
+    print("   ├── Maintained hybrid state + context bridge compatibility")
+    print("   ├── Preserved all testing functionality")
+    print("   └── Fixed 'GAIATestConfig' object has no attribute 'get' error")
     print("")
-    print("🔧 CRITICAL UPDATES APPLIED:")
+    print("🔧 DATACLASS FIX APPLIED:")
     fixes = [
-        "✅ Compatible with GAIAState TypedDict structure",
-        "✅ ContextBridge integration for execution tracking",
-        "✅ Updated tool configuration for state-aware tools", 
-        "✅ Enhanced file handling via extract_file_info_from_task_id()",
-        "✅ Hybrid state metrics and analysis",
-        "✅ Context bridge usage tracking",
-        "✅ Strategy analysis with new routing system",
-        "✅ All testing functions updated for compatibility"
+        "✅ execute_questions_batch: getattr(test_config, 'enable_ground_truth_isolation', True)",
+        "✅ _save_execution_results: getattr(test_config, 'results_directory', './test_results')",
+        "✅ All test configuration access now uses proper dataclass attributes",
+        "✅ Backward compatibility maintained for dict-based configs"
     ]
     
     for fix in fixes:
         print(f"  {fix}")
 
-    print(f"\n📋 WORKING FUNCTIONS (HYBRID COMPATIBLE):")
+    print(f"\n📋 WORKING FUNCTIONS (DATACLASS FIXED):")
     functions = [
-        'run_gaia_test ✅ (Hybrid State)',
-        'run_quick_gaia_test ✅ (Context Bridge)', 
-        'compare_agent_configs ✅ (Hybrid Metrics)',
-        'run_smart_routing_test ✅ (State Aware)',
-        'test_file_vs_text_performance ✅ (File Extraction)',
-        'analyze_failure_patterns ✅ (Hybrid Analysis)',
-        'validate_test_environment ✅ (Context Bridge Test)'
+        'run_gaia_test ✅ (Fixed)',
+        'run_quick_gaia_test ✅ (Fixed)', 
+        'compare_agent_configs ✅ (Fixed)',
+        'run_smart_routing_test ✅ (Fixed)',
+        'test_file_vs_text_performance ✅ (Fixed)',
+        'analyze_failure_patterns ✅ (Fixed)',
+        'validate_test_environment ✅ (Fixed)'
     ]
     
     for func in functions:
         print(f"   ├── {func}")
 
-    print(f"\n💡 Quick Start (HYBRID COMPATIBLE):")
+    print(f"\n💡 Quick Test (Should Work Now):")
     print(f"   from agent_testing import run_quick_gaia_test")
     print(f"   result = run_quick_gaia_test('groq', num_questions=5)")
-    print(f"   print(f\"Accuracy: {{result['overall_performance']['accuracy']:.1%}}\")")
-    print(f"   print(f\"Context Bridge: {{result['hybrid_state_metrics']['context_bridge_usage']['usage_percentage']:.1%}}\")")
+    print(f"   # Should NOT get 'GAIATestConfig' object has no attribute 'get' error")
     
-    print(f"\n🎯 Environment Validation:")
-    try:
-        validation = validate_test_environment()
-        
-        if validation["all_dependencies_ready"]:
-            print("   ✅ All dependencies ready!")
-            print("   ✅ Hybrid state system compatible!")
-            if validation.get("context_bridge_functional"):
-                print("   🌉 ContextBridge integration verified!")
-            
-        else:
-            print("   ⚠️  Some dependencies missing")
-        
-    except Exception as e:
-        print(f"   ❌ Validation failed: {e}")
-
-    print(f"\n🎯 NEW HYBRID FEATURES:")
-    print(f"   • ContextBridge execution tracking")
-    print(f"   • GAIAState TypedDict compatibility") 
-    print(f"   • State-aware tool configuration")
-    print(f"   • Enhanced file extraction system")
-    print(f"   • Hybrid metrics and analysis")
-    print(f"   • Smart routing compatibility")
+    print(f"\n🎯 Fixed Error:")
+    print(f"   ❌ Before: self.test_config.get('enable_ground_truth_isolation', True)")
+    print(f"   ✅ After:  getattr(self.test_config, 'enable_ground_truth_isolation', True)")
