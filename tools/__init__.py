@@ -1,3 +1,4 @@
+# tools/__init__.py
 # Import custom tools
 try:
     from .get_attachment_tool import GetAttachmentTool
@@ -7,6 +8,16 @@ except ImportError as e:
     print(f"⚠️ Custom tools failed to load in __init__.py: {e}")
     GetAttachmentTool = None
     ContentRetrieverTool = None
+
+# Import ContentGroundingTool for web_researcher
+try:
+    from .content_grounding_tool import ContentGroundingTool
+    CONTENT_GROUNDING_AVAILABLE = True
+    print("✅ ContentGroundingTool loaded in __init__.py")
+except ImportError as e:
+    print(f"⚠️ ContentGroundingTool failed to load in __init__.py: {e}")
+    ContentGroundingTool = None
+    CONTENT_GROUNDING_AVAILABLE = False
 
 # Import LangChain tools - ONLY what actually exists
 try:
@@ -24,11 +35,13 @@ __all__ = [
     # Custom tools
     'GetAttachmentTool',
     'ContentRetrieverTool',
+    'ContentGroundingTool',
     
     # LangChain tools - only the list, not individual tools
     'ALL_LANGCHAIN_TOOLS',
     'get_langchain_tools',
-    'LANGCHAIN_TOOLS_AVAILABLE'
+    'LANGCHAIN_TOOLS_AVAILABLE',
+    'CONTENT_GROUNDING_AVAILABLE'
 ]
 
 def get_tool_status():
@@ -36,10 +49,12 @@ def get_tool_status():
     return {
         'GetAttachmentTool': GetAttachmentTool is not None,
         'ContentRetrieverTool': ContentRetrieverTool is not None,
+        'ContentGroundingTool': ContentGroundingTool is not None,
         'research_tools': LANGCHAIN_TOOLS_AVAILABLE,
         'total_core_tools': sum([
             GetAttachmentTool is not None,
-            ContentRetrieverTool is not None
+            ContentRetrieverTool is not None,
+            ContentGroundingTool is not None
         ]),
         'total_research_tools': len(ALL_LANGCHAIN_TOOLS) - 1 if LANGCHAIN_TOOLS_AVAILABLE else 0  # Exclude final_answer
     }
@@ -56,9 +71,32 @@ def get_all_tools():
         tools.append(GetAttachmentTool())
     if ContentRetrieverTool:
         tools.append(ContentRetrieverTool())
+    if ContentGroundingTool:
+        tools.append(ContentGroundingTool())
     
     # Add LangChain tools
     tools.extend(ALL_LANGCHAIN_TOOLS)
+    
+    return tools
+
+def get_web_researcher_tools():
+    """Get tools specifically for web_researcher agent"""
+    tools = []
+    
+    # Add LangChain research tools (search capabilities)
+    tools.extend(ALL_LANGCHAIN_TOOLS)
+    
+    # Add content processing tools
+    if ContentRetrieverTool:
+        tools.append(ContentRetrieverTool())
+    
+    # Add content grounding for verification
+    if ContentGroundingTool:
+        tools.append(ContentGroundingTool())
+    
+    # Add file access for document research
+    if GetAttachmentTool:
+        tools.append(GetAttachmentTool())
     
     return tools
 

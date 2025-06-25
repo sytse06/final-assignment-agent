@@ -39,12 +39,19 @@ from agent_logging import AgentLoggingSetup
 
 # Import custom and Langchain tools
 try:
-    from tools import GetAttachmentTool, ContentRetrieverTool
+    from tools import (GetAttachmentTool, 
+                       ContentRetrieverTool, 
+                       ContentGroundingTool, 
+                       CONTENT_GROUNDING_AVAILABLE
+                       )
     CUSTOM_TOOLS_AVAILABLE = True
     print("✅ Custom tools imported successfully")
+    if CONTENT_GROUNDING_AVAILABLE:
+        print("✅ ContentGroundingTool available for web_researcher")
 except ImportError:
     print("⚠️  Custom tools not available - using base tools only")
     CUSTOM_TOOLS_AVAILABLE = False
+    CONTENT_GROUNDING_AVAILABLE = False
 
 try:
     # Fixed: Import from the specific langchain_tools submodule
