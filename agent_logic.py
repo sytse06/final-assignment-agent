@@ -8,6 +8,7 @@ import backoff
 from typing import TypedDict, Optional, List, Dict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 # Core dependencies
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
@@ -15,6 +16,8 @@ from langgraph.graph import StateGraph, START, END
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_google_genai import ChatGoogleGenerativeAI
+
+import openai
 
 # SmolagAgents imports
 from smolagents import (
@@ -27,8 +30,8 @@ from smolagents import (
 
 # Import agent context system
 from agent_context import (
-    ContextVariableFlow,
-    create_context_aware_tools
+    ContextBridge,
+    create_state_aware_tools
 )
 
 # Import retriever system
@@ -62,8 +65,6 @@ except ImportError as e:
     print(f"⚠️  LangChain tools not available: {e}")
     ALL_LANGCHAIN_TOOLS = []
     LANGCHAIN_TOOLS_AVAILABLE = False
-
-import openai
 
 # ============================================================================
 # CONFIGURATION
@@ -109,13 +110,28 @@ class GAIAConfig:
 
 class GAIAState(TypedDict):
     """State for GAIA workflow"""
+    # Core task information
     task_id: Optional[str]
     question: str
+    
+    # File handling (NEW: Enhanced file support)
+    file_name: Optional[str]
+    file_path: Optional[str]
+    has_file: Optional[bool]
+    
+    # Workflow tracking
     steps: List[str]
     raw_answer: Optional[str]
     final_answer: Optional[str]
+    
+    # RAG and routing
     similar_examples: Optional[List[Dict]]
     complexity: Optional[str]
+    selected_agent: Optional[str]
+    
+    # Execution tracking
+    execution_successful: Optional[bool]
+    agent_used: Optional[str]
 
 # ============================================================================
 # LLM RETRY LOGIC
@@ -127,7 +143,7 @@ def llm_invoke_with_retry(llm, messages):
     return llm.invoke(messages)
 
 # ============================================================================
-# COMPLEXITY AND STEP HELPERS
+# OTHER UTILITY FUNCTIONS
 # ============================================================================
 
 def is_simple_math(question: str) -> bool:
@@ -180,24 +196,41 @@ def needs_web_search(question: str) -> bool:
     
     return any(keyword in question_lower for keyword in web_keywords)
 
-def get_agent_step_count(agent) -> int:
-    """Get step count from SmolagAgent memory"""
+def extract_file_info_from_task_id(task_id: str) -> Dict[str, str]:
+    """
+    Extract file information from task_id using GAIA dataset.
+    """
+    if not task_id:
+        return {"file_name": "", "file_path": "", "has_file": False}
+    
     try:
-        # Current SmolagAgents API
-        if hasattr(agent, 'memory') and agent.memory and hasattr(agent.memory, 'steps'):
-            return len(agent.memory.steps)
+        # Try to get file info from GAIA dataset
+        from gaia_dataset_utils import GAIADatasetManager
         
-        # Fallback for older API
-        if hasattr(agent, 'logs'):
-            return len(agent.logs)
+        # This should be passed in or configured, but for now use default path
+        dataset_manager = GAIADatasetManager("./tests/gaia_data")
         
-        return 0
-    except:
-        return 0
-
-# ============================================================================
-# GAIA FORMATTING VALIDATION
-# ============================================================================
+        # Get the actual question data for this task_id
+        question_data = dataset_manager.get_question_by_id(task_id)
+        
+        if question_data:
+            file_name = question_data.get('file_name', '')
+            file_path = question_data.get('file_path', '')
+            has_file = bool(file_name)
+            
+            return {
+                "file_name": file_name,
+                "file_path": file_path, 
+                "has_file": has_file
+            }
+        else:
+            # Task not found in dataset
+            return {"file_name": "", "file_path": "", "has_file": False}
+            
+    except Exception as e:
+        print(f"⚠️  Could not extract file info for task {task_id}: {e}")
+        # For development/testing with arbitrary task_ids, return no file
+        return {"file_name": "", "file_path": "", "has_file": False}
 
 def validate_gaia_format(answer: str) -> bool:
     """Check if answer meets GAIA requirements"""
@@ -215,7 +248,7 @@ def validate_gaia_format(answer: str) -> bool:
 # ============================================================================
 
 class GAIAAgent:
-    """GAIA agent using direct specialist execution with context sharing"""
+    """GAIA agent using hybrid LangGraph state + simplified context bridge"""
     
     def __init__(self, config: GAIAConfig = None):
         if config is None:
@@ -237,22 +270,21 @@ class GAIAAgent:
         
         # Create shared tool instances
         self.shared_tools = self._create_shared_tools()
-        print(f"🔍 DEBUG: shared_tools keys: {list(self.shared_tools.keys())}")
         
-        # Create context-aware tools
+        # Create state-aware tools (NEW: simplified approach)
         if config.enable_context_bridge and self.shared_tools:
-            self.context_aware_tools = create_context_aware_tools(self.shared_tools)
-            print(f"🌉 Context-aware tools created: {len(self.context_aware_tools)} tools")
+            self.state_aware_tools = create_state_aware_tools(self.shared_tools)
+            print(f"🌉 State-aware tools created: {len(self.state_aware_tools)} tools")
         else:
-            self.context_aware_tools = []
+            self.state_aware_tools = []
         
         # Create specialist agents
         self.specialists = self._create_specialist_agents()
         
-        # Build workflow (no manager needed)
+        # Build workflow
         self.workflow = self._build_workflow()
         
-        print("🚀 GAIA Agent initialized with direct specialist execution!")
+        print("🚀 GAIA Agent initialized with hybrid state + context bridge!")
     
     def _initialize_retriever(self):
         """Initialize retriever for similar questions in manager context."""
@@ -353,8 +385,8 @@ class GAIAAgent:
 
         # Helper function to get context-aware tools
         def get_context_tool(tool_name):
-            if self.context_aware_tools and isinstance(self.context_aware_tools, list):
-                for tool in self.context_aware_tools:
+            if self.state_aware_tools and isinstance(self.state_aware_tools, list):
+                for tool in self.state_aware_tools:
                     if hasattr(tool, 'name') and tool.name == tool_name:
                         return tool
             return None
@@ -471,64 +503,40 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
         
         return shared_tools
     
-    def _build_workflow(self):
-        """Build LangGraph workflow with smart routing - Updated with SmolagAgents pattern"""
-        builder = StateGraph(GAIAState)
+    def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
+        """Configure agent tools from LangGraph state"""
+        task_id = state.get("task_id")
+        question = state.get("question")
+        file_path = state.get("file_path")
         
-        if self.config.enable_smart_routing:
-            # Smart routing workflow with proper agent selection/delegation separation
-            builder.add_node("read_question", self._read_question_node)
-            builder.add_node("complexity_check", self._complexity_check_node)
-            builder.add_node("one_shot_answering", self._one_shot_answering_node)
-            builder.add_node("agent_selector", self._agent_selector_node)
-            builder.add_node("delegate_to_agent", self._delegate_to_agent_node)  # NEW
-            builder.add_node("format_answer", self._format_answer_node)
-            
-            # Routing flow
-            builder.add_edge(START, "read_question")
-            builder.add_edge("read_question", "complexity_check")
-            
-            # Conditional routing based on complexity
-            builder.add_conditional_edges(
-                "complexity_check",
-                self._route_by_complexity,
-                {
-                    "simple": "one_shot_answering",
-                    "complex": "agent_selector"  # First select agent
-                }
-            )
-            
-            # Agent workflow: select → delegate → format
-            builder.add_edge("agent_selector", "delegate_to_agent")  # NEW: Selection → Execution
-            builder.add_edge("delegate_to_agent", "format_answer")    # NEW: Execution → Format
-            
-            # Simple path: direct to formatting
-            builder.add_edge("one_shot_answering", "format_answer")
-            
-            # Both paths end at formatting
-            builder.add_edge("format_answer", END)
-            
-        else:
-            # Original linear workflow - Updated with proper separation
-            builder.add_node("read_question", self._read_question_node)
-            builder.add_node("agent_selector", self._agent_selector_node)
-            builder.add_node("delegate_to_agent", self._delegate_to_agent_node)  # NEW
-            builder.add_node("format_answer", self._format_answer_node)
-            
-            # Linear flow: read → select → delegate → format
-            builder.add_edge(START, "read_question")
-            builder.add_edge("read_question", "agent_selector")
-            builder.add_edge("agent_selector", "delegate_to_agent")  # NEW: Proper separation
-            builder.add_edge("delegate_to_agent", "format_answer")   # NEW: Execution → Format
-            builder.add_edge("format_answer", END)
+        if not task_id:
+            return
         
-        return builder.compile()
-    
-# ============================================================================
-# FIXED MEMORY ACCESS HELPERS
-# ============================================================================
-
-    def get_agent_memory_safely(agent) -> Dict:
+        print(f"🔧 Configuring tools from state for {agent_name}")
+        
+        # Configure tools for the selected agent
+        specialist = self.specialists[agent_name]
+        
+        for tool in specialist.tools:
+            try:
+                # Configure GetAttachmentTool from state
+                if hasattr(tool, 'configure_from_state') and hasattr(tool, 'name'):
+                    if tool.name == "get_attachment":
+                        tool.configure_from_state(task_id, file_path)
+                        print(f"✅ Configured {tool.name} with task_id: {task_id}")
+                    elif tool.name == "content_retriever":
+                        tool.configure_from_state(question)
+                        print(f"✅ Configured {tool.name} with question context")
+                
+                # Fallback: Configure tools with attachment_for method
+                elif hasattr(tool, 'attachment_for'):
+                    tool.attachment_for(task_id)
+                    print(f"✅ Configured {tool.name} with attachment_for: {task_id}")
+                    
+            except Exception as e:
+                print(f"⚠️ Could not configure {getattr(tool, 'name', 'unknown tool')}: {e}")
+                
+    def get_agent_memory_safely(self, agent) -> Dict:
         """
         Safely access agent memory in various SmolagAgent versions.
         
@@ -563,391 +571,6 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
         except Exception as e:
             print(f"⚠️  Error accessing agent memory: {e}")
             return {'steps': []}
-    
-    # ============================================================================
-    # WORKFLOW NODES WITH CONTEXT
-    # ============================================================================
-    
-    def _read_question_node(self, state: GAIAState):
-        """Read question and setup context bridge"""
-        task_id = state.get("task_id")
-        question = state["question"]
-        
-        # Setup context bridge
-        if self.config.enable_context_bridge:
-            metadata = {
-                "complexity": state.get("complexity"),
-                "routing_path": "initializing"
-            }
-            ContextVariableFlow.set_task_context(task_id, question, metadata)
-            ContextVariableFlow.add_workflow_step(task_id, "read_question", "Processing question and RAG setup")
-            
-            if self.config.context_bridge_debug:
-                print(f"🌉 Context bridge activated: {ContextVariableFlow.get_context_summary()}")
-        
-        if self.logging:
-            self.logging.log_step("question_setup", f"Processing question: {question[:50]}...")
-        
-        # Initialize similar_examples
-        similar_examples = []
-        
-        # Only do RAG retrieval for complex questions if routing is enabled
-        if not self.config.enable_smart_routing or not self.config.skip_rag_for_simple:
-            # Always do RAG (original behavior)
-            try:
-                similar_docs = self.retriever.search(question, k=self.config.rag_examples_count)
-                
-                for doc in similar_docs:
-                    content = doc.page_content
-                    if "Question :" in content and "Final answer :" in content:
-                        parts = content.split("Final answer :")
-                        if len(parts) == 2:
-                            q_part = parts[0].replace("Question :", "").strip()
-                            a_part = parts[1].strip()
-                            similar_examples.append({
-                                "question": q_part,
-                                "answer": a_part
-                            })
-                
-                print(f"📚 Found {len(similar_examples)} similar examples")
-                if self.logging:
-                    self.logging.set_similar_examples_count(len(similar_examples))
-                                
-            except Exception as e:
-                print(f"⚠️  RAG retrieval error: {e}")
-                similar_examples = []
-        else:
-            print("⚡ Skipping RAG for fast routing decision")
-        
-        return {
-            "similar_examples": similar_examples,
-            "steps": state["steps"] + ["Question setup and context bridge activated"]
-        }
-
-    def _complexity_check_node(self, state: GAIAState):
-        """Determine complexity and update context bridge"""
-        question = state["question"]
-        task_id = state.get("task_id", "")
-        
-        if self.config.enable_context_bridge:
-            ContextVariableFlow.add_workflow_step(task_id, "complexity_check", "Analyzing question complexity")
-        
-        if self.logging:
-            self.logging.log_step("complexity_analysis", f"Analyzing complexity for: {question[:50]}...")
-        
-        print(f"🧠 Analyzing complexity for: {question[:50]}...")
-        
-        # Quick pattern matching first
-        if is_simple_math(question):
-            complexity = "simple"
-            reason = "Simple arithmetic detected"
-        elif is_simple_fact(question):
-            complexity = "simple" 
-            reason = "Simple factual query detected"
-        elif has_attachments(task_id):
-            complexity = "complex"
-            reason = "File attachments detected"
-        elif needs_web_search(question):
-            complexity = "complex"
-            reason = "Current information needed"
-        else:
-            # LLM decides for edge cases
-            if self.logging:
-                self.logging.log_step("llm_complexity_check", "Using LLM for edge case assessment")
-            
-            complexity = self._llm_complexity_check(question)
-            reason = "LLM complexity assessment"
-        
-        print(f"📊 Complexity: {complexity} ({reason})")
-        
-        # Update context bridge with complexity
-        if self.config.enable_context_bridge:
-            ContextVariableFlow.update_complexity(complexity)
-            ContextVariableFlow.add_workflow_step(task_id, "complexity_result", f"Complexity: {complexity} - {reason}")
-        
-        if self.logging:
-            self.logging.set_complexity(complexity)
-            self.logging.log_step("complexity_result", f"Final complexity: {complexity} - {reason}")
-        
-        # If complex perform RAG search with retriever
-        if complexity == "complex" and self.config.skip_rag_for_simple and not state.get("similar_examples"):
-            print("📚 Retrieving RAG examples for complex question...")
-            
-            if self.logging:
-                self.logging.log_step("rag_retrieval", "Retrieving examples for complex question")
-            
-            try:
-                similar_docs = self.retriever.search(question, k=self.config.rag_examples_count)
-                similar_examples = []
-                
-                for doc in similar_docs:
-                    content = doc.page_content
-                    if "Question :" in content and "Final answer :" in content:
-                        parts = content.split("Final answer :")
-                        if len(parts) == 2:
-                            q_part = parts[0].replace("Question :", "").strip()
-                            a_part = parts[1].strip()
-                            similar_examples.append({
-                                "question": q_part,
-                                "answer": a_part
-                            })
-                
-                print(f"📚 Found {len(similar_examples)} similar examples")                            
-                if self.logging:
-                    self.logging.set_similar_examples_count(len(similar_examples))
-                    self.logging.log_step("rag_complete", f"Retrieved {len(similar_examples)} examples")
-                    
-            except Exception as e:
-                print(f"⚠️  RAG retrieval error: {e}")
-                if self.logging:
-                    self.logging.log_step("rag_error", f"RAG retrieval failed: {str(e)}")
-                similar_examples = state.get("similar_examples", [])
-        else:
-            similar_examples = state.get("similar_examples", [])
-        
-        return {
-            "complexity": complexity,
-            "similar_examples": similar_examples,
-            "steps": state["steps"] + [f"Complexity assessed: {complexity} ({reason})"]
-        }
-
-    def _llm_complexity_check(self, question: str) -> str:
-        """Use LLM to determine complexity for edge cases"""
-        
-        prompt = f"""Analyze this question and determine if it needs specialist tools or can be answered directly.
-
-        Question: {question}
-
-        Consider:
-        - Simple math/facts = "simple" 
-        - Needs file analysis, web search, or complex reasoning = "complex"
-
-        Respond with just "simple" or "complex":"""
-        
-        try:
-            response = llm_invoke_with_retry(self.orchestration_model, [HumanMessage(content=prompt)])
-            result = response.content.strip().lower()
-            complexity = "simple" if "simple" in result else "complex"
-            
-            return complexity
-            
-        except Exception as e:
-            # Default to complex if LLM fails
-            print(f"⚠️  LLM complexity check failed: {str(e)}, defaulting to complex")
-            return "complex"
-
-    def _route_by_complexity(self, state: GAIAState) -> str:
-        """Routing function for conditional edges"""
-        return state.get("complexity", "complex")
-    
-    def _one_shot_answering_node(self, state: GAIAState):
-        """Direct LLM answering for simple questions"""
-        task_id = state.get("task_id", "")
-        
-        print("⚡ Using one-shot direct answering")
-        
-        # Update context bridge routing
-        if self.config.enable_context_bridge:
-            ContextVariableFlow.update_routing_path("one_shot_llm")
-            ContextVariableFlow.add_workflow_step(task_id, "one_shot_answering", "Direct LLM answering for simple question")
-        
-        if self.logging:
-            self.logging.set_routing_path("one_shot_llm")
-            self.logging.log_step("one_shot_start", "Starting direct LLM answering")
-        
-        # Build prompt for direct answering
-        question = state["question"]
-        
-        if self.logging:
-            self.logging.log_step("one_shot_prompt_prep", f"Preparing direct prompt for: {question[:30]}...")
-        
-        # Simple prompt for direct answering
-        prompt = f"""You are a general AI assistant. You must provide specific, factual answers.
-        
-        Question: {question}
-
-        CRITICAL: Never use placeholder text like "[your answer]" or "[Title of...]". Always give the actual answer.
-
-        When analyzing files:
-        1. Use get_attachment tool to access file content
-        2. Process the actual data thoroughly  
-        3. Provide specific numerical or text answers
-
-        Report your thoughts, and finish with: FINAL ANSWER: [YOUR SPECIFIC ANSWER]
-
-        YOUR FINAL ANSWER should be a number OR as few words as possible OR a comma separated list.
-        - Numbers: no commas, no units ($ %) unless specified
-        - Strings: no articles (the, a, an), no abbreviations, digits as text unless specified  
-        - Lists: apply above rules to each element
-
-        NEVER use placeholder text. Always give real, specific answers."""
-        
-        try:
-            if self.logging:
-                self.logging.log_step("one_shot_llm_call", "Making direct LLM call")
-            
-            response = llm_invoke_with_retry(self.orchestration_model, [HumanMessage(content=prompt)])
-            
-            if self.logging:
-                response_preview = response.content[:50] + "..." if len(response.content) > 50 else response.content
-                self.logging.log_step("one_shot_response", f"LLM response received: {response_preview}")
-            
-            # Validate response
-            if not response.content or len(response.content.strip()) == 0:
-                error_msg = "Empty response from LLM"
-                if self.logging:
-                    self.logging.log_step("one_shot_empty_response", error_msg)
-                raise ValueError(error_msg)
-            
-            if self.logging:
-                self.logging.log_step("one_shot_complete", "Direct LLM answering completed successfully")
-            
-            return {
-                "raw_answer": response.content,
-                "steps": state["steps"] + ["Direct LLM answering completed"]
-            }
-            
-        except Exception as e:
-            error_msg = f"One-shot answering failed: {str(e)}"
-            print(f"❌ {error_msg}")
-            
-            if self.logging:
-                self.logging.log_step("one_shot_error", error_msg)
-            
-            return {
-                "raw_answer": error_msg,
-                "steps": state["steps"] + [error_msg]
-            }
-
-    def _agent_selector_node(self, state: GAIAState):
-        """Select appropriate agent based on question type - SELECTION ONLY with step logging"""
-        
-        # Log agent selection start
-        if self.logging:
-            self.logging.log_step("agent_selector", "Selecting appropriate specialist agent")
-        
-        print(f"🎯 Agent Selection for: {state['question'][:100]}...")
-        
-        # Use existing similar examples from state (retrieved in earlier nodes)
-        similar_examples = state.get("similar_examples", [])
-        
-        # Build examples context for LLM
-        examples_context = ""
-        if similar_examples:
-            examples_context = "\n\nSimilar GAIA examples:\n"
-            for i, example in enumerate(similar_examples[:3], 1):
-                examples_context += f"{i}. Q: {example.get('question', '')[:100]}...\n"
-                examples_context += f"   A: {example.get('answer', '')}\n"
-        
-        selection_prompt = f"""
-        Based on these successful GAIA examples, select the best agent for this question:
-        
-        QUESTION: {state["question"]}
-        {examples_context}
-        
-        Available agents:
-        - data_analyst: Python code execution, file analysis, calculations
-        - web_researcher: Google search, web browsing, current information
-        
-        Consider:
-        1. Does the question require file processing? → data_analyst
-        2. Does it need web search or current information? → web_researcher
-        3. What type of question succeeded in similar examples?
-        
-        Reply with just: data_analyst OR web_researcher
-        """
-        
-        try:
-            # Log agent selection step
-            if self.logging:
-                self.logging.log_step("agent_selection_prompt", "LLM selecting best agent based on question analysis")
-            
-            # Get agent selection from LLM
-            response = self.orchestration_model.invoke([HumanMessage(content=selection_prompt)])
-            selected_agent = response.content.strip().lower()
-            
-            # Validate selection
-            if selected_agent not in self.specialists:
-                print(f"⚠️ Invalid agent selection '{selected_agent}', using data_analyst")
-                selected_agent = "data_analyst"
-            
-            print(f"🤖 Selected agent: {selected_agent}")
-            
-            # Log successful selection
-            if self.logging:
-                self.logging.log_step("agent_selected", f"Selected agent: {selected_agent}")
-            
-            # ONLY RETURN SELECTION - NO EXECUTION
-            return {
-                **state,
-                "selected_agent": selected_agent,
-                "similar_examples": similar_examples
-            }
-            
-        except Exception as e:
-            print(f"❌ Agent selection failed: {e}")
-            print("🔄 Falling back to data_analyst")
-            
-            # Log the failure and fallback
-            if self.logging:
-                self.logging.log_step("agent_selection_failed", f"Selection failed: {e}, using data_analyst fallback")
-            
-            return {
-                **state,
-                "selected_agent": "data_analyst",
-                "similar_examples": similar_examples,
-                "selection_fallback": True
-            }
-
-    def _delegate_to_agent_node(self, state: GAIAState):
-        """Execute the pre-selected agent - EXECUTION ONLY"""
-        selected_agent = state.get("selected_agent", "data_analyst")
-        
-        # Log agent execution start
-        if self.logging:
-            self.logging.log_step("delegate_to_agent", f"Executing agent: {selected_agent}")
-        
-        print(f"🚀 Executing agent: {selected_agent}")
-        
-        try:
-            # Get the specialist agent
-            specialist = self.specialists[selected_agent]
-            
-            # Log agent execution start
-            if self.logging:
-                self.logging.log_step("agent_execution_start", f"Agent execution: {selected_agent}")
-            
-            # Execute using SmolagAgents pattern
-            result = specialist.run(task=state["question"])
-            
-            # Log agent execution complete (without estimating steps)
-            if self.logging:
-                self.logging.log_step("agent_execution_complete", f"Agent {selected_agent} completed")
-            
-            print(f"✅ Agent {selected_agent} completed execution")
-            
-            return {
-                **state,
-                "agent_used": selected_agent,
-                "raw_answer": result,
-                "execution_successful": True
-            }
-            
-        except Exception as e:
-            print(f"❌ Agent execution failed: {e}")
-            print("🔄 Falling back to error response")
-            
-            # Log the failure
-            if self.logging:
-                self.logging.log_step("agent_execution_failed", f"Agent {selected_agent} failed: {str(e)}")
-            
-            return {
-                **state,
-                "agent_used": selected_agent,
-                "raw_answer": f"Agent execution failed: {str(e)}",
-                "execution_successful": False,
-                "execution_error": True
-            }
 
     def _llm_select_agent(self, question: str, similar_examples: List[Dict] = None) -> str:
         """LLM selects agent using RAG examples - no hard-coded rules"""
@@ -994,107 +617,458 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
             # Fallback to first agent
             return list(self.specialists.keys())[0]
 
+    def _add_directional_info(self, question: str, agent_name: str, state: GAIAState) -> str:
+        """Add essential directional info to the task"""
+        
+        # Get file info from state
+        has_file = state.get("has_file", False)
+        file_name = state.get("file_name", "")
+        
+        # Build enhanced task with directional info
+        task_parts = [question]
+        
+        # Add file handling direction
+        if has_file:
+            task_parts.append(f"\nNote: There is an attached file '{file_name}'. Use get_attachment tool to access it.")
+        
+        # Add agent-specific direction
+        if agent_name == "data_analyst":
+            task_parts.append("\nProvide numerical calculations and data analysis. Use Python code for processing.")
+        elif agent_name == "web_researcher":
+            task_parts.append("\nSearch for current information using available research tools.")
+        
+        # Add GAIA format requirement
+        task_parts.append("\nIMPORTANT: End your response with 'FINAL ANSWER: [your answer]' in the exact GAIA format.")
+        
+        return "\n".join(task_parts)
+                   
+    # ============================================================================
+    # WORKFLOW 
+    # ============================================================================
+
+    def _build_workflow(self):
+        """Build LangGraph workflow with smart routing - Updated with SmolagAgents pattern"""
+        builder = StateGraph(GAIAState)
+        
+        if self.config.enable_smart_routing:
+            # Smart routing workflow with proper agent selection/delegation separation
+            builder.add_node("read_question", self._read_question_node)
+            builder.add_node("complexity_check", self._complexity_check_node)
+            builder.add_node("one_shot_answering", self._one_shot_answering_node)
+            builder.add_node("agent_selector", self._agent_selector_node)
+            builder.add_node("delegate_to_agent", self._delegate_to_agent_node)  # NEW
+            builder.add_node("format_answer", self._format_answer_node)
+            
+            # Routing flow
+            builder.add_edge(START, "read_question")
+            builder.add_edge("read_question", "complexity_check")
+            
+            # Conditional routing based on complexity
+            builder.add_conditional_edges(
+                "complexity_check",
+                self._route_by_complexity,
+                {
+                    "simple": "one_shot_answering",
+                    "complex": "agent_selector"
+                }
+            )
+            
+            # Agent workflow: select → delegate → format
+            builder.add_edge("agent_selector", "delegate_to_agent")
+            builder.add_edge("delegate_to_agent", "format_answer")
+            
+            # Simple path: direct to formatting
+            builder.add_edge("one_shot_answering", "format_answer")
+            
+            # Both paths end at formatting
+            builder.add_edge("format_answer", END)
+            
+        else:
+            # Original linear workflow - Updated with proper separation
+            builder.add_node("read_question", self._read_question_node)
+            builder.add_node("agent_selector", self._agent_selector_node)
+            builder.add_node("delegate_to_agent", self._delegate_to_agent_node)
+            builder.add_node("format_answer", self._format_answer_node)
+            
+            # Linear flow: read → select → delegate → format
+            builder.add_edge(START, "read_question")
+            builder.add_edge("read_question", "agent_selector")
+            builder.add_edge("agent_selector", "delegate_to_agent")
+            builder.add_edge("delegate_to_agent", "format_answer")
+            builder.add_edge("format_answer", END)
+        
+        return builder.compile()
+
+    def _read_question_node(self, state: GAIAState):
+        """Enhanced question reading with file info extraction"""
+        task_id = state.get("task_id")
+        question = state["question"]
+        
+        # Start context bridge tracking
+        if self.config.enable_context_bridge:
+            ContextBridge.start_task_execution(task_id)
+            ContextBridge.track_operation("Processing question and extracting file info")
+        
+        if self.logging:
+            self.logging.log_step("question_setup", f"Processing question: {question[:50]}...")
+        
+        # NEW: Extract file information from task_id
+        file_info = extract_file_info_from_task_id(task_id)
+        
+        # Initialize similar_examples
+        similar_examples = []
+        
+        # RAG retrieval (unchanged logic)
+        if not self.config.enable_smart_routing or not self.config.skip_rag_for_simple:
+            try:
+                similar_docs = self.retriever.search(question, k=self.config.rag_examples_count)
+                
+                for doc in similar_docs:
+                    content = doc.page_content
+                    if "Question :" in content and "Final answer :" in content:
+                        parts = content.split("Final answer :")
+                        if len(parts) == 2:
+                            q_part = parts[0].replace("Question :", "").strip()
+                            a_part = parts[1].strip()
+                            similar_examples.append({
+                                "question": q_part,
+                                "answer": a_part
+                            })
+                
+                print(f"📚 Found {len(similar_examples)} similar examples")
+                if self.logging:
+                    self.logging.set_similar_examples_count(len(similar_examples))
+                                
+            except Exception as e:
+                print(f"⚠️  RAG retrieval error: {e}")
+                similar_examples = []
+        
+        # Return enhanced state with file information
+        return {
+            "similar_examples": similar_examples,
+            "file_name": file_info.get("file_name", ""),
+            "file_path": file_info.get("file_path", ""),
+            "has_file": file_info.get("has_file", False),
+            "steps": state["steps"] + ["Question setup and file info extracted"]
+        }
+
+    def _complexity_check_node(self, state: GAIAState):
+        """Enhanced complexity check with file awareness"""
+        question = state["question"]
+        task_id = state.get("task_id", "")
+        has_file = state.get("has_file", False)
+        
+        if self.config.enable_context_bridge:
+            ContextBridge.track_operation("Analyzing question complexity")
+        
+        if self.logging:
+            self.logging.log_step("complexity_analysis", f"Analyzing complexity for: {question[:50]}...")
+        
+        print(f"🧠 Analyzing complexity for: {question[:50]}...")
+        
+        # Enhanced complexity detection with file awareness
+        if is_simple_math(question):
+            complexity = "simple"
+            reason = "Simple arithmetic detected"
+        elif is_simple_fact(question):
+            complexity = "simple" 
+            reason = "Simple factual query detected"
+        elif has_file:  # NEW: Use state file info
+            complexity = "complex"
+            reason = "File attachment detected in state"
+        elif needs_web_search(question):
+            complexity = "complex"
+            reason = "Current information needed"
+        else:
+            # LLM decides for edge cases
+            complexity = self._llm_complexity_check(question)
+            reason = "LLM complexity assessment"
+        
+        print(f"📊 Complexity: {complexity} ({reason})")
+        
+        # Update context bridge
+        if self.config.enable_context_bridge:
+            ContextBridge.track_operation(f"Complexity: {complexity} - {reason}")
+        
+        if self.logging:
+            self.logging.set_complexity(complexity)
+            self.logging.log_step("complexity_result", f"Final complexity: {complexity} - {reason}")
+        
+        # Enhanced RAG for complex questions
+        if complexity == "complex" and self.config.skip_rag_for_simple and not state.get("similar_examples"):
+            print("📚 Retrieving RAG examples for complex question...")
+            
+            try:
+                similar_docs = self.retriever.search(question, k=self.config.rag_examples_count)
+                similar_examples = []
+                
+                for doc in similar_docs:
+                    content = doc.page_content
+                    if "Question :" in content and "Final answer :" in content:
+                        parts = content.split("Final answer :")
+                        if len(parts) == 2:
+                            q_part = parts[0].replace("Question :", "").strip()
+                            a_part = parts[1].strip()
+                            similar_examples.append({
+                                "question": q_part,
+                                "answer": a_part
+                            })
+                
+                print(f"📚 Found {len(similar_examples)} similar examples")                            
+                if self.logging:
+                    self.logging.set_similar_examples_count(len(similar_examples))
+                    
+            except Exception as e:
+                print(f"⚠️  RAG retrieval error: {e}")
+                similar_examples = state.get("similar_examples", [])
+        else:
+            similar_examples = state.get("similar_examples", [])
+        
+        return {
+            "complexity": complexity,
+            "similar_examples": similar_examples,
+            "steps": state["steps"] + [f"Complexity assessed: {complexity} ({reason})"]
+        }
+
+    def _llm_complexity_check(self, question: str) -> str:
+        """Use LLM to determine complexity for edge cases"""
+        
+        prompt = f"""Analyze this question and determine if it needs specialist tools or can be answered directly.
+
+        Question: {question}
+
+        Consider:
+        - Simple math/facts = "simple" 
+        - Needs file analysis, web search, or complex reasoning = "complex"
+
+        Respond with just "simple" or "complex":"""
+        
+        try:
+            response = llm_invoke_with_retry(self.orchestration_model, [HumanMessage(content=prompt)])
+            result = response.content.strip().lower()
+            complexity = "simple" if "simple" in result else "complex"
+            
+            return complexity
+            
+        except Exception as e:
+            # Default to complex if LLM fails
+            print(f"⚠️  LLM complexity check failed: {str(e)}, defaulting to complex")
+            return "complex"
+
+    def _route_by_complexity(self, state: GAIAState) -> str:
+        """Routing function for conditional edges"""
+        return state.get("complexity", "complex")
+
+    def _one_shot_answering_node(self, state: GAIAState):
+        """Direct LLM answering for simple questions"""
+        task_id = state.get("task_id", "")
+        
+        print("⚡ Using one-shot direct answering")
+        
+        if self.config.enable_context_bridge:
+            ContextBridge.track_operation("Direct LLM answering for simple question")
+        
+        if self.logging:
+            self.logging.set_routing_path("one_shot_llm")
+            self.logging.log_step("one_shot_start", "Starting direct LLM answering")
+        
+        question = state["question"]
+        
+        prompt = f"""You are a general AI assistant. You must provide specific, factual answers.
+        
+        Question: {question}
+
+        CRITICAL: Never use placeholder text like "[your answer]" or "[Title of...]". Always give the actual answer.
+
+        Report your thoughts, and finish with: FINAL ANSWER: [YOUR SPECIFIC ANSWER]
+
+        YOUR FINAL ANSWER should be a number OR as few words as possible OR a comma separated list.
+        - Numbers: no commas, no units ($ %) unless specified
+        - Strings: no articles (the, a, an), no abbreviations, digits as text unless specified  
+        - Lists: apply above rules to each element
+
+        NEVER use placeholder text. Always give real, specific answers."""
+        
+        try:
+            response = llm_invoke_with_retry(self.orchestration_model, [HumanMessage(content=prompt)])
+            
+            if not response.content or len(response.content.strip()) == 0:
+                raise ValueError("Empty response from LLM")
+            
+            if self.logging:
+                self.logging.log_step("one_shot_complete", "Direct LLM answering completed successfully")
+            
+            return {
+                "raw_answer": response.content,
+                "steps": state["steps"] + ["Direct LLM answering completed"]
+            }
+            
+        except Exception as e:
+            error_msg = f"One-shot answering failed: {str(e)}"
+            print(f"❌ {error_msg}")
+            
+            if self.logging:
+                self.logging.log_step("one_shot_error", error_msg)
+            
+            return {
+                "raw_answer": error_msg,
+                "steps": state["steps"] + [error_msg]
+            }
+
+    def _agent_selector_node(self, state: GAIAState):
+        """Enhanced agent selection with file awareness"""
+        
+        if self.logging:
+            self.logging.log_step("agent_selector", "Selecting appropriate specialist agent")
+        
+        print(f"🎯 Agent Selection for: {state['question'][:100]}...")
+        
+        # Use file information from state for better selection
+        has_file = state.get("has_file", False)
+        file_name = state.get("file_name", "")
+        similar_examples = state.get("similar_examples", [])
+        
+        # Build enhanced examples context
+        examples_context = ""
+        if similar_examples:
+            examples_context = "\n\nSimilar GAIA examples:\n"
+            for i, example in enumerate(similar_examples[:3], 1):
+                examples_context += f"{i}. Q: {example.get('question', '')[:100]}...\n"
+                examples_context += f"   A: {example.get('answer', '')}\n"
+        
+        # Enhanced selection prompt with file awareness
+        file_context = ""
+        if has_file:
+            file_context = f"\n\nFile Information:\n- Has file: {file_name}\n- File processing needed: Yes"
+        
+        selection_prompt = f"""
+        Based on these successful GAIA examples, select the best agent for this question:
+        
+        QUESTION: {state["question"]}
+        {file_context}
+        {examples_context}
+        
+        Available agents:
+        - data_analyst: Python code execution, file analysis, calculations, Excel/CSV processing
+        - web_researcher: Google search, web browsing, current information, document research
+        
+        Consider:
+        1. Does the question require file processing? → data_analyst
+        2. Does it need web search or current information? → web_researcher
+        3. What type of question succeeded in similar examples?
+        4. File information: {file_name if has_file else "No files"}
+        
+        Reply with just: data_analyst OR web_researcher
+        """
+        
+        try:
+            if self.logging:
+                self.logging.log_step("agent_selection_prompt", "LLM selecting best agent with file awareness")
+            
+            response = self.orchestration_model.invoke([HumanMessage(content=selection_prompt)])
+            selected_agent = response.content.strip().lower()
+            
+            # Validate selection
+            if selected_agent not in self.specialists:
+                print(f"⚠️ Invalid agent selection '{selected_agent}', using data_analyst")
+                selected_agent = "data_analyst"
+            
+            print(f"🤖 Selected agent: {selected_agent}")
+            
+            if self.logging:
+                self.logging.log_step("agent_selected", f"Selected agent: {selected_agent}")
+            
+            return {
+                **state,
+                "selected_agent": selected_agent,
+                "similar_examples": similar_examples
+            }
+            
+        except Exception as e:
+            print(f"❌ Agent selection failed: {e}")
+            print("🔄 Falling back to data_analyst")
+            
+            if self.logging:
+                self.logging.log_step("agent_selection_failed", f"Selection failed: {e}, using data_analyst fallback")
+            
+            return {
+                **state,
+                "selected_agent": "data_analyst",
+                "similar_examples": similar_examples,
+                "selection_fallback": True
+            }
+
+    def _delegate_to_agent_node(self, state: GAIAState):
+        """Agent execution with state-based tool configuration"""
+        selected_agent = state.get("selected_agent", "data_analyst")
+        task_id = state.get("task_id")
+        question = state.get("question")
+        file_path = state.get("file_path")
+        
+        if self.logging:
+            self.logging.log_step("delegate_to_agent", f"Executing agent: {selected_agent}")
+        
+        print(f"🚀 Executing agent: {selected_agent}")
+        
+        try:
+            # Configure tools from LangGraph state
+            self._configure_tools_from_state(selected_agent, state)
+            
+            # Add essential directional info to the question
+            enhanced_task = self._add_directional_info(question, selected_agent, state)
+            
+            # Get the specialist agent
+            specialist = self.specialists[selected_agent]
+            
+            if self.logging:
+                self.logging.log_step("agent_execution_start", f"Agent execution: {selected_agent}")
+            
+            # Execute using SmolagAgents pattern with enhanced task
+            result = specialist.run(task=enhanced_task)
+            
+            if self.logging:
+                self.logging.log_step("agent_execution_complete", f"Agent {selected_agent} completed")
+            
+            print(f"✅ Agent {selected_agent} completed execution")
+            
+            return {
+                **state,
+                "agent_used": selected_agent,
+                "raw_answer": result,
+                "execution_successful": True
+            }
+            
+        except Exception as e:
+            print(f"❌ Agent execution failed: {e}")
+            
+            if self.logging:
+                self.logging.log_step("agent_execution_failed", f"Agent {selected_agent} failed: {str(e)}")
+            
+            return {
+                **state,
+                "agent_used": selected_agent,
+                "raw_answer": f"Agent execution failed: {str(e)}",
+                "execution_successful": False,
+                "execution_error": True
+            }
+
     def _get_current_temporal_context(self) -> str:
         """Get current date/time context for temporal awareness"""
         now = datetime.now(timezone.utc)
         return f"Current date: {now.strftime('%Y-%m-%d')} ({now.strftime('%B %d, %Y')})"
-    
-    def _prepare_manager_context(self, question: str, rag_examples: List[Dict], task_id: str) -> str:
-        """Simplified agent selector context mindful of JSON issues"""
-        
-        context_parts = [
-            "GAIA TASK COORDINATOR",
-            "=" * 50,
-            "",
-            f"Question: {question}",
-            f"Task ID: {task_id}",
-            " Context bridge is active - tools automatically access task context",
-            "",
-            " YOUR MISSION:",
-            "Solve this question step by step and provide a final answer.",
-            "",
-            "AVAILABLE TOOLS and SPECIALISTS:",
-            "- get_attachment to access files",
-            "- data_analyst for calculations and data processing",
-            "- web_researcher for current information and web search",
-            "",
-            "WORKFLOW:",
-            "1. If files mentioned use get_attachment first",
-            "2. Read and understand file content",
-            "3. Analyze the problem step by step",
-            "4. Get help from specialists if needed",
-            "5. Provide final answer",
-            "",
-            "GETTING HELP:",
-            "- For calculations ask data_analyst",
-            "- For research ask web_researcher",
-            "- Use simple natural language",
-            "",
-            "IMPORTANT NOTES:",
-            "- Files are automatically linked to this task",
-            "- Focus on solving the problem correctly",
-            "- Work through the solution step by step",
-        ]
-        
-        # Add RAG examples simply
-        if rag_examples:
-            context_parts.extend([
-                "",
-                " SIMILAR EXAMPLES:",
-                f"Previous answer for similar question: {rag_examples[0].get('answer', 'Unknown')}",
-                ""
-            ])
-        
-        # Clean completion requirements
-        context_parts.extend([
-            "",
-            "FINAL ANSWER REQUIREMENTS:",
-            "",
-            "Format: FINAL ANSWER: [your answer]",
-            "",
-            "Answer guidelines:",
-            "- Numbers: Use integers when specified",
-            "- Text: Be concise",
-            "- No unnecessary words",
-            "",
-            "Examples:",
-            "- FINAL ANSWER: 3",
-            "- FINAL ANSWER: Time-Parking 2: Parallel Universe", 
-            "- FINAL ANSWER: 17.056",
-            "",
-            "SUCCESS FACTORS:",
-            "1. You MUST provide a FINAL ANSWER",
-            "2. Stop after giving your answer",
-            "3. Answer the question directly",
-            "",
-            f"Start solving task {task_id} now"
-        ])
-        
-        final_context = "\n".join(context_parts)
 
-        if self.logging:
-            context_length = len(final_context)
-            self.logging.log_step("context_prep_complete", f"Manager context prepared: {context_length} characters")
-            
-        if self.config.context_bridge_debug:
-            print(f"🔧 Manager context prepared with simplified delegation format")
-            
-        return final_context
-    
     def _format_answer_node(self, state: GAIAState):
-        """Final answer formatting  with context bridge step counting and cleanup"""
+        """Enhanced answer formatting with context bridge cleanup"""
         raw_answer = state.get("raw_answer", "")
         task_id = state.get("task_id", "")
         
-        # Log workflow step via context bridge
         if self.config.enable_context_bridge:
-            ContextVariableFlow.add_workflow_step(task_id, "format_answer", "Formatting final answer")
+            ContextBridge.track_operation("Formatting final answer")
         
         if self.logging:
             self.logging.log_step("format_start", f"Formatting answer: {raw_answer[:50]}...")
         
         try:
-            # Extract final answer
             if self.logging:
                 self.logging.log_step("extract_answer", "Extracting final answer from raw response")
             
@@ -1108,59 +1082,47 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
             if self.logging:
                 self.logging.log_step("format_complete", f"Final formatted answer: {formatted_answer}")
             
-            # NEW: Get final step count from context bridge before cleanup
-            final_step_data = {}
+            # Get execution metrics from context bridge
+            execution_metrics = {}
             if self.config.enable_context_bridge:
-                ContextVariableFlow.add_workflow_step(task_id, "answer_complete", f"Final answer: {formatted_answer}")
-                final_step_data = ContextVariableFlow.get_step_count(task_id)
-                
-                if self.config.context_bridge_debug:
-                    print(f"🌉 Final step count: {final_step_data}")
+                execution_metrics = ContextBridge.get_execution_metrics()
+                ContextBridge.track_operation(f"Final answer: {formatted_answer}")
             
             return {
                 "final_answer": formatted_answer,
-                "context_step_data": final_step_data,  # NEW: Step data from context bridge
+                "execution_metrics": execution_metrics,
                 "steps": state["steps"] + ["Final answer formatting applied"]
             }
             
         except Exception as e:
             error_msg = f"Answer formatting error: {str(e)}"
             
-            # NEW: Log error and get step data
             if self.config.enable_context_bridge:
-                ContextVariableFlow.add_workflow_step(task_id, "format_error", error_msg)
-                final_step_data = ContextVariableFlow.get_step_count(task_id)
+                ContextBridge.track_operation(f"Format error: {error_msg}")
+                execution_metrics = ContextBridge.get_execution_metrics()
             else:
-                final_step_data = {}
+                execution_metrics = {}
             
             if self.logging:
                 self.logging.log_step("format_error", error_msg)
             
             return {
                 "final_answer": raw_answer.strip() if raw_answer else "No answer",
-                "context_step_data": final_step_data,  # NEW: Even for errors
+                "execution_metrics": execution_metrics,
                 "steps": state["steps"] + [error_msg]
             }
         finally:
-            # Context cleanup - clear specific task
+            # Context cleanup
             if self.config.enable_context_bridge:
-                if self.config.context_bridge_debug:
-                    final_context = ContextVariableFlow.get_context_summary()
-                    print(f"🌉 Final context before cleanup: {final_context}")
-                
-                ContextVariableFlow.clear_context()
+                ContextBridge.clear_tracking()
                         
     def _extract_final_answer(self, raw_answer: str) -> str:
-        """Extract final answer from manager response"""
+        """Extract final answer from agent response"""
         if not raw_answer:
             if self.logging:
                 self.logging.log_step("extract_empty", "Raw answer is empty")
             return "No answer"
         
-        if self.logging:
-            self.logging.log_step("extract_patterns", "Searching for FINAL ANSWER patterns")
-        
-        # Try to find FINAL ANSWER pattern
         patterns = [
             r"FINAL ANSWER:\s*(.+?)(?:\n|$)",
             r"Final Answer:\s*(.+?)(?:\n|$)",
@@ -1185,17 +1147,15 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
         return fallback
 
     def _apply_gaia_formatting(self, answer: str) -> str:
-        """Apply GAIA formatting rules"""
+        """Apply GAIA formatting rules to final answers"""
         if not answer:
-            if self.logging:
-                self.logging.log_step("gaia_format_empty", "Answer is empty, returning default")
             return "No answer"
         
         original_answer = answer
         answer = answer.strip()
         
-        if self.logging:
-            self.logging.log_step("gaia_format_start", f"Original: '{original_answer}' -> Stripped: '{answer}'")
+        # SIMPLE FIX: Remove duplicate FINAL ANSWER prefixes in one line
+        answer = re.sub(r'(?i)(final\s*answer\s*:\s*)+', 'FINAL ANSWER: ', answer)
         
         # Remove common prefixes
         prefixes = [
@@ -1206,25 +1166,16 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
         answer_lower = answer.lower()
         for prefix in prefixes:
             if answer_lower.startswith(prefix):
-                old_answer = answer
                 answer = answer[len(prefix):].strip()
                 answer_lower = answer.lower()
-                if self.logging:
-                    self.logging.log_step("gaia_format_prefix", f"Removed prefix '{prefix}': '{old_answer}' -> '{answer}'")
                 break
         
         # Remove quotes and punctuation
-        old_answer = answer
         answer = answer.strip('.,!?:;"\'')
-        if old_answer != answer and self.logging:
-            self.logging.log_step("gaia_format_punct", f"Removed punctuation: '{old_answer}' -> '{answer}'")
         
         # Handle numbers - remove commas
         if answer.replace('.', '').replace('-', '').replace(',', '').isdigit():
-            old_answer = answer
             answer = answer.replace(',', '')
-            if old_answer != answer and self.logging:
-                self.logging.log_step("gaia_format_number", f"Removed commas from number: '{old_answer}' -> '{answer}'")
         
         if self.logging:
             self.logging.log_step("gaia_format_final", f"Final GAIA formatted answer: '{answer}'")
@@ -1233,29 +1184,27 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
 
     def process_question(self, question: str, task_id: str = None) -> Dict:
         """
-        Main entry point for processing a GAIA question.
-        Uses context bridge as single step source + performance metrics.
+        Main entry point with context bridge integration.
         
         Args:
             question: The question to process
-            task_id: Optional task identifier (generates one if not provided)
+            task_id: Optional task identifier
             
         Returns:
-            Dictionary with complete processing results including step counts from context bridge
+            Dictionary with complete processing results including metrics
         """
         import time
         
         if task_id is None:
             task_id = str(uuid.uuid4())[:8]
         
-        # Start timing for performance metrics
         total_start_time = time.time()
         
         if self.logging:
             self.logging.start_task(task_id, model_used=self.config.model_name)
         
         try:
-            # Run workflow
+            # Run workflow with enhanced state
             initial_state = {
                 "task_id": task_id,
                 "question": question,
@@ -1264,53 +1213,30 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
             
             result = self.workflow.invoke(initial_state)
             
-            # NEW: Get authoritative step count from context bridge
-            if self.config.enable_context_bridge and result.get("context_step_data"):
-                context_step_data = result.get("context_step_data", {})
-                total_steps = context_step_data.get("total_steps", 0)
-                workflow_steps = context_step_data.get("workflow_steps", 0)
-                agent_steps = context_step_data.get("agent_steps", 0)
-                step_source = "context_bridge"
-            else:
-                # Fallback to traditional counting
-                agent_steps = result.get("agent_steps_executed", 0)
-                workflow_steps = len(result.get("steps", []))
-                total_steps = workflow_steps + agent_steps
-                step_source = "fallback_calculation"
+            # Get metrics from context bridge
+            execution_metrics = result.get("execution_metrics", {})
+            total_steps = execution_metrics.get("steps_executed", 0)
             
             # Calculate performance metrics
             total_time = time.time() - total_start_time
             
             performance_metrics = {
                 "total_execution_time": total_time,
-                "step_breakdown": {
-                    "workflow_steps": workflow_steps,
-                    "agent_steps": agent_steps,
-                    "total_steps": total_steps,
-                    "step_source": step_source
-                },
-                "efficiency_metrics": {
-                    "steps_per_second": total_steps / total_time if total_time > 0 else 0,
-                    "workflow_efficiency": workflow_steps / total_steps if total_steps > 0 else 0,
-                    "agent_efficiency": agent_steps / total_steps if total_steps > 0 else 0
-                },
-                "routing_metrics": {
-                    "complexity": result.get("complexity", "unknown"),
-                    "selected_agent": result.get("selected_agent", "unknown"),
-                    "routing_successful": result.get("execution_successful", False)
-                }
+                "total_steps": total_steps,
+                "step_source": "context_bridge",
+                "execution_metrics": execution_metrics
             }
             
             success = result.get("execution_successful", True)
-            final_answer = result.get("final_answer", "No answer")
+            final_answer = result.get("final_answer", str(result)) if isinstance(result, dict) else str(result)
             
-            # Log with context bridge step count
+            # Enhanced logging
             if self.logging:
                 self.logging.log_question_result(
                     task_id=task_id,
                     question=question,
                     final_answer=final_answer,
-                    total_steps=total_steps,  # NEW: Authoritative from context bridge
+                    total_steps=total_steps,
                     success=success
                 )
             
@@ -1323,39 +1249,19 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
                 "complexity": result.get("complexity", "unknown"),
                 "similar_examples": result.get("similar_examples", []),
                 "execution_successful": success,
-                "total_steps": total_steps,        # NEW: From context bridge
-                "workflow_steps": workflow_steps,  # NEW: From context bridge
-                "agent_steps": agent_steps,        # NEW: From context bridge
-                "performance_metrics": performance_metrics,  # NEW: Enhanced metrics
+                "total_steps": total_steps,
+                "performance_metrics": performance_metrics,
                 "selected_agent": result.get("selected_agent", "unknown"),
-                "step_source": step_source         # NEW: Transparency
+                "file_info": {  # File information from state
+                    "file_name": result.get("file_name", ""),
+                    "file_path": result.get("file_path", ""),
+                    "has_file": result.get("has_file", False)
+                }
             }
             
         except Exception as e:
             total_time = time.time() - total_start_time
             error_msg = f"Processing failed: {str(e)}"
-            
-            # Error performance metrics
-            error_performance_metrics = {
-                "total_execution_time": total_time,
-                "step_breakdown": {
-                    "workflow_steps": 0,
-                    "agent_steps": 0,
-                    "total_steps": 0,
-                    "step_source": "error"
-                },
-                "efficiency_metrics": {
-                    "steps_per_second": 0.0,
-                    "workflow_efficiency": 0.0,
-                    "agent_efficiency": 0.0
-                },
-                "routing_metrics": {
-                    "complexity": "error",
-                    "selected_agent": "none",
-                    "routing_successful": False
-                },
-                "error": True
-            }
             
             if self.logging:
                 self.logging.log_question_result(
@@ -1372,11 +1278,9 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
                 "final_answer": error_msg,
                 "execution_successful": False,
                 "total_steps": 0,
-                "workflow_steps": 0,
-                "agent_steps": 0,
-                "performance_metrics": error_performance_metrics,
+                "performance_metrics": {"error": True, "total_execution_time": total_time},
                 "selected_agent": "error",
-                "step_source": "error"
+                "file_info": {"file_name": "", "file_path": "", "has_file": False}
             }
 
 # ============================================================================
@@ -1384,10 +1288,10 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
 # ============================================================================
 
 if __name__ == "__main__":
-    print("🚀 GAIA Manager Agent with Context")
-    print("=" * 50)
-    print("✅ Context integration available")
-    print("✅ File access capability")
-    print("✅ Routing with context awareness")
+    print("🚀 GAIA Agent - State + Context Bridge")
+    print("=" * 60)
+    print("✅ Combined LangGraph state with task id and file info")
+    print("✅ Context bridge for agent step tracking")
+    print("✅ State-aware tool configuration")
     print("")
-    print("Use agent_interface.py for testing")
+    print("Use agent_testing.py for testing")
