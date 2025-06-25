@@ -460,9 +460,14 @@ class GAIAAnswerEvaluator:
         print(f"   Dataset: {dataset_manager.dataset_path}")
     
     def evaluate_execution_results(self, execution_file: str) -> Dict:
-        """Evaluate execution results with hybrid state compatibility"""
+        """
+        COMPLETE FIXED VERSION: Evaluate execution results with proper ground truth handling
         
-        print(f"📊 EVALUATION PHASE (Hybrid Compatible): {execution_file}")
+        This method loads execution results and compares them against ground truth answers
+        from the dataset manager to calculate accuracy and performance metrics.
+        """
+        
+        print(f"📊 EVALUATION PHASE (Fixed Ground Truth): {execution_file}")
         
         # Load execution results with error handling
         try:
@@ -476,80 +481,113 @@ class GAIAAnswerEvaluator:
         if not execution_data.get("blind_testing_verified", False):
             print("⚠️  WARNING: Execution results not verified as blind testing")
         
-        # Check if hybrid state was used
+        # Check framework version
         framework_version = execution_data.get("framework_version", "unknown")
         if framework_version == "hybrid_state_compatible":
             print("✅ Hybrid state execution detected")
         
         results = execution_data.get("results", [])
         
+        if not results:
+            print("❌ No results found in execution file")
+            return {"error": "No results found in execution file"}
+        
         print(f"🔍 Evaluating {len(results)} agent responses against ground truth...")
         
+        # Initialize tracking variables
         evaluated_results = []
         correct_answers = 0
+        evaluation_errors = 0
         level_performance = defaultdict(lambda: {"total": 0, "correct": 0})
         strategy_performance = defaultdict(lambda: {"total": 0, "correct": 0})
         
-        for result in results:
+        # Process each result
+        for i, result in enumerate(results, 1):
             task_id = result.get("task_id")
             agent_answer = result.get("final_answer", "")
             level = result.get("level", "Unknown")
             strategy = result.get("strategy_used", "unknown")
             
+            print(f"\n🔍 Evaluating {i}/{len(results)}: {task_id}")
+            print(f"   Agent Answer: '{agent_answer}'")
+            
             try:
-                # NOW we access ground truth (Phase 2 only)
-                ground_truth = self.dataset_manager.get_ground_truth(task_id)
+                # *** CRITICAL FIX: Proper ground truth extraction ***
+                ground_truth_data = self.dataset_manager.get_ground_truth(task_id)
                 
-                if ground_truth:
-                    # Perform GAIA-compliant answer matching
-                    is_correct = self.gaia_answer_matching(agent_answer, ground_truth)
-                    
-                    if not is_correct:
-                        # Try fuzzy matching as fallback
-                        fuzzy_correct = self.fuzzy_answer_matching(agent_answer, ground_truth)
-                        if fuzzy_correct:
-                            is_correct = True
-                            matching_method = "fuzzy"
-                        else:
-                            matching_method = "no_match"
-                    else:
-                        matching_method = "exact"
-                    
-                    if is_correct:
-                        correct_answers += 1
-                    
-                    # Track level performance
-                    level_performance[str(level)]["total"] += 1
-                    if is_correct:
-                        level_performance[str(level)]["correct"] += 1
-                    
-                    # Track strategy performance
-                    strategy_performance[strategy]["total"] += 1
-                    if is_correct:
-                        strategy_performance[strategy]["correct"] += 1
-                    
-                    evaluated_result = result.copy()
-                    evaluated_result.update({
-                        "ground_truth": ground_truth,
-                        "is_correct": is_correct,
-                        "matching_method": matching_method,
-                        "evaluation_timestamp": datetime.now().isoformat()
-                    })
-                    
-                else:
-                    print(f"⚠️  No ground truth found for task: {task_id}")
+                if ground_truth_data is None:
+                    print(f"❌ No ground truth found for task: {task_id}")
                     evaluated_result = result.copy()
                     evaluated_result.update({
                         "ground_truth": None,
                         "is_correct": None,
                         "matching_method": "no_ground_truth",
+                        "evaluation_error": f"No ground truth found for {task_id}",
                         "evaluation_timestamp": datetime.now().isoformat()
                     })
+                    evaluated_results.append(evaluated_result)
+                    evaluation_errors += 1
+                    continue
                 
-                evaluated_results.append(evaluated_result)
+                # *** FIXED: Extract the actual answer string from the data structure ***
+                if isinstance(ground_truth_data, dict):
+                    expected_answer = ground_truth_data.get('final_answer', '')
+                    gt_level = ground_truth_data.get('level', level)
+                else:
+                    # Fallback: if it's already a string
+                    expected_answer = str(ground_truth_data)
+                    gt_level = level
+                
+                if not expected_answer:
+                    print(f"⚠️  Empty ground truth answer for {task_id}")
+                    expected_answer = ""
+                
+                print(f"   Expected Answer: '{expected_answer}'")
+                
+                # Perform GAIA-compliant answer matching
+                is_correct = self.gaia_answer_matching(agent_answer, expected_answer)
+                matching_method = "exact" if is_correct else "no_match"
+                
+                # Try fuzzy matching if exact match failed
+                if not is_correct:
+                    fuzzy_correct = self.fuzzy_answer_matching(agent_answer, expected_answer)
+                    if fuzzy_correct:
+                        is_correct = True
+                        matching_method = "fuzzy"
+                
+                # Update counters
+                if is_correct:
+                    correct_answers += 1
+                
+                # Track level performance
+                level_performance[str(gt_level)]["total"] += 1
+                if is_correct:
+                    level_performance[str(gt_level)]["correct"] += 1
+                
+                # Track strategy performance
+                strategy_performance[strategy]["total"] += 1
+                if is_correct:
+                    strategy_performance[strategy]["correct"] += 1
+                
+                # Create evaluated result with proper ground truth
+                evaluated_result = result.copy()
+                evaluated_result.update({
+                    "ground_truth": expected_answer,  # *** FIXED: Store the answer string, not the dict ***
+                    "is_correct": is_correct,
+                    "matching_method": matching_method,
+                    "evaluation_timestamp": datetime.now().isoformat(),
+                    "level": gt_level  # Use ground truth level if available
+                })
+                
+                # Log the comparison
+                status = "✅ CORRECT" if is_correct else "❌ WRONG"
+                print(f"   Result: {status} ({matching_method})")
                 
             except Exception as e:
                 print(f"⚠️  Evaluation error for {task_id}: {e}")
+                import traceback
+                traceback.print_exc()
+                
                 evaluated_result = result.copy()
                 evaluated_result.update({
                     "ground_truth": None,
@@ -558,10 +596,14 @@ class GAIAAnswerEvaluator:
                     "evaluation_error": str(e),
                     "evaluation_timestamp": datetime.now().isoformat()
                 })
-                evaluated_results.append(evaluated_result)
+                evaluation_errors += 1
+            
+            evaluated_results.append(evaluated_result)
         
-        # Calculate performance metrics
-        accuracy = correct_answers / len(results) if results else 0
+        # Calculate overall performance metrics
+        total_questions = len(results)
+        questions_with_gt = total_questions - evaluation_errors
+        accuracy = correct_answers / questions_with_gt if questions_with_gt > 0 else 0
         
         # Calculate level-specific accuracy
         level_accuracy = {}
@@ -581,7 +623,7 @@ class GAIAAnswerEvaluator:
                 "accuracy": perf["correct"] / perf["total"] if perf["total"] > 0 else 0
             }
         
-        # Enhanced evaluation results with hybrid state metrics
+        # Create enhanced evaluation results
         evaluation_results = {
             "evaluation_timestamp": datetime.now().isoformat(),
             "execution_file": execution_file,
@@ -589,10 +631,12 @@ class GAIAAnswerEvaluator:
             "agent_config": execution_data.get("agent_config", {}),
             "framework_version": framework_version,
             "overall_performance": {
-                "total_questions": len(results),
+                "total_questions": total_questions,
+                "questions_with_ground_truth": questions_with_gt,
                 "correct_answers": correct_answers,
                 "accuracy": accuracy,
-                "successful_executions": execution_data.get("execution_summary", {}).get("successful_executions", 0)
+                "successful_executions": execution_data.get("execution_summary", {}).get("successful_executions", 0),
+                "evaluation_errors": evaluation_errors
             },
             "level_performance": level_accuracy,
             "strategy_analysis": strategy_analysis,
@@ -604,12 +648,30 @@ class GAIAAnswerEvaluator:
         # Save evaluation results
         evaluation_file = self._save_evaluation_results(evaluation_results, execution_file)
         
-        print(f"\n📊 EVALUATION COMPLETE (Hybrid Compatible)")
-        print(f"   Total Questions: {len(results)}")
-        print(f"   Correct Answers: {correct_answers}")
-        print(f"   Accuracy: {accuracy:.1%}")
-        print(f"   Context Bridge Used: {any(r.get('context_bridge_used', False) for r in results)}")
-        print(f"   Evaluation saved: {evaluation_file}")
+        # Print comprehensive summary
+        print(f"\n📊 EVALUATION COMPLETE (Fixed Ground Truth)")
+        print("=" * 50)
+        print(f"📋 Total Questions: {total_questions}")
+        print(f"✅ With Ground Truth: {questions_with_gt}")
+        print(f"🎯 Correct Answers: {correct_answers}")
+        print(f"📈 Accuracy: {accuracy:.1%}")
+        print(f"❌ Evaluation Errors: {evaluation_errors}")
+        
+        # Show level breakdown if available
+        if level_accuracy:
+            print(f"\n📊 Performance by Level:")
+            for level, perf in level_accuracy.items():
+                if perf['total'] > 0:
+                    print(f"   Level {level}: {perf['accuracy']:.1%} ({perf['correct']}/{perf['total']})")
+        
+        # Show strategy breakdown if available
+        if strategy_analysis:
+            print(f"\n🎯 Performance by Strategy:")
+            for strategy, perf in strategy_analysis.items():
+                if perf['total_questions'] > 0:
+                    print(f"   {strategy}: {perf['accuracy']:.1%} ({perf['correct_answers']}/{perf['total_questions']})")
+        
+        print(f"\n💾 Evaluation saved: {evaluation_file}")
         
         return evaluation_results
     
