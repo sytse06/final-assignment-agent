@@ -101,125 +101,171 @@ Optimized for GAIA tasks with semantic search enhancements for better informatio
         return variants
 
     def _gaia_optimized_semantic_search(self, url: str, query: str) -> str:
-        """
-        SEMANTIC search optimized for GAIA with better parameters.
-        
-        Still uses embeddings and semantic similarity, just tuned for GAIA performance:
-        - Lower threshold (more content)
-        - Better query preprocessing  
-        - Optimized chunk processing
-        """
-        print(f"🎯 Using GAIA-optimized semantic search for: {query[:50]}...")
-        
-        document = self._document_converter.convert(url).document
+        """GAIA-optimized search with error handling"""
+        try:
+            print(f"🎯 Using GAIA-optimized semantic search for: {query[:50]}...")
+            
+            document = self._document_converter.convert(url).document
+            chunks = list(self._chunker.chunk(dl_doc=document))
+            
+            if len(chunks) == 0:
+                return "No content found in document"
 
-        chunks = list(self._chunker.chunk(dl_doc=document))
-        if len(chunks) == 0:
-            return "No content found."
+            chunks_text = [chunk.text for chunk in chunks]
+            chunks_with_context = [self._chunker.contextualize(chunk) for chunk in chunks]
+            chunks_context = [
+                chunks_with_context[i].replace(chunks_text[i], "").strip()
+                for i in range(len(chunks))
+            ]
 
-        chunks_text = [chunk.text for chunk in chunks]
-        chunks_with_context = [self._chunker.contextualize(chunk) for chunk in chunks]
-        chunks_context = [
-            chunks_with_context[i].replace(chunks_text[i], "").strip()
-            for i in range(len(chunks))
-        ]
+            # Enhanced query processing for GAIA
+            query_variants = self._create_query_variants(query)
+            print(f"   📝 Created {len(query_variants)} semantic query variants")
+            
+            chunk_embeddings = self._model.encode(chunks_text, convert_to_tensor=True)
+            context_embeddings = self._model.encode(chunks_context, convert_to_tensor=True)
+            query_embeddings = self._model.encode(query_variants, convert_to_tensor=True)
 
-        # OPTIMIZATION 1: Enhanced query processing for GAIA
-        # Break down complex queries into multiple search terms
-        query_variants = self._create_query_variants(query)
-        print(f"   📝 Created {len(query_variants)} semantic query variants")
-        
-        chunk_embeddings = self._model.encode(chunks_text, convert_to_tensor=True)
-        context_embeddings = self._model.encode(chunks_context, convert_to_tensor=True)
-        
-        # OPTIMIZATION 2: Search with multiple query variants
-        query_embeddings = self._model.encode(query_variants, convert_to_tensor=True)
+            selected_indices = []
+            gaia_threshold = max(0.1, self.threshold * 0.5)
+            print(f"   🎯 Using lowered threshold: {gaia_threshold:.2f}")
+            
+            for embeddings in [context_embeddings, chunk_embeddings]:
+                for query_emb in query_embeddings:
+                    cos_scores = util.pytorch_cos_sim(query_emb.unsqueeze(0), embeddings).squeeze(0)
+                    probabilities = torch.nn.functional.softmax(cos_scores, dim=0)
+                    sorted_indices = torch.argsort(probabilities, descending=True)
 
-        selected_indices = []
-        
-        # OPTIMIZATION 3: Lower threshold for GAIA (more comprehensive results)
-        gaia_threshold = max(0.1, self.threshold * 0.5)  # At least 50% lower threshold
-        print(f"   🎯 Using lowered threshold: {gaia_threshold:.2f} (vs standard {self.threshold:.2f})")
-        
-        for embeddings in [context_embeddings, chunk_embeddings]:
-            for query_emb in query_embeddings:
-                cos_scores = util.pytorch_cos_sim(query_emb.unsqueeze(0), embeddings).squeeze(0)
-                probabilities = torch.nn.functional.softmax(cos_scores, dim=0)
-                sorted_indices = torch.argsort(probabilities, descending=True)
+                    cumulative = 0.0
+                    for i in sorted_indices:
+                        cumulative += probabilities[i].item()
+                        selected_indices.append(i.item())
+                        if cumulative >= gaia_threshold:
+                            break
 
-                cumulative = 0.0
-                for i in sorted_indices:
-                    cumulative += probabilities[i].item()
-                    selected_indices.append(i.item())
-                    if cumulative >= gaia_threshold:
-                        break
+            selected_indices = list(dict.fromkeys(selected_indices))
+            
+            if len(selected_indices) == 0:
+                return "No relevant content found"
 
-        # OPTIMIZATION 4: Keep more results and prioritize by relevance
-        selected_indices = list(dict.fromkeys(selected_indices))
-        
-        # Don't reverse - keep highest similarity first for GAIA
-        if len(selected_indices) == 0:
-            return "No content found."
-
-        # OPTIMIZATION 5: Return more context for GAIA questions
-        result_chunks = [chunks_with_context[idx] for idx in selected_indices[:10]]  # Top 10 instead of threshold-limited
-        
-        print(f"   ✅ GAIA semantic search found {len(result_chunks)} relevant chunks")
-        return "\n\n".join(result_chunks)
-
+            result_chunks = [chunks_with_context[idx] for idx in selected_indices[:10]]
+            result = "\n\n".join(result_chunks)
+            
+            print(f"   ✅ GAIA semantic search found {len(result_chunks)} relevant chunks")
+            
+            # SAFETY: Ensure string return
+            if not isinstance(result, str):
+                return f"Error: Search returned {type(result).__name__}"
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"GAIA search failed: {str(e)}"
+            print(f"❌ _gaia_optimized_semantic_search error: {error_msg}")
+            return error_msg
+    
     def _standard_semantic_search(self, url: str, query: str) -> str:
-        """Original semantic search implementation"""
-        print(f"🔍 Using standard semantic search for: {query[:50]}...")
-        
-        document = self._document_converter.convert(url).document
+        """Standard search with error handling"""
+        try:
+            print(f"🔍 Using standard semantic search for: {query[:50]}...")
+            
+            document = self._document_converter.convert(url).document
+            chunks = list(self._chunker.chunk(dl_doc=document))
+            
+            if len(chunks) == 0:
+                return "No content found in document"
 
-        chunks = list(self._chunker.chunk(dl_doc=document))
-        if len(chunks) == 0:
-            return "No content found."
+            chunks_text = [chunk.text for chunk in chunks]
+            chunks_with_context = [self._chunker.contextualize(chunk) for chunk in chunks]
+            chunks_context = [
+                chunks_with_context[i].replace(chunks_text[i], "").strip()
+                for i in range(len(chunks))
+            ]
 
-        chunks_text = [chunk.text for chunk in chunks]
-        chunks_with_context = [self._chunker.contextualize(chunk) for chunk in chunks]
-        chunks_context = [
-            chunks_with_context[i].replace(chunks_text[i], "").strip()
-            for i in range(len(chunks))
-        ]
+            chunk_embeddings = self._model.encode(chunks_text, convert_to_tensor=True)
+            context_embeddings = self._model.encode(chunks_context, convert_to_tensor=True)
+            query_embedding = self._model.encode(
+                [term.strip() for term in query.split(",") if term.strip()],
+                convert_to_tensor=True,
+            )
 
-        chunk_embeddings = self._model.encode(chunks_text, convert_to_tensor=True)
-        context_embeddings = self._model.encode(chunks_context, convert_to_tensor=True)
-        query_embedding = self._model.encode(
-            [term.strip() for term in query.split(",") if term.strip()],
-            convert_to_tensor=True,
-        )
+            selected_indices = []
+            for embeddings in [context_embeddings, chunk_embeddings]:
+                for cos_scores in util.pytorch_cos_sim(query_embedding, embeddings):
+                    probabilities = torch.nn.functional.softmax(cos_scores, dim=0)
+                    sorted_indices = torch.argsort(probabilities, descending=True)
 
-        selected_indices = []
-        for embeddings in [context_embeddings, chunk_embeddings]:
-            for cos_scores in util.pytorch_cos_sim(query_embedding, embeddings):
-                probabilities = torch.nn.functional.softmax(cos_scores, dim=0)
-                sorted_indices = torch.argsort(probabilities, descending=True)
+                    cumulative = 0.0
+                    for i in sorted_indices:
+                        cumulative += probabilities[i].item()
+                        selected_indices.append(i.item())
+                        if cumulative >= self.threshold:
+                            break
 
-                cumulative = 0.0
-                for i in sorted_indices:
-                    cumulative += probabilities[i].item()
-                    selected_indices.append(i.item())
-                    if cumulative >= self.threshold:
-                        break
+            selected_indices = list(dict.fromkeys(selected_indices))
+            selected_indices = selected_indices[::-1]
 
-        selected_indices = list(dict.fromkeys(selected_indices))
-        selected_indices = selected_indices[::-1]
+            if len(selected_indices) == 0:
+                return "No relevant content found"
 
-        if len(selected_indices) == 0:
-            return "No content found."
-
-        return "\n\n".join([chunks_with_context[idx] for idx in selected_indices])
+            result = "\n\n".join([chunks_with_context[idx] for idx in selected_indices])
+            
+            # SAFETY: Ensure string return
+            if not isinstance(result, str):
+                return f"Error: Search returned {type(result).__name__}"
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"Standard search failed: {str(e)}"
+            print(f"❌ _standard_semantic_search error: {error_msg}")
+            return error_msg
 
     def forward(self, url: str, query: str) -> str:
         """
-        Main entry point with intelligent semantic optimization.
+        Main entry point with error handling to prevent crashes.
         
-        ALWAYS uses semantic search - just optimizes parameters for GAIA when beneficial.
+        ALWAYS returns a string, never None or objects.
         """
-        # Choose semantic approach based on question type
-        if self._should_optimize_for_gaia(url, query):
-            return self._gaia_optimized_semantic_search(url, query)
-        else:
-            return self._standard_semantic_search(url, query)
+        try:
+            # Validate inputs first
+            if not url or not query:
+                return "Error: Missing URL or query parameter"
+            
+            # Check if file exists for local paths
+            if not url.startswith(('http://', 'https://')):
+                # Local file path
+                import os
+                if not os.path.exists(url):
+                    return f"Error: File not found: {url}"
+            
+            # Choose semantic approach based on question type
+            if self._should_optimize_for_gaia(url, query):
+                result = self._gaia_optimized_semantic_search(url, query)
+            else:
+                result = self._standard_semantic_search(url, query)
+            
+            # CRITICAL: Ensure we always return a string
+            if result is None:
+                return "Error: Tool returned None"
+            elif not isinstance(result, str):
+                return f"Error: Tool returned {type(result).__name__} instead of string"
+            elif len(result.strip()) == 0:
+                return "No content found"
+            
+            return result
+            
+        except FileNotFoundError as e:
+            error_msg = f"File not found: {str(e)}"
+            print(f"❌ ContentRetrieverTool: {error_msg}")
+            return error_msg
+            
+        except ValidationError as e:
+            error_msg = f"Invalid URL format: {str(e)}"
+            print(f"❌ ContentRetrieverTool: {error_msg}")
+            return error_msg
+            
+        except Exception as e:
+            error_msg = f"Content retrieval failed: {str(e)}"
+            print(f"❌ ContentRetrieverTool unexpected error: {error_msg}")
+            return error_msg

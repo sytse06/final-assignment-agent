@@ -999,11 +999,10 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
             }
 
     def _delegate_to_agent_node(self, state: GAIAState):
-        """Agent execution with state-based tool configuration"""
+        """ULTRA MINIMAL: Pass original question directly like reference"""
         selected_agent = state.get("selected_agent", "data_analyst")
         task_id = state.get("task_id")
-        question = state.get("question")
-        file_path = state.get("file_path")
+        question = state.get("question")  # Original question only
         
         if self.logging:
             self.logging.log_step("delegate_to_agent", f"Executing agent: {selected_agent}")
@@ -1011,11 +1010,8 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
         print(f"🚀 Executing agent: {selected_agent}")
         
         try:
-            # Configure tools from LangGraph state
+            # EXISTING: Configure tools from LangGraph state
             self._configure_tools_from_state(selected_agent, state)
-            
-            # Add essential directional info to the question
-            enhanced_task = self._add_directional_info(question, selected_agent, state)
             
             # Get the specialist agent
             specialist = self.specialists[selected_agent]
@@ -1023,8 +1019,8 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
             if self.logging:
                 self.logging.log_step("agent_execution_start", f"Agent execution: {selected_agent}")
             
-            # Execute using SmolagAgents pattern with enhanced task
-            result = specialist.run(task=enhanced_task)
+            # ULTRA MINIMAL: Pass original question directly (like reference)
+            result = specialist.run(task=question)
             
             if self.logging:
                 self.logging.log_step("agent_execution_complete", f"Agent {selected_agent} completed")
@@ -1051,7 +1047,7 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
                 "execution_successful": False,
                 "execution_error": True
             }
-
+        
     def _get_current_temporal_context(self) -> str:
         """Get current date/time context for temporal awareness"""
         now = datetime.now(timezone.utc)
@@ -1154,8 +1150,8 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
         original_answer = answer
         answer = answer.strip()
         
-        # SIMPLE FIX: Remove duplicate FINAL ANSWER prefixes in one line
-        answer = re.sub(r'(?i)(final\s*answer\s*:\s*)+', 'FINAL ANSWER: ', answer)
+        # Beware of duplicate FINAL ANSWER prefixes and strip them
+        answer = re.sub(r'(?i)^(final\s*answer\s*:\s*)+', '', answer).strip()
         
         # Remove common prefixes
         prefixes = [
