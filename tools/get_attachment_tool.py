@@ -14,7 +14,7 @@ class GetAttachmentTool(Tool):
             "type": "string",
             "description": "Format to retrieve attachment. Options are: URL (preferred), DATA_URL, LOCAL_FILE_PATH, TEXT. URL returns the URL of the file, DATA_URL returns a base64 encoded data URL, LOCAL_FILE_PATH returns a local file path to the downloaded file, and TEXT returns the content of the file as text.",
             "nullable": True,
-            "default": "URL",
+            "default": "LOCAL_FILE_PATH",
         }
     }
     output_type = "string"

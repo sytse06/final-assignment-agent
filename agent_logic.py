@@ -425,7 +425,7 @@ class GAIAAgent:
         )
         
         print(f"🎯 Created {len(specialists)} specialized agents:")
-        print(f"   data_analyst: {len(data_tools)} tools")
+        print(f"   data_analyst: {len(env_tools)} tools")
         print(f"   web_researcher: {len(web_tools)} tools")
         
         return specialists
