@@ -591,7 +591,7 @@ def get_google_config(model_name: str = "gemini-2.5-flash-preview") -> GAIAConfi
         debug_mode=True
     )
 
-def get_openrouter_config(model_name: str = "qwen/qwq-32b") -> GAIAConfig:
+def get_openrouter_config(model_name: str = "google/gemini-2.5-flash") -> GAIAConfig:
     """Get OpenRouter configuration with enhanced defaults"""
     return GAIAConfig(
         model_provider="openrouter",
