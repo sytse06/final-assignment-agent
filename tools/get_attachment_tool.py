@@ -4,6 +4,7 @@ from urllib.parse import urljoin
 import base64
 import tempfile
 import os
+import shutil
 
 
 class GetAttachmentTool(Tool):
@@ -31,16 +32,18 @@ class GetAttachmentTool(Tool):
             else "https://agents-course-unit4-scoring.hf.space/"
         )
         self.task_id = task_id
-        self.local_file_path = None
+        self._state_file_path = None
+        self._file_name = None
         super().__init__(**kwargs)
 
     def attachment_for(self, task_id: str | None):
         self.task_id = task_id
         
-    def configure_from_state(self, task_id: str = None, file_path: str = None):
-        """Configure from state"""
-        self.task_id = task_id
-        self.local_file_path = file_path
+    def configure_from_state(self, state_file_path: str, file_name: str = ""):
+        """Give tool access to attachments via file path and recover file type from name"""
+        self._state_file_path = state_file_path
+        self._file_name = file_name
+        print(f"✅ GetAttachmentTool configured with path and name")
 
     def forward(self, fmt: str = "URL") -> str:
         fmt = fmt.upper()
@@ -49,11 +52,47 @@ class GetAttachmentTool(Tool):
         if not self.task_id:
             return ""
 
-        # Try local file first for when LOCAL_FILE_PATH is present
-        if self.local_file_path and hasattr(self, 'local_file_path') and os.path.exists(self.local_file_path):
-            if fmt == "LOCAL_FILE_PATH":
-                return self.local_file_path
+        # Use state file path and file name extension to access files
+        if fmt == "LOCAL_FILE_PATH" and self._state_file_path:
+            import os
+            import shutil
+            
+            original_path = self._state_file_path
+            
+            # Find extension in file_names
+            if self._file_name:
+                file_extension = os.path.splitext(self._file_name)[1]
+                original_has_extension = bool(os.path.splitext(original_path)[1])
+                
+                # If original path lacks extension but file_name has one
+                if not original_has_extension and file_extension:
+                    # Create new path with extension
+                    new_path = original_path + file_extension
+                    
+                    # Copy file with proper extension if not already exists
+                    if not os.path.exists(new_path) and os.path.exists(original_path):
+                        try:
+                            shutil.copy2(original_path, new_path)
+                            print(f"🔧 Copied file with extension: {new_path}")
+                            return new_path
+                        except Exception as e:
+                            print(f"⚠️ Could not copy file with extension: {e}")
+                            print(f"🎯 Returning original path: {original_path}")
+                            return original_path
+                    elif os.path.exists(new_path):
+                        print(f"🎯 Using existing file with extension: {new_path}")
+                        return new_path
+                
+                # If original already has extension, use it directly
+                if original_has_extension:
+                    print(f"🎯 Original path has extension: {original_path}")
+                    return original_path
+            
+            # Fallback: return original path (no file_name available or no extension needed)
+            print(f"🎯 Returning state file path: {original_path}")
+            return original_path
 
+        # Original logic for other cases
         file_url = urljoin(self.agent_evaluation_api, f"files/{self.task_id}")
         if fmt == "URL":
             return file_url

@@ -491,39 +491,54 @@ class GAIAAgent:
         return shared_tools
     
     def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
-        """SIMPLIFIED: Minimal tool configuration"""
+        """ENHANCED: Configure tools with state information including file details"""
         task_id = state.get("task_id")
         question = state.get("question")
+        file_path = state.get("file_path", "")     # 🚀 GET FILE PATH
+        file_name = state.get("file_name", "")     # 🚀 GET FILE NAME  
+        has_file = state.get("has_file", False)    # 🚀 GET FILE FLAG
         
         if not task_id:
             return
         
-        print(f"🔧 Minimal tool configuration for {agent_name}")
+        print(f"🔧 Enhanced tool configuration for {agent_name}")
+        print(f"   📁 Has file: {has_file}")
+        print(f"   📄 File path: {file_path}")
+        print(f"   📛 File name: {file_name}")
         
         # Get the agent
         specialist = self.specialists[agent_name]
         
-        # Only configure tools that explicitly need it
+        # Configure tools that need state information
         for tool in specialist.tools:
             try:
                 tool_name = getattr(tool, 'name', None) or tool.__class__.__name__
                 
-                # Skip get_attachment - already configured in read_question_node
-                if tool_name == "get_attachment":
-                    print(f"ℹ️  {tool_name} already activated globally")
-                    continue
+                # 🚀 CONFIGURE get_attachment with file information (don't skip!)
+                if tool_name == "get_attachment" and has_file and file_path:
+                    if hasattr(tool, 'configure_from_state'):
+                        tool.configure_from_state(file_path, file_name)
+                        print(f"✅ Configured {tool_name} with file path and name")
+                    else:
+                        print(f"⚠️  {tool_name} missing configure_from_state method")
                 
-                # Only configure content retriever with question context
-                if tool_name == "retrieve_content" and hasattr(tool, 'configure_from_state'):
+                elif tool_name == "get_attachment":
+                    print(f"ℹ️  {tool_name} activated globally but no file to configure")
+                
+                # Configure content retriever with question context
+                elif tool_name == "retrieve_content" and hasattr(tool, 'configure_from_state'):
                     tool.configure_from_state(question)
                     print(f"✅ Configured {tool_name} with question context")
+                
                 else:
                     print(f"ℹ️  {tool_name} needs no configuration")
                     
             except Exception as e:
                 tool_name = getattr(tool, 'name', None) or tool.__class__.__name__
                 print(f"⚠️ Could not configure {tool_name}: {e}")
-                
+                import traceback
+                traceback.print_exc()
+                            
     def get_agent_memory_safely(self, agent) -> Dict:
         """
         Safely access agent memory in various SmolagAgent versions.
