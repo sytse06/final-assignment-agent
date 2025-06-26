@@ -491,53 +491,64 @@ class GAIAAgent:
         return shared_tools
     
     def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
-        """ENHANCED: Configure tools with state information including file details"""
+        """🔍 DEBUG VERSION: Extra logging to understand tool detection"""
         task_id = state.get("task_id")
         question = state.get("question")
-        file_path = state.get("file_path", "")     # 🚀 GET FILE PATH
-        file_name = state.get("file_name", "")     # 🚀 GET FILE NAME  
-        has_file = state.get("has_file", False)    # 🚀 GET FILE FLAG
+        file_path = state.get("file_path", "")
+        file_name = state.get("file_name", "")
+        has_file = state.get("has_file", False)
         
-        if not task_id:
-            return
-        
-        print(f"🔧 Enhanced tool configuration for {agent_name}")
+        print(f"🔧 DEBUG tool configuration for {agent_name}")
         print(f"   📁 Has file: {has_file}")
         print(f"   📄 File path: {file_path}")
         print(f"   📛 File name: {file_name}")
         
-        # Get the agent
         specialist = self.specialists[agent_name]
+        print(f"🔍 Agent has {len(specialist.tools)} tools")
         
-        # Configure tools that need state information
-        for tool in specialist.tools:
-            try:
-                tool_name = getattr(tool, 'name', None) or tool.__class__.__name__
-                
-                # 🚀 CONFIGURE get_attachment with file information (don't skip!)
-                if tool_name == "get_attachment" and has_file and file_path:
-                    if hasattr(tool, 'configure_from_state'):
+        for i, tool in enumerate(specialist.tools):
+            print(f"\n🔍 Tool {i} analysis:")
+            print(f"   Type: {type(tool)}")
+            print(f"   Class: {tool.__class__.__name__}")
+            print(f"   Name attr: {repr(getattr(tool, 'name', 'NOT_FOUND'))}")
+            print(f"   Name type: {type(getattr(tool, 'name', None))}")
+            print(f"   Has configure_from_state: {hasattr(tool, 'configure_from_state')}")
+            
+            # Try to configure if it's get_attachment
+            if tool.__class__.__name__ == "GetAttachmentTool":
+                print(f"🎯 Found GetAttachmentTool!")
+                if has_file and file_path and hasattr(tool, 'configure_from_state'):
+                    try:
+                        print(f"🚀 Attempting to configure with:")
+                        print(f"   file_path: {file_path}")
+                        print(f"   file_name: {file_name}")
                         tool.configure_from_state(file_path, file_name)
-                        print(f"✅ Configured {tool_name} with file path and name")
-                    else:
-                        print(f"⚠️  {tool_name} missing configure_from_state method")
-                
-                elif tool_name == "get_attachment":
-                    print(f"ℹ️  {tool_name} activated globally but no file to configure")
-                
-                # Configure content retriever with question context
-                elif tool_name == "retrieve_content" and hasattr(tool, 'configure_from_state'):
-                    tool.configure_from_state(question)
-                    print(f"✅ Configured {tool_name} with question context")
-                
+                        print(f"✅ Successfully configured GetAttachmentTool")
+                    except Exception as e:
+                        print(f"❌ Failed to configure GetAttachmentTool: {e}")
+                        import traceback
+                        traceback.print_exc()
                 else:
-                    print(f"ℹ️  {tool_name} needs no configuration")
+                    print(f"⚠️ Cannot configure GetAttachmentTool:")
+                    print(f"   has_file: {has_file}")
+                    print(f"   file_path exists: {bool(file_path)}")
+                    print(f"   has configure_from_state: {hasattr(tool, 'configure_from_state')}")
+            
+            # Also check for content retriever
+            elif tool.__class__.__name__ == "ContentRetrieverTool":
+                if hasattr(tool, 'configure_from_state'):
+                    try:
+                        tool.configure_from_state(question)
+                        print(f"✅ Configured ContentRetrieverTool with question")
+                    except Exception as e:
+                        print(f"⚠️ Failed to configure ContentRetrieverTool: {e}")
+                else:
+                    print(f"ℹ️ ContentRetrieverTool has no configure_from_state method")
+            
+            else:
+                print(f"ℹ️ {tool.__class__.__name__} - no special configuration needed")
                     
-            except Exception as e:
-                tool_name = getattr(tool, 'name', None) or tool.__class__.__name__
-                print(f"⚠️ Could not configure {tool_name}: {e}")
-                import traceback
-                traceback.print_exc()
+        print("🔚 Tool configuration debug complete\n")
                             
     def get_agent_memory_safely(self, agent) -> Dict:
         """
