@@ -380,7 +380,29 @@ class GAIAAgent:
         # Data Analyst
         specialists["data_analyst"] = CodeAgent(
             name="data_analyst",
-            description="Data analyst with advanced skills in statistic, handling tabular data and related Python packages.",
+            description="""Data analyst specialized in Excel/CSV analysis and calculations.
+
+    IMPORTANT FILE HANDLING:
+    - When you need to access attached files, use: get_attachment(fmt="LOCAL_FILE_PATH")
+    - This downloads the file and returns a local path you can use with pandas
+    - For Excel files: pd.read_excel(file_path)
+    - For CSV files: pd.read_csv(file_path)
+
+    WORKFLOW FOR FILE TASKS:
+    1. Call get_attachment(fmt="LOCAL_FILE_PATH") to download file
+    2. Use pandas to read and analyze the file
+    3. Process data according to the question
+    4. Return the final answer
+
+    Example:
+    ```python
+    # Download the file
+    file_path = get_attachment(fmt="LOCAL_FILE_PATH")
+    # Load and analyze
+    import pandas as pd
+    df = pd.read_excel(file_path)
+    # Your analysis here...
+    ```""",
             tools=env_tools,
             additional_authorized_imports=[
                 "numpy", "pandas", "matplotlib", "seaborn", "scipy", "io",
@@ -443,15 +465,14 @@ class GAIAAgent:
                 print(f"❌ ContentRetrieverTool failed: {e}")
             
             try:
-        try:
-            # Create attachment tool with LOCAL_FILE_PATH default for testing
-            shared_tools['get_attachment'] = GetAttachmentTool()
-            # Override the default format for testing
-            if hasattr(shared_tools['get_attachment'], 'inputs'):
-                shared_tools['get_attachment'].inputs['fmt']['default'] = "LOCAL_FILE_PATH"
-            print("✅ GetAttachmentTool created with LOCAL_FILE_PATH default")
-        except Exception as e:
-            print(f"❌ GetAttachmentTool failed: {e}")
+                # Create attachment tool with LOCAL_FILE_PATH default for testing
+                shared_tools['get_attachment'] = GetAttachmentTool()
+                # Override the default format for testing
+                if hasattr(shared_tools['get_attachment'], 'inputs'):
+                    shared_tools['get_attachment'].inputs['fmt']['default'] = "LOCAL_FILE_PATH"
+                print("✅ GetAttachmentTool created with LOCAL_FILE_PATH default")
+            except Exception as e:
+                print(f"❌ GetAttachmentTool failed: {e}")
             
             # DISABLED: Grounding tool creation
             # if getattr(self.config, 'enable_grounding_tools', False):
