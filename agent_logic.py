@@ -484,7 +484,7 @@ class GAIAAgent:
         # Only configure tools that explicitly need it
         for tool in specialist.tools:
             try:
-                tool_name = getattr(tool, 'name', tool.__class__.__name__)
+                tool_name = getattr(tool, 'name', None) or tool.__class__.__name__
                 
                 # Skip get_attachment - already configured in read_question_node
                 if tool_name == "get_attachment":
@@ -499,7 +499,7 @@ class GAIAAgent:
                     print(f"ℹ️  {tool_name} needs no configuration")
                     
             except Exception as e:
-                tool_name = getattr(tool, 'name', tool.__class__.__name__)
+                tool_name = getattr(tool, 'name', None) or tool.__class__.__name__
                 print(f"⚠️ Could not configure {tool_name}: {e}")
                 
     def get_agent_memory_safely(self, agent) -> Dict:
