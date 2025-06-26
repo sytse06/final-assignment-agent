@@ -443,12 +443,15 @@ class GAIAAgent:
                 print(f"❌ ContentRetrieverTool failed: {e}")
             
             try:
-                # Create attachment tool directly - no wrappers  
-                shared_tools['get_attachment'] = GetAttachmentTool()
-                print("✅ GetAttachmentTool created successfully")
-                print(f"🔧 GetAttachmentTool instance: {type(shared_tools['get_attachment'])}")
-            except Exception as e:
-                print(f"❌ GetAttachmentTool failed: {e}")
+        try:
+            # Create attachment tool with LOCAL_FILE_PATH default for testing
+            shared_tools['get_attachment'] = GetAttachmentTool()
+            # Override the default format for testing
+            if hasattr(shared_tools['get_attachment'], 'inputs'):
+                shared_tools['get_attachment'].inputs['fmt']['default'] = "LOCAL_FILE_PATH"
+            print("✅ GetAttachmentTool created with LOCAL_FILE_PATH default")
+        except Exception as e:
+            print(f"❌ GetAttachmentTool failed: {e}")
             
             # DISABLED: Grounding tool creation
             # if getattr(self.config, 'enable_grounding_tools', False):
