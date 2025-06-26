@@ -30,10 +30,16 @@ class GetAttachmentTool(Tool):
             else "https://agents-course-unit4-scoring.hf.space/"
         )
         self.task_id = task_id
+        self.local_file_path = None
         super().__init__(**kwargs)
 
     def attachment_for(self, task_id: str | None):
         self.task_id = task_id
+        
+    def configure_from_state(self, task_id: str = None, file_path: str = None):
+        """Configure from state"""
+        self.task_id = task_id
+        self.local_file_path = file_path
 
     def forward(self, fmt: str = "URL") -> str:
         fmt = fmt.upper()
