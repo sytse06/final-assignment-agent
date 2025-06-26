@@ -366,22 +366,22 @@ class GAIAAgent:
             raise
             
     def _create_specialist_agents(self):
-        """Create specialized agents with the right tool access"""
+        """Create specialized agents with the focused tool access"""
         
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         specialists = {}
-
-        # Data Analyst - gets tools directly from shared_tools
-        data_tools = []
-        if 'get_attachment' in self.shared_tools:
-            data_tools.append(self.shared_tools['get_attachment'])
-        if 'content_retriever' in self.shared_tools:
-            data_tools.append(self.shared_tools['content_retriever'])
         
+        # Create general env_tools list
+        env_tools = []
+        if 'get_attachment' in self.shared_tools:
+            env_tools.append(self.shared_tools['get_attachment'])
+            print(f"✅ Added GetAttachmentTool to env_tools")
+
+        # Data Analyst
         specialists["data_analyst"] = CodeAgent(
             name="data_analyst",
-            description="Specialized data analyst for Excel/CSV analysis, calculations, and file processing.",
-            tools=data_tools,
+            description="Data analyst with advanced skills in statistic, handling tabular data and related Python packages.",
+            tools=env_tools,
             additional_authorized_imports=[
                 "numpy", "pandas", "matplotlib", "seaborn", "scipy", "io",
                 "json", "csv", "statistics", "math", "re", "openpyxl", "xlrd"
@@ -390,34 +390,32 @@ class GAIAAgent:
             model=self.model,
             max_steps=self.config.max_agent_steps,
             logger=logger
-        )
+    )
         
-        # Web Researcher
-        web_tools = []
+        # Web Researcher - REFERENCE STYLE: env_tools + additional tools
+        web_tools = env_tools.copy()
         if LANGCHAIN_TOOLS_AVAILABLE:
             web_tools.extend(ALL_LANGCHAIN_TOOLS)
         if 'content_retriever' in self.shared_tools:
             web_tools.append(self.shared_tools['content_retriever'])
-        if 'get_attachment' in self.shared_tools:
-            web_tools.append(self.shared_tools['get_attachment'])
         
         specialists["web_researcher"] = ToolCallingAgent(
             name="web_researcher",
-            description="""SPECIALIZED INFORMATION RESEARCHER. Your role is to find information using search tools.
+            description="Your role is to find information using search tools.
 
-    Available tools:
-    - retrieve_content: For processing documents
-    - get_attachment: For accessing files  
-    - search_web_serper: For current web information
-    - search_wikipedia: For reliable information lookup
-    - search_arxiv: For academic research
+        Available tools:
+        - retrieve_content: For processing documents
+        - get_attachment: For accessing files  
+        - search_web_serper: For current web information
+        - search_wikipedia: For reliable information lookup
+        - search_arxiv: For academic research
 
-    WORKFLOW:
-    1. Search for information using appropriate tools
-    2. Process and analyze the results directly
-    3. Provide clear, factual answers
+        WORKFLOW:
+        1. Search for information using appropriate tools
+        2. Process and analyze the results directly
+        3. Provide clear, factual answers
 
-    CRITICAL: Use tools directly, do NOT write Python code.""",
+        CRITICAL: Use tools directly, do NOT write Python code.",
             tools=web_tools,
             model=self.model,
             max_steps=self.config.max_agent_steps,
