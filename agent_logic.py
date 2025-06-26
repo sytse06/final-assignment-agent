@@ -483,49 +483,91 @@ class GAIAAgent:
         return shared_tools
     
     def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
-        """🧪 TEST: Skip all configuration like reference implementation"""
-        print(f"🧪 REFERENCE TEST: Skipping tool configuration for {agent_name}")
-        print(f"   💡 Like reference: GetAttachmentTool already activated globally")
-        print(f"   🎯 Agent should use tools directly")
+        """🚀 CODEAGENT FIX: Access tools via toolbox to configure with state info"""
+        task_id = state.get("task_id")
+        question = state.get("question")
+        file_path = state.get("file_path", "")
+        file_name = state.get("file_name", "")
+        has_file = state.get("has_file", False)
         
-        # NO CONFIGURATION AT ALL - just like the reference!
-        print("🔚 No tool configuration - using reference approach")
-                                
-        def get_agent_memory_safely(self, agent) -> Dict:
-            """
-            Safely access agent memory in various SmolagAgent versions.
+        if not task_id:
+            return
+        
+        print(f"🔧 CodeAgent toolbox configuration for {agent_name}")
+        print(f"   📁 Has file: {has_file}")
+        print(f"   📄 File path: {file_path}")
+        print(f"   📛 File name: {file_name}")
+        
+        # Get the agent
+        specialist = self.specialists[agent_name]
+        
+        # 🎯 CODEAGENT SPECIFIC: Access tools via toolbox
+        if hasattr(specialist, '__class__') and 'CodeAgent' in specialist.__class__.__name__:
+            print("🔧 Detected CodeAgent - accessing toolbox")
             
-            Args:
-                agent: SmolagAgent instance
+            # Try to find toolbox
+            toolbox = None
+            if hasattr(specialist, 'toolbox') and specialist.toolbox:
+                toolbox = specialist.toolbox
+                print(f"🔍 Found toolbox with {len(toolbox)} tools")
+            elif hasattr(specialist, '_toolbox') and specialist._toolbox:
+                toolbox = specialist._toolbox
+                print(f"🔍 Found _toolbox with {len(toolbox)} tools")
+            else:
+                print("⚠️ Could not find toolbox in CodeAgent")
+                # Debug: show what attributes exist
+                tool_attrs = [attr for attr in dir(specialist) if 'tool' in attr.lower()]
+                print(f"   Available tool attributes: {tool_attrs}")
+                return
+            
+            # Configure tools in toolbox
+            for tool_name, tool in toolbox.items():
+                print(f"🔍 Toolbox[{tool_name}]: {tool.__class__.__name__}")
                 
-            Returns:
-                Dictionary representation of agent memory
-            """
-            try:
-                # NEW METHOD: Direct memory attribute access
-                if hasattr(agent, 'memory') and agent.memory is not None:
-                    # Handle AgentMemory object
-                    if hasattr(agent.memory, '__dict__'):
-                        return agent.memory.__dict__
-                    # Handle dict-like memory
-                    elif hasattr(agent.memory, 'steps'):
-                        return {'steps': agent.memory.steps}
-                    # Handle memory as dict
-                    elif isinstance(agent.memory, dict):
-                        return agent.memory
+                if tool.__class__.__name__ == "GetAttachmentTool":
+                    print(f"🎯 Found GetAttachmentTool in toolbox!")
+                    if has_file and file_path and hasattr(tool, 'configure_from_state'):
+                        try:
+                            print(f"🚀 Configuring with:")
+                            print(f"   file_path: {file_path}")
+                            print(f"   file_name: {file_name}")
+                            tool.configure_from_state(file_path, file_name)
+                            print(f"✅ Successfully configured GetAttachmentTool in toolbox")
+                            
+                            # Verify configuration
+                            print(f"🔍 Verification:")
+                            print(f"   tool._state_file_path: {getattr(tool, '_state_file_path', 'NOT_SET')}")
+                            print(f"   tool._file_name: {getattr(tool, '_file_name', 'NOT_SET')}")
+                            
+                        except Exception as e:
+                            print(f"❌ Failed to configure GetAttachmentTool: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    else:
+                        print(f"⚠️ Cannot configure GetAttachmentTool:")
+                        print(f"   has_file: {has_file}")
+                        print(f"   file_path exists: {bool(file_path)}")
+                        print(f"   has configure_from_state: {hasattr(tool, 'configure_from_state')}")
                 
-                # FALLBACK: Use deprecated logs attribute
-                if hasattr(agent, 'logs'):
-                    print("⚠️  Using deprecated 'logs' attribute - consider updating SmolagAgents")
-                    return {'steps': agent.logs}
+                elif tool.__class__.__name__ == "ContentRetrieverTool":
+                    if hasattr(tool, 'configure_from_state'):
+                        try:
+                            tool.configure_from_state(question)
+                            print(f"✅ Configured ContentRetrieverTool")
+                        except Exception as e:
+                            print(f"⚠️ Failed to configure ContentRetrieverTool: {e}")
                 
-                # No memory found
-                print("⚠️  No memory found in agent")
-                return {'steps': []}
-                
-            except Exception as e:
-                print(f"⚠️  Error accessing agent memory: {e}")
-                return {'steps': []}
+                else:
+                    print(f"ℹ️ {tool.__class__.__name__} - no configuration needed")
+        
+        else:
+            print("🔧 Detected ToolCallingAgent - using standard tool access")
+            # Standard ToolCallingAgent handling (if needed)
+            for i, tool in enumerate(specialist.tools):
+                print(f"🔍 Tool {i}: {tool.__class__.__name__}")
+                # ... standard configuration logic ...
+        
+        print("🔚 Tool configuration complete\n")
 
     def _llm_select_agent(self, question: str, similar_examples: List[Dict] = None) -> str:
         """LLM selects agent using RAG examples - no hard-coded rules"""
