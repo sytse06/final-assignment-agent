@@ -366,78 +366,76 @@ class GAIAAgent:
             raise
             
     def _create_specialist_agents(self):
-        """Create specialized agents with the focused tool access"""
+        """🔍 DEBUG VERSION: Find where tools become strings"""
         
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         specialists = {}
+
+        print("🔍 DEBUG: Creating specialist agents...")
         
-        # Create general env_tools list
+        # 🚀 DEBUG: Check shared_tools
+        print(f"🔧 shared_tools type: {type(self.shared_tools)}")
+        print(f"🔧 shared_tools keys: {list(self.shared_tools.keys())}")
+        for key, tool in self.shared_tools.items():
+            print(f"   {key}: type={type(tool)}, class={tool.__class__.__name__}")
+
+        # 🚀 DEBUG: Create env_tools list
         env_tools = []
         if 'get_attachment' in self.shared_tools:
-            env_tools.append(self.shared_tools['get_attachment'])
+            tool = self.shared_tools['get_attachment']
+            print(f"🔧 Adding get_attachment: type={type(tool)}, class={tool.__class__.__name__}")
+            env_tools.append(tool)
             print(f"✅ Added GetAttachmentTool to env_tools")
-
-        # Data Analyst
-        specialists["data_analyst"] = CodeAgent(
-            name="data_analyst",
-            description="""Data analyst specialized in Excel/CSV analysis and calculations.
-
-    IMPORTANT FILE HANDLING:
-    - When you need to access attached files, use: get_attachment(fmt="LOCAL_FILE_PATH")
-    - This downloads the file and returns a local path you can use with pandas
-    - For Excel files: pd.read_excel(file_path)
-    - For CSV files: pd.read_csv(file_path)
-
-    WORKFLOW FOR FILE TASKS:
-    1. Call get_attachment(fmt="LOCAL_FILE_PATH") to download file
-    2. Use pandas to read and analyze the file
-    3. Process data according to the question
-    4. Return the final answer
-
-    Example:
-    ```python
-    # Download the file
-    file_path = get_attachment(fmt="LOCAL_FILE_PATH")
-    # Load and analyze
-    import pandas as pd
-    df = pd.read_excel(file_path)
-    # Your analysis here...
-    ```""",
-            tools=env_tools,
-            additional_authorized_imports=[
-                "numpy", "pandas", "matplotlib", "seaborn", "scipy", "io",
-                "json", "csv", "statistics", "math", "re", "openpyxl", "xlrd"
-            ],
-            use_structured_outputs_internally=True,
-            model=self.model,
-            max_steps=self.config.max_agent_steps,
-            logger=logger
-    )
         
-        # Web Researcher - REFERENCE STYLE: env_tools + additional tools
+        print(f"🔧 env_tools final: {len(env_tools)} items")
+        for i, tool in enumerate(env_tools):
+            print(f"   env_tools[{i}]: type={type(tool)}, class={tool.__class__.__name__}")
+        
+        # 🚀 DEBUG: Create data_analyst with detailed logging
+        print("🔧 Creating data_analyst CodeAgent...")
+        try:
+            specialists["data_analyst"] = CodeAgent(
+                name="data_analyst",
+                description="Data analyst specialized in Excel/CSV analysis and calculations.",
+                tools=env_tools,  # 🔍 This is where the issue might be
+                additional_authorized_imports=[
+                    "numpy", "pandas", "matplotlib", "seaborn", "scipy", "io",
+                    "json", "csv", "statistics", "math", "re", "openpyxl", "xlrd"
+                ],
+                model=self.model,
+                max_steps=self.config.max_agent_steps,
+                logger=logger
+            )
+            
+            # 🚀 DEBUG: Check what tools the agent actually has
+            agent = specialists["data_analyst"]
+            print(f"🔍 data_analyst created successfully")
+            print(f"🔍 data_analyst.tools type: {type(agent.tools)}")
+            print(f"🔍 data_analyst.tools length: {len(agent.tools)}")
+            
+            for i, tool in enumerate(agent.tools):
+                print(f"🔍 agent.tools[{i}]: type={type(tool)}, class={tool.__class__.__name__}")
+                if hasattr(tool, 'name'):
+                    print(f"    name attribute: {repr(tool.name)}")
+                else:
+                    print(f"    no name attribute")
+            
+        except Exception as e:
+            print(f"❌ Failed to create data_analyst: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Create web_researcher (abbreviated for comparison)
         web_tools = env_tools.copy()
         if LANGCHAIN_TOOLS_AVAILABLE:
+            print(f"🔧 Adding {len(ALL_LANGCHAIN_TOOLS)} LangChain tools to web_researcher")
             web_tools.extend(ALL_LANGCHAIN_TOOLS)
         if 'content_retriever' in self.shared_tools:
             web_tools.append(self.shared_tools['content_retriever'])
         
         specialists["web_researcher"] = ToolCallingAgent(
             name="web_researcher",
-            description=""" Your role is to find information using search tools.
-
-        Available tools:
-        - retrieve_content: For processing documents
-        - get_attachment: For accessing files  
-        - search_web_serper: For current web information
-        - search_wikipedia: For reliable information lookup
-        - search_arxiv: For academic research
-
-        WORKFLOW:
-        1. Search for information using appropriate tools
-        2. Process and analyze the results directly
-        3. Provide clear, factual answers
-
-        CRITICAL: Use tools directly, do NOT write Python code.""",
+            description="Answers questions that require grounding in unknown information through search on web sites and other online resources.",
             tools=web_tools,
             model=self.model,
             max_steps=self.config.max_agent_steps,
@@ -447,41 +445,34 @@ class GAIAAgent:
         )
         
         print(f"🎯 Created {len(specialists)} specialized agents:")
-        print(f"   data_analyst: {len(env_tools)} tools")
-        print(f"   web_researcher: {len(web_tools)} tools")
+        print(f"   data_analyst: {len(specialists['data_analyst'].tools)} tools")
+        print(f"   web_researcher: {len(specialists['web_researcher'].tools)} tools")
         
         return specialists
 
     def _create_shared_tools(self):
-        """Create shared tool instances - NO WRAPPERS"""
+        """🔍 DEBUG VERSION: Check shared tool creation"""
         shared_tools = {}
+        
+        print("🔧 DEBUG: Creating shared tools...")
         
         if CUSTOM_TOOLS_AVAILABLE:
             try:
-                # Create tools directly
-                shared_tools['content_retriever'] = ContentRetrieverTool()
-                print("✅ ContentRetrieverTool created successfully")
+                # Create tools directly - no wrappers
+                tool = ContentRetrieverTool()
+                shared_tools['content_retriever'] = tool
+                print(f"✅ ContentRetrieverTool: type={type(tool)}, class={tool.__class__.__name__}")
             except Exception as e:
                 print(f"❌ ContentRetrieverTool failed: {e}")
             
             try:
-                # Create attachment tool with LOCAL_FILE_PATH default for testing
-                shared_tools['get_attachment'] = GetAttachmentTool()
-                # Override the default format for testing
-                if hasattr(shared_tools['get_attachment'], 'inputs'):
-                    shared_tools['get_attachment'].inputs['fmt']['default'] = "LOCAL_FILE_PATH"
-                print("✅ GetAttachmentTool created with LOCAL_FILE_PATH default")
+                # Create attachment tool directly - no wrappers  
+                tool = GetAttachmentTool()
+                shared_tools['get_attachment'] = tool
+                print(f"✅ GetAttachmentTool: type={type(tool)}, class={tool.__class__.__name__}")
+                print(f"   tool.name: {repr(getattr(tool, 'name', 'NOT_FOUND'))}")
             except Exception as e:
                 print(f"❌ GetAttachmentTool failed: {e}")
-            
-            # DISABLED: Grounding tool creation
-            # if getattr(self.config, 'enable_grounding_tools', False):
-            #     try:
-            #         from tools.content_grounding_tool import ContentGroundingTool
-            #         shared_tools['content_grounding'] = ContentGroundingTool()
-            #         print("✅ ContentGroundingTool created successfully")
-            #     except Exception as e:
-            #         print(f"❌ ContentGroundingTool failed: {e}")
             
             print(f"🔧 Direct shared_tools created: {list(shared_tools.keys())}")
             print("🚫 ContentGroundingTool disabled for better GAIA performance")
