@@ -451,6 +451,7 @@ class GAIAAgent:
         return specialists
 
     def _create_shared_tools(self):
+        print("🚨 DEBUG _create_specialist_agents CALLED!")
         """🔍 DEBUG VERSION: Check shared tool creation"""
         shared_tools = {}
         
@@ -482,100 +483,49 @@ class GAIAAgent:
         return shared_tools
     
     def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
-        """🔍 DEBUG VERSION: Extra logging to understand tool detection"""
-        task_id = state.get("task_id")
-        question = state.get("question")
-        file_path = state.get("file_path", "")
-        file_name = state.get("file_name", "")
-        has_file = state.get("has_file", False)
+        """🧪 TEST: Skip all configuration like reference implementation"""
+        print(f"🧪 REFERENCE TEST: Skipping tool configuration for {agent_name}")
+        print(f"   💡 Like reference: GetAttachmentTool already activated globally")
+        print(f"   🎯 Agent should use tools directly")
         
-        print(f"🔧 DEBUG tool configuration for {agent_name}")
-        print(f"   📁 Has file: {has_file}")
-        print(f"   📄 File path: {file_path}")
-        print(f"   📛 File name: {file_name}")
-        
-        specialist = self.specialists[agent_name]
-        print(f"🔍 Agent has {len(specialist.tools)} tools")
-        
-        for i, tool in enumerate(specialist.tools):
-            print(f"\n🔍 Tool {i} analysis:")
-            print(f"   Type: {type(tool)}")
-            print(f"   Class: {tool.__class__.__name__}")
-            print(f"   Name attr: {repr(getattr(tool, 'name', 'NOT_FOUND'))}")
-            print(f"   Name type: {type(getattr(tool, 'name', None))}")
-            print(f"   Has configure_from_state: {hasattr(tool, 'configure_from_state')}")
+        # NO CONFIGURATION AT ALL - just like the reference!
+        print("🔚 No tool configuration - using reference approach")
+                                
+        def get_agent_memory_safely(self, agent) -> Dict:
+            """
+            Safely access agent memory in various SmolagAgent versions.
             
-            # Try to configure if it's get_attachment
-            if tool.__class__.__name__ == "GetAttachmentTool":
-                print(f"🎯 Found GetAttachmentTool!")
-                if has_file and file_path and hasattr(tool, 'configure_from_state'):
-                    try:
-                        print(f"🚀 Attempting to configure with:")
-                        print(f"   file_path: {file_path}")
-                        print(f"   file_name: {file_name}")
-                        tool.configure_from_state(file_path, file_name)
-                        print(f"✅ Successfully configured GetAttachmentTool")
-                    except Exception as e:
-                        print(f"❌ Failed to configure GetAttachmentTool: {e}")
-                        import traceback
-                        traceback.print_exc()
-                else:
-                    print(f"⚠️ Cannot configure GetAttachmentTool:")
-                    print(f"   has_file: {has_file}")
-                    print(f"   file_path exists: {bool(file_path)}")
-                    print(f"   has configure_from_state: {hasattr(tool, 'configure_from_state')}")
-            
-            # Also check for content retriever
-            elif tool.__class__.__name__ == "ContentRetrieverTool":
-                if hasattr(tool, 'configure_from_state'):
-                    try:
-                        tool.configure_from_state(question)
-                        print(f"✅ Configured ContentRetrieverTool with question")
-                    except Exception as e:
-                        print(f"⚠️ Failed to configure ContentRetrieverTool: {e}")
-                else:
-                    print(f"ℹ️ ContentRetrieverTool has no configure_from_state method")
-            
-            else:
-                print(f"ℹ️ {tool.__class__.__name__} - no special configuration needed")
-                    
-        print("🔚 Tool configuration debug complete\n")
-                            
-    def get_agent_memory_safely(self, agent) -> Dict:
-        """
-        Safely access agent memory in various SmolagAgent versions.
-        
-        Args:
-            agent: SmolagAgent instance
-            
-        Returns:
-            Dictionary representation of agent memory
-        """
-        try:
-            # NEW METHOD: Direct memory attribute access
-            if hasattr(agent, 'memory') and agent.memory is not None:
-                # Handle AgentMemory object
-                if hasattr(agent.memory, '__dict__'):
-                    return agent.memory.__dict__
-                # Handle dict-like memory
-                elif hasattr(agent.memory, 'steps'):
-                    return {'steps': agent.memory.steps}
-                # Handle memory as dict
-                elif isinstance(agent.memory, dict):
-                    return agent.memory
-            
-            # FALLBACK: Use deprecated logs attribute
-            if hasattr(agent, 'logs'):
-                print("⚠️  Using deprecated 'logs' attribute - consider updating SmolagAgents")
-                return {'steps': agent.logs}
-            
-            # No memory found
-            print("⚠️  No memory found in agent")
-            return {'steps': []}
-            
-        except Exception as e:
-            print(f"⚠️  Error accessing agent memory: {e}")
-            return {'steps': []}
+            Args:
+                agent: SmolagAgent instance
+                
+            Returns:
+                Dictionary representation of agent memory
+            """
+            try:
+                # NEW METHOD: Direct memory attribute access
+                if hasattr(agent, 'memory') and agent.memory is not None:
+                    # Handle AgentMemory object
+                    if hasattr(agent.memory, '__dict__'):
+                        return agent.memory.__dict__
+                    # Handle dict-like memory
+                    elif hasattr(agent.memory, 'steps'):
+                        return {'steps': agent.memory.steps}
+                    # Handle memory as dict
+                    elif isinstance(agent.memory, dict):
+                        return agent.memory
+                
+                # FALLBACK: Use deprecated logs attribute
+                if hasattr(agent, 'logs'):
+                    print("⚠️  Using deprecated 'logs' attribute - consider updating SmolagAgents")
+                    return {'steps': agent.logs}
+                
+                # No memory found
+                print("⚠️  No memory found in agent")
+                return {'steps': []}
+                
+            except Exception as e:
+                print(f"⚠️  Error accessing agent memory: {e}")
+                return {'steps': []}
 
     def _llm_select_agent(self, question: str, similar_examples: List[Dict] = None) -> str:
         """LLM selects agent using RAG examples - no hard-coded rules"""

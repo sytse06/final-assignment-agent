@@ -52,46 +52,49 @@ class GetAttachmentTool(Tool):
         if not self.task_id:
             return ""
 
-        # Use state file path and file name extension to access files
+        # TEST FIX: Use state file path with better extension logic
         if fmt == "LOCAL_FILE_PATH" and self._state_file_path:
             import os
             import shutil
             
             original_path = self._state_file_path
             
-            # Find extension in file_names
+            # 🎯 IMPROVED LOGIC: Always check if we need to add extension
             if self._file_name:
                 file_extension = os.path.splitext(self._file_name)[1]
                 original_has_extension = bool(os.path.splitext(original_path)[1])
                 
-                # If original path lacks extension but file_name has one
-                if not original_has_extension and file_extension:
-                    # Create new path with extension
-                    new_path = original_path + file_extension
+                # If file_name has extension, ensure cached file has correct extension
+                if file_extension:
+                    # If original has no extension OR wrong extension, create correct one
+                    if not original_has_extension:
+                        new_path = original_path + file_extension
+                    else:
+                        # Replace extension with correct one from file_name
+                        base_path = os.path.splitext(original_path)[0]
+                        new_path = base_path + file_extension
                     
-                    # Copy file with proper extension if not already exists
-                    if not os.path.exists(new_path) and os.path.exists(original_path):
-                        try:
-                            shutil.copy2(original_path, new_path)
-                            print(f"🔧 Copied file with extension: {new_path}")
+                    # Copy to new location with correct extension if needed
+                    if new_path != original_path:
+                        if not os.path.exists(new_path) and os.path.exists(original_path):
+                            try:
+                                shutil.copy2(original_path, new_path)
+                                print(f"🔧 Created file with correct extension: {new_path}")
+                                return new_path
+                            except Exception as e:
+                                print(f"⚠️ Could not copy file: {e}")
+                                return original_path
+                        elif os.path.exists(new_path):
+                            print(f"🎯 Using existing file with correct extension: {new_path}")
                             return new_path
-                        except Exception as e:
-                            print(f"⚠️ Could not copy file with extension: {e}")
-                            print(f"🎯 Returning original path: {original_path}")
-                            return original_path
-                    elif os.path.exists(new_path):
-                        print(f"🎯 Using existing file with extension: {new_path}")
-                        return new_path
-                
-                # If original already has extension, use it directly
-                if original_has_extension:
-                    print(f"🎯 Original path has extension: {original_path}")
-                    return original_path
+                    else:
+                        print(f"🎯 Original path already has correct extension: {original_path}")
+                        return original_path
             
-            # Fallback: return original path (no file_name available or no extension needed)
-            print(f"🎯 Returning state file path: {original_path}")
+            # Fallback: return original path if no file_name or no extension
+            print(f"🎯 Returning original state file path: {original_path}")
             return original_path
-
+        
         # Original logic for other cases
         file_url = urljoin(self.agent_evaluation_api, f"files/{self.task_id}")
         if fmt == "URL":
