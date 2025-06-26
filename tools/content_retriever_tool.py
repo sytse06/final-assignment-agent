@@ -32,8 +32,15 @@ class ContentRetrieverTool(Tool):
             model_name if model_name is not None else "all-MiniLM-L6-v2"
         )
         self._chunker = HierarchicalChunker()
+        
+        self._state_question = None
 
         super().__init__(**kwargs)
+    
+    def configure_from_state(self, question: str):
+        """Store question for potential query enhancement"""
+        self._state_question = question
+        print(f"🔧 ContentRetriever noted question context: {question[:50]}...")
 
     def forward(self, url: str, query: str) -> str:
         document = self._document_converter.convert(url).document
