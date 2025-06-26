@@ -29,10 +29,7 @@ from smolagents import (
 )
 
 # Import agent context system
-from agent_context import (
-    ContextBridge,
-    create_state_aware_tools
-)
+from agent_context import ContextBridge
 
 # Import retriever system
 from dev_retriever import load_gaia_retriever
@@ -40,7 +37,6 @@ from dev_retriever import load_gaia_retriever
 # Import logging
 from agent_logging import AgentLoggingSetup
 
-# Import custom and Langchain tools
 try:
     from tools import (GetAttachmentTool, 
                        ContentRetrieverTool
@@ -50,6 +46,10 @@ try:
     CUSTOM_TOOLS_AVAILABLE = True
     CONTENT_GROUNDING_AVAILABLE = False  # Force disable
     print("✅ Custom tools imported successfully (grounding disabled)")
+except ImportError as e:
+    print(f"⚠️  Custom tools not available: {e}")
+    CUSTOM_TOOLS_AVAILABLE = False
+    CONTENT_GROUNDING_AVAILABLE = False
 
 try:
     # Fixed: Import from the specific langchain_tools submodule
@@ -266,13 +266,6 @@ class GAIAAgent:
         # Create shared tool instances
         self.shared_tools = self._create_shared_tools()
         
-        # Create state-aware tools (NEW: simplified approach)
-        if config.enable_context_bridge and self.shared_tools:
-            self.state_aware_tools = create_state_aware_tools(self.shared_tools)
-            print(f"🌉 State-aware tools created: {len(self.state_aware_tools)} tools")
-        else:
-            self.state_aware_tools = []
-        
         # Create specialist agents
         self.specialists = self._create_specialist_agents()
         
@@ -373,31 +366,21 @@ class GAIAAgent:
             raise
             
     def _create_specialist_agents(self):
-        """Create specialized agents with focused tool distribution"""
+        """Create specialized agents with the right tool access"""
         
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         specialists = {}
 
-        # Helper function to get context-aware tools
-        def get_context_tool(tool_name):
-            if self.state_aware_tools and isinstance(self.state_aware_tools, list):
-                for tool in self.state_aware_tools:
-                    if hasattr(tool, 'name') and tool.name == tool_name:
-                        return tool
-            return None
-
-        # Data Analyst
+        # Data Analyst - gets tools directly from shared_tools
         data_tools = []
-        
-        # Only file access - no web search distractions
-        if attachment_tool := get_context_tool("get_attachment"):
-            data_tools.append(attachment_tool)
-        if content_tool := get_context_tool("content_retriever"):
-            data_tools.append(content_tool)
+        if 'get_attachment' in self.shared_tools:
+            data_tools.append(self.shared_tools['get_attachment'])
+        if 'content_retriever' in self.shared_tools:
+            data_tools.append(self.shared_tools['content_retriever'])
         
         specialists["data_analyst"] = CodeAgent(
             name="data_analyst",
-            description="Specialized data analyst for Excel/CSV analysis, calculations, and file processing. Has both file access and content processing tools.",
+            description="Specialized data analyst for Excel/CSV analysis, calculations, and file processing.",
             tools=data_tools,
             additional_authorized_imports=[
                 "numpy", "pandas", "matplotlib", "seaborn", "scipy", "io",
@@ -409,47 +392,33 @@ class GAIAAgent:
             logger=logger
         )
         
-        # Web Researcher - SPECIALIZED for information gathering and analysis
+        # Web Researcher
         web_tools = []
-        
-        # Add LangChain research tools - core specialty
         if LANGCHAIN_TOOLS_AVAILABLE:
             web_tools.extend(ALL_LANGCHAIN_TOOLS)
+        if 'content_retriever' in self.shared_tools:
+            web_tools.append(self.shared_tools['content_retriever'])
+        if 'get_attachment' in self.shared_tools:
+            web_tools.append(self.shared_tools['get_attachment'])
         
-        # Add content processing tools
-        if content_tool := get_context_tool("content_retriever"):
-            web_tools.append(content_tool)
-        
-        # Add file access for document research
-        if attachment_tool := get_context_tool("get_attachment"):
-            web_tools.append(attachment_tool)
-        
-        # DISABLED: Content grounding tool (is interfering with temporal searches)
-        # if CONTENT_GROUNDING_AVAILABLE:
-        #     try:
-        #         grounding_tool = ContentGroundingTool()
-        #         web_tools.append(grounding_tool)
-        #         print("✅ ContentGroundingTool added to web_researcher")
-        #     except Exception as e:
-        #         print(f"⚠️ ContentGroundingTool failed to initialize: {e}")
-
         specialists["web_researcher"] = ToolCallingAgent(
             name="web_researcher",
-            description="""SPECIALIZED INFORMATION RESEARCHER. Your role is to find information using search tools, NOT to write code.
+            description="""SPECIALIZED INFORMATION RESEARCHER. Your role is to find information using search tools.
 
-Available tools:
-- get_attachment: For accessing files
-- retrieve_content: For processing documents
-- search_web_serper: For current web information
-- search_wikipedia: For reliable information lookup  
-- search_arxiv: For academic research
-- final_answer: When you have the definitive answer
+    Available tools:
+    - retrieve_content: For processing documents
+    - get_attachment: For accessing files  
+    - search_web_serper: For current web information
+    - search_wikipedia: For reliable information lookup
+    - search_arxiv: For academic research
 
-ENHANCED WORKFLOW:
-Search for information using appropriate tools
+    WORKFLOW:
+    1. Search for information using appropriate tools
+    2. Process and analyze the results directly
+    3. Provide clear, factual answers
 
-CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code executor.""",
-            tools=web_tools,  # Web search + content processing + file access
+    CRITICAL: Use tools directly, do NOT write Python code.""",
+            tools=web_tools,
             model=self.model,
             max_steps=self.config.max_agent_steps,
             planning_interval=self.config.planning_interval,
@@ -458,27 +427,28 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
         )
         
         print(f"🎯 Created {len(specialists)} specialized agents:")
-        print(f"   data_analyst: {len(data_tools)} tools (computation focus)")
-        print(f"   web_researcher: {len(web_tools)} tools (research + verification focus)")
+        print(f"   data_analyst: {len(data_tools)} tools")
+        print(f"   web_researcher: {len(web_tools)} tools")
         
         return specialists
 
     def _create_shared_tools(self):
-        """Create shared tool instances WITHOUT grounding tool"""
+        """Create shared tool instances - NO WRAPPERS"""
         shared_tools = {}
         
         if CUSTOM_TOOLS_AVAILABLE:
             try:
-                # Core GAIA-optimized content retriever
+                # Create tools directly
                 shared_tools['content_retriever'] = ContentRetrieverTool()
-                print("✅ ContentRetrieverTool (GAIA-optimized) created successfully")
+                print("✅ ContentRetrieverTool created successfully")
             except Exception as e:
                 print(f"❌ ContentRetrieverTool failed: {e}")
             
             try:
-                # File attachment tool
+                # Create attachment tool directly - no wrappers  
                 shared_tools['get_attachment'] = GetAttachmentTool()
                 print("✅ GetAttachmentTool created successfully")
+                print(f"🔧 GetAttachmentTool instance: {type(shared_tools['get_attachment'])}")
             except Exception as e:
                 print(f"❌ GetAttachmentTool failed: {e}")
             
@@ -491,7 +461,7 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
             #     except Exception as e:
             #         print(f"❌ ContentGroundingTool failed: {e}")
             
-            print(f"🔧 Final shared_tools keys: {list(shared_tools.keys())}")
+            print(f"🔧 Direct shared_tools created: {list(shared_tools.keys())}")
             print("🚫 ContentGroundingTool disabled for better GAIA performance")
         else:
             print("⚠️  Custom tools not available - shared_tools will be empty")
@@ -499,37 +469,38 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
         return shared_tools
     
     def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
-        """Configure agent tools from LangGraph state"""
+        """SIMPLIFIED: Minimal tool configuration"""
         task_id = state.get("task_id")
         question = state.get("question")
-        file_path = state.get("file_path")
         
         if not task_id:
             return
         
-        print(f"🔧 Configuring tools from state for {agent_name}")
+        print(f"🔧 Minimal tool configuration for {agent_name}")
         
-        # Configure tools for the selected agent
+        # Get the agent
         specialist = self.specialists[agent_name]
         
+        # Only configure tools that explicitly need it
         for tool in specialist.tools:
             try:
-                # Configure GetAttachmentTool from state
-                if hasattr(tool, 'configure_from_state') and hasattr(tool, 'name'):
-                    if tool.name == "get_attachment":
-                        tool.configure_from_state(task_id, file_path)
-                        print(f"✅ Configured {tool.name} with task_id: {task_id}")
-                    elif tool.name == "content_retriever":
-                        tool.configure_from_state(question)
-                        print(f"✅ Configured {tool.name} with question context")
+                tool_name = getattr(tool, 'name', tool.__class__.__name__)
                 
-                # Fallback: Configure tools with attachment_for method
-                elif hasattr(tool, 'attachment_for'):
-                    tool.attachment_for(task_id)
-                    print(f"✅ Configured {tool.name} with attachment_for: {task_id}")
+                # Skip get_attachment - already configured in read_question_node
+                if tool_name == "get_attachment":
+                    print(f"ℹ️  {tool_name} already activated globally")
+                    continue
+                
+                # Only configure content retriever with question context
+                if tool_name == "retrieve_content" and hasattr(tool, 'configure_from_state'):
+                    tool.configure_from_state(question)
+                    print(f"✅ Configured {tool_name} with question context")
+                else:
+                    print(f"ℹ️  {tool_name} needs no configuration")
                     
             except Exception as e:
-                print(f"⚠️ Could not configure {getattr(tool, 'name', 'unknown tool')}: {e}")
+                tool_name = getattr(tool, 'name', tool.__class__.__name__)
+                print(f"⚠️ Could not configure {tool_name}: {e}")
                 
     def get_agent_memory_safely(self, agent) -> Dict:
         """
@@ -695,9 +666,13 @@ CRITICAL: Use tools directly, do NOT write Python code. You are NOT a code execu
         return builder.compile()
 
     def _read_question_node(self, state: GAIAState):
-        """Enhanced question reading with file info extraction"""
+        """Question reading with file info extraction if relevant"""
         task_id = state.get("task_id")
         question = state["question"]
+        
+        if 'get_attachment' in self.shared_tools:
+            self.shared_tools['get_attachment'].attachment_for(task_id)
+            print(f"✅ Activated GetAttachmentTool for task: {task_id}")
         
         # Start context bridge tracking
         if self.config.enable_context_bridge:
