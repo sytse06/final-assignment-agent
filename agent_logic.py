@@ -366,69 +366,33 @@ class GAIAAgent:
             raise
             
     def _create_specialist_agents(self):
-        """🔍 DEBUG VERSION: Find where tools become strings"""
+        """Create specialized agents with optimized tool configuration"""
         
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         specialists = {}
 
-        print("🔍 DEBUG: Creating specialist agents...")
-        
-        # 🚀 DEBUG: Check shared_tools
-        print(f"🔧 shared_tools type: {type(self.shared_tools)}")
-        print(f"🔧 shared_tools keys: {list(self.shared_tools.keys())}")
-        for key, tool in self.shared_tools.items():
-            print(f"   {key}: type={type(tool)}, class={tool.__class__.__name__}")
-
-        # 🚀 DEBUG: Create env_tools list
+        # Create env_tools list
         env_tools = []
         if 'get_attachment' in self.shared_tools:
-            tool = self.shared_tools['get_attachment']
-            print(f"🔧 Adding get_attachment: type={type(tool)}, class={tool.__class__.__name__}")
-            env_tools.append(tool)
-            print(f"✅ Added GetAttachmentTool to env_tools")
+            env_tools.append(self.shared_tools['get_attachment'])
         
-        print(f"🔧 env_tools final: {len(env_tools)} items")
-        for i, tool in enumerate(env_tools):
-            print(f"   env_tools[{i}]: type={type(tool)}, class={tool.__class__.__name__}")
+        # Data Analyst - Excel/CSV specialist
+        specialists["data_analyst"] = CodeAgent(
+            name="data_analyst", 
+            description="Data analyst specialized in Excel/CSV analysis, calculations, and file processing.",
+            tools=env_tools,
+            additional_authorized_imports=[
+                "numpy", "pandas", "matplotlib", "seaborn", "scipy", "io",
+                "json", "csv", "statistics", "math", "re", "openpyxl", "xlrd"
+            ],
+            model=self.model,
+            max_steps=self.config.max_agent_steps,
+            logger=logger
+        )
         
-        # 🚀 DEBUG: Create data_analyst with detailed logging
-        print("🔧 Creating data_analyst CodeAgent...")
-        try:
-            specialists["data_analyst"] = CodeAgent(
-                name="data_analyst",
-                description="Data analyst specialized in Excel/CSV analysis and calculations.",
-                tools=env_tools,  # 🔍 This is where the issue might be
-                additional_authorized_imports=[
-                    "numpy", "pandas", "matplotlib", "seaborn", "scipy", "io",
-                    "json", "csv", "statistics", "math", "re", "openpyxl", "xlrd"
-                ],
-                model=self.model,
-                max_steps=self.config.max_agent_steps,
-                logger=logger
-            )
-            
-            # 🚀 DEBUG: Check what tools the agent actually has
-            agent = specialists["data_analyst"]
-            print(f"🔍 data_analyst created successfully")
-            print(f"🔍 data_analyst.tools type: {type(agent.tools)}")
-            print(f"🔍 data_analyst.tools length: {len(agent.tools)}")
-            
-            for i, tool in enumerate(agent.tools):
-                print(f"🔍 agent.tools[{i}]: type={type(tool)}, class={tool.__class__.__name__}")
-                if hasattr(tool, 'name'):
-                    print(f"    name attribute: {repr(tool.name)}")
-                else:
-                    print(f"    no name attribute")
-            
-        except Exception as e:
-            print(f"❌ Failed to create data_analyst: {e}")
-            import traceback
-            traceback.print_exc()
-
-        # Create web_researcher (abbreviated for comparison)
+        # Web Researcher - Information retrieval specialist
         web_tools = env_tools.copy()
         if LANGCHAIN_TOOLS_AVAILABLE:
-            print(f"🔧 Adding {len(ALL_LANGCHAIN_TOOLS)} LangChain tools to web_researcher")
             web_tools.extend(ALL_LANGCHAIN_TOOLS)
         if 'content_retriever' in self.shared_tools:
             web_tools.append(self.shared_tools['content_retriever'])
@@ -445,8 +409,8 @@ class GAIAAgent:
         )
         
         print(f"🎯 Created {len(specialists)} specialized agents:")
-        print(f"   data_analyst: {len(specialists['data_analyst'].tools)} tools")
-        print(f"   web_researcher: {len(specialists['web_researcher'].tools)} tools")
+        print(f"   data_analyst: {len(specialists['data_analyst'].tools)} tools (CodeAgent)")
+        print(f"   web_researcher: {len(specialists['web_researcher'].tools)} tools (ToolCallingAgent)")
         
         return specialists
 
@@ -483,7 +447,7 @@ class GAIAAgent:
         return shared_tools
     
     def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
-        """🎯 CORRECT CODEAGENT FIX: Use agent.tools dictionary"""
+        """Configure tools with state information for file processing"""
         task_id = state.get("task_id")
         question = state.get("question")
         file_path = state.get("file_path", "")
@@ -493,65 +457,52 @@ class GAIAAgent:
         if not task_id:
             return
         
-        print(f"🔧 CodeAgent tools dictionary configuration for {agent_name}")
-        print(f"   📁 Has file: {has_file}")
-        print(f"   📄 File path: {file_path}")
-        print(f"   📛 File name: {file_name}")
+        if self.config.debug_mode:
+            print(f"🔧 Configuring tools for {agent_name}")
+            if has_file:
+                print(f"   📁 File: {file_name}")
         
         # Get the agent
         specialist = self.specialists[agent_name]
         
-        # 🎯 DOCUMENTATION CONFIRMED: agent.tools is a dictionary!
+        # Configure CodeAgent tools via tools dictionary
         if hasattr(specialist, 'tools') and isinstance(specialist.tools, dict):
-            print(f"🔍 Found tools dictionary with {len(specialist.tools)} tools")
-            
-            # Iterate through the tools dictionary
             for tool_name, tool in specialist.tools.items():
-                print(f"🔍 tools['{tool_name}'] = {type(tool)}: {tool.__class__.__name__}")
                 
-                # Configure GetAttachmentTool
+                # Configure GetAttachmentTool with file information
                 if tool.__class__.__name__ == "GetAttachmentTool":
-                    print(f"🎯 Found GetAttachmentTool in tools dictionary!")
                     if has_file and file_path and hasattr(tool, 'configure_from_state'):
                         try:
-                            print(f"🚀 Configuring GetAttachmentTool:")
-                            print(f"   file_path: {file_path}")
-                            print(f"   file_name: {file_name}")
                             tool.configure_from_state(file_path, file_name)
-                            print(f"✅ Successfully configured GetAttachmentTool!")
-                            
-                            # Verify configuration
-                            print(f"🔍 Verification:")
-                            print(f"   tool._state_file_path: {getattr(tool, '_state_file_path', 'NOT_SET')}")
-                            print(f"   tool._file_name: {getattr(tool, '_file_name', 'NOT_SET')}")
-                            
+                            if self.config.debug_mode:
+                                print(f"✅ Configured GetAttachmentTool with file info")
                         except Exception as e:
-                            print(f"❌ Failed to configure GetAttachmentTool: {e}")
-                            import traceback
-                            traceback.print_exc()
-                    else:
-                        print(f"⚠️ Cannot configure GetAttachmentTool:")
-                        print(f"   has_file: {has_file}")
-                        print(f"   file_path exists: {bool(file_path)}")
-                        print(f"   has configure_from_state: {hasattr(tool, 'configure_from_state')}")
+                            if self.config.debug_mode:
+                                print(f"⚠️ GetAttachmentTool configuration failed: {e}")
                 
-                # Configure ContentRetrieverTool
+                # Configure ContentRetrieverTool with question context
                 elif tool.__class__.__name__ == "ContentRetrieverTool":
                     if hasattr(tool, 'configure_from_state'):
                         try:
                             tool.configure_from_state(question)
-                            print(f"✅ Configured ContentRetrieverTool")
+                            if self.config.debug_mode:
+                                print(f"✅ Configured ContentRetrieverTool")
                         except Exception as e:
-                            print(f"⚠️ Failed to configure ContentRetrieverTool: {e}")
-                
-                else:
-                    print(f"ℹ️ {tool.__class__.__name__} - no configuration needed")
+                            if self.config.debug_mode:
+                                print(f"⚠️ ContentRetrieverTool configuration failed: {e}")
         
-        else:
-            print(f"⚠️ specialist.tools is not a dictionary or doesn't exist")
-            print(f"   Type: {type(getattr(specialist, 'tools', 'NOT_FOUND'))}")
-        
-        print("🔚 Tool configuration complete\n")
+        # Handle ToolCallingAgent (web_researcher)
+        elif hasattr(specialist, 'tools') and isinstance(specialist.tools, list):
+            for tool in specialist.tools:
+                if tool.__class__.__name__ == "GetAttachmentTool":
+                    if has_file and file_path and hasattr(tool, 'configure_from_state'):
+                        try:
+                            tool.configure_from_state(file_path, file_name)
+                            if self.config.debug_mode:
+                                print(f"✅ Configured GetAttachmentTool (ToolCallingAgent)")
+                        except Exception as e:
+                            if self.config.debug_mode:
+                                print(f"⚠️ GetAttachmentTool configuration failed: {e}")
 
     def _llm_select_agent(self, question: str, similar_examples: List[Dict] = None) -> str:
         """LLM selects agent using RAG examples - no hard-coded rules"""
