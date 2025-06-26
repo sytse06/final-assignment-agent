@@ -3,6 +3,7 @@ import requests
 from urllib.parse import urljoin
 import base64
 import tempfile
+import os
 
 
 class GetAttachmentTool(Tool):
@@ -49,7 +50,7 @@ class GetAttachmentTool(Tool):
             return ""
 
         # Try local file first for when LOCAL_FILE_PATH is present
-        if self.local_file_path and os.path.exists(self.local_file_path):
+        if self.local_file_path and hasattr(self, 'local_file_path') and os.path.exists(self.local_file_path):
             if fmt == "LOCAL_FILE_PATH":
                 return self.local_file_path
 
