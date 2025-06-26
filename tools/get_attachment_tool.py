@@ -48,6 +48,11 @@ class GetAttachmentTool(Tool):
         if not self.task_id:
             return ""
 
+        # Try local file first for when LOCAL_FILE_PATH is present
+        if self.local_file_path and os.path.exists(self.local_file_path):
+            if fmt == "LOCAL_FILE_PATH":
+                return self.local_file_path
+
         file_url = urljoin(self.agent_evaluation_api, f"files/{self.task_id}")
         if fmt == "URL":
             return file_url
