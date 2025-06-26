@@ -401,7 +401,7 @@ class GAIAAgent:
         
         specialists["web_researcher"] = ToolCallingAgent(
             name="web_researcher",
-            description="Your role is to find information using search tools.
+            description=""" Your role is to find information using search tools.
 
         Available tools:
         - retrieve_content: For processing documents
@@ -415,7 +415,7 @@ class GAIAAgent:
         2. Process and analyze the results directly
         3. Provide clear, factual answers
 
-        CRITICAL: Use tools directly, do NOT write Python code.",
+        CRITICAL: Use tools directly, do NOT write Python code.""",
             tools=web_tools,
             model=self.model,
             max_steps=self.config.max_agent_steps,
