@@ -483,7 +483,7 @@ class GAIAAgent:
         return shared_tools
     
     def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
-        """🚀 CODEAGENT FIX: Access tools via toolbox to configure with state info"""
+        """🎯 CORRECT CODEAGENT FIX: Use agent.tools dictionary"""
         task_id = state.get("task_id")
         question = state.get("question")
         file_path = state.get("file_path", "")
@@ -493,7 +493,7 @@ class GAIAAgent:
         if not task_id:
             return
         
-        print(f"🔧 CodeAgent toolbox configuration for {agent_name}")
+        print(f"🔧 CodeAgent tools dictionary configuration for {agent_name}")
         print(f"   📁 Has file: {has_file}")
         print(f"   📄 File path: {file_path}")
         print(f"   📛 File name: {file_name}")
@@ -501,38 +501,24 @@ class GAIAAgent:
         # Get the agent
         specialist = self.specialists[agent_name]
         
-        # 🎯 CODEAGENT SPECIFIC: Access tools via toolbox
-        if hasattr(specialist, '__class__') and 'CodeAgent' in specialist.__class__.__name__:
-            print("🔧 Detected CodeAgent - accessing toolbox")
+        # 🎯 DOCUMENTATION CONFIRMED: agent.tools is a dictionary!
+        if hasattr(specialist, 'tools') and isinstance(specialist.tools, dict):
+            print(f"🔍 Found tools dictionary with {len(specialist.tools)} tools")
             
-            # Try to find toolbox
-            toolbox = None
-            if hasattr(specialist, 'toolbox') and specialist.toolbox:
-                toolbox = specialist.toolbox
-                print(f"🔍 Found toolbox with {len(toolbox)} tools")
-            elif hasattr(specialist, '_toolbox') and specialist._toolbox:
-                toolbox = specialist._toolbox
-                print(f"🔍 Found _toolbox with {len(toolbox)} tools")
-            else:
-                print("⚠️ Could not find toolbox in CodeAgent")
-                # Debug: show what attributes exist
-                tool_attrs = [attr for attr in dir(specialist) if 'tool' in attr.lower()]
-                print(f"   Available tool attributes: {tool_attrs}")
-                return
-            
-            # Configure tools in toolbox
-            for tool_name, tool in toolbox.items():
-                print(f"🔍 Toolbox[{tool_name}]: {tool.__class__.__name__}")
+            # Iterate through the tools dictionary
+            for tool_name, tool in specialist.tools.items():
+                print(f"🔍 tools['{tool_name}'] = {type(tool)}: {tool.__class__.__name__}")
                 
+                # Configure GetAttachmentTool
                 if tool.__class__.__name__ == "GetAttachmentTool":
-                    print(f"🎯 Found GetAttachmentTool in toolbox!")
+                    print(f"🎯 Found GetAttachmentTool in tools dictionary!")
                     if has_file and file_path and hasattr(tool, 'configure_from_state'):
                         try:
-                            print(f"🚀 Configuring with:")
+                            print(f"🚀 Configuring GetAttachmentTool:")
                             print(f"   file_path: {file_path}")
                             print(f"   file_name: {file_name}")
                             tool.configure_from_state(file_path, file_name)
-                            print(f"✅ Successfully configured GetAttachmentTool in toolbox")
+                            print(f"✅ Successfully configured GetAttachmentTool!")
                             
                             # Verify configuration
                             print(f"🔍 Verification:")
@@ -549,6 +535,7 @@ class GAIAAgent:
                         print(f"   file_path exists: {bool(file_path)}")
                         print(f"   has configure_from_state: {hasattr(tool, 'configure_from_state')}")
                 
+                # Configure ContentRetrieverTool
                 elif tool.__class__.__name__ == "ContentRetrieverTool":
                     if hasattr(tool, 'configure_from_state'):
                         try:
@@ -561,11 +548,8 @@ class GAIAAgent:
                     print(f"ℹ️ {tool.__class__.__name__} - no configuration needed")
         
         else:
-            print("🔧 Detected ToolCallingAgent - using standard tool access")
-            # Standard ToolCallingAgent handling (if needed)
-            for i, tool in enumerate(specialist.tools):
-                print(f"🔍 Tool {i}: {tool.__class__.__name__}")
-                # ... standard configuration logic ...
+            print(f"⚠️ specialist.tools is not a dictionary or doesn't exist")
+            print(f"   Type: {type(getattr(specialist, 'tools', 'NOT_FOUND'))}")
         
         print("🔚 Tool configuration complete\n")
 
