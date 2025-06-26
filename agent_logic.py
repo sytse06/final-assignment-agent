@@ -82,7 +82,7 @@ class GAIAConfig:
     
     # Agent settings
     max_agent_steps: int = 15
-    planning_interval: int = 3
+    planning_interval: int = 5
         
     # Routing settings
     enable_smart_routing: bool = True
@@ -386,6 +386,7 @@ class GAIAAgent:
                 "json", "csv", "statistics", "math", "re", "openpyxl", "xlrd"
             ],
             model=self.model,
+            planning_interval=7,
             max_steps=self.config.max_agent_steps,
             logger=logger
         )
@@ -1055,10 +1056,19 @@ class GAIAAgent:
         """
         Extract final answer from agent response with pattern matching
         """  
-        if not raw_answer:
+        if raw_answer is None:
             if self.logging:
-                self.logging.log_step("extract_empty", "Raw answer is empty")
+                self.logging.log_step("extract_empty", "Raw answer is None")
             return "No answer"
+        
+        # Convert list to string if needed (fixes the error you saw)
+        if isinstance(raw_answer, list):
+            if self.logging:
+                self.logging.log_step("extract_list_input", f"Converting list to string: {raw_answer}")
+            raw_answer = str(raw_answer[0]) if raw_answer else "No answer"
+        
+        # Ensure it's a string
+        raw_answer = str(raw_answer) if raw_answer else ""
         
         # More comprehensive patterns to catch various formats
         patterns = [
