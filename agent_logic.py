@@ -43,28 +43,12 @@ from dev_retriever import load_gaia_retriever
 from agent_logging import AgentLoggingSetup
 
 try:
-    from tools import (GetAttachmentTool, 
-                       ContentRetrieverTool
-                       # ContentGroundingTool,  # DISABLED
-                       # CONTENT_GROUNDING_AVAILABLE  # DISABLED
-                       )
+    from tools import (GetAttachmentTool, ContentRetrieverTool)
     CUSTOM_TOOLS_AVAILABLE = True
-    CONTENT_GROUNDING_AVAILABLE = False  # Force disable
-    print("✅ Custom tools imported successfully (grounding disabled)")
+    print("✅ Custom tools imported successfully")
 except ImportError as e:
     print(f"⚠️  Custom tools not available: {e}")
     CUSTOM_TOOLS_AVAILABLE = False
-    CONTENT_GROUNDING_AVAILABLE = False
-
-try:
-    # Fixed: Import from the specific langchain_tools submodule
-    from tools.langchain_tools import ALL_LANGCHAIN_TOOLS
-    LANGCHAIN_TOOLS_AVAILABLE = True
-    print(f"✅ LangChain tools imported successfully: {len(ALL_LANGCHAIN_TOOLS)} tools")
-except ImportError as e:
-    print(f"⚠️  LangChain tools not available: {e}")
-    ALL_LANGCHAIN_TOOLS = []
-    LANGCHAIN_TOOLS_AVAILABLE = False
 
 # ============================================================================
 # CONFIGURATION
@@ -144,102 +128,6 @@ class GAIAState(TypedDict):
 def llm_invoke_with_retry(llm, messages):
     """Retry logic for LangChain LLM calls"""
     return llm.invoke(messages)
-
-# ============================================================================
-# PYTHON UTILITY FUNCTIONS
-# ============================================================================
-
-    def _ensure_file_access(self, state: "GAIAState") -> "GAIAState":
-        """
-        Python-native file access optimized for SmolagAgents architecture
-        
-        Key insights from SmolagAgents analysis:
-        1. CodeAgent can access files directly via Python code execution
-        2. ToolCallingAgent needs files via additional_args parameter
-        3. Both can use cached/downloaded files efficiently
-        """
-        
-        task_id = state.get("task_id")
-        file_name = state.get("file_name", "")
-        existing_file_path = state.get("file_path", "")
-        
-        print(f"🔍 SmolagAgents file access: {file_name}")
-        
-        # METHOD 1: Use existing cached file (development/testing)
-        if existing_file_path and os.path.exists(existing_file_path):
-            print(f"✅ Using cached file: {existing_file_path}")
-            local_file_path = existing_file_path
-            file_size = os.path.getsize(existing_file_path)
-            print(f"📊 File size: {file_size} bytes")
-            
-        # METHOD 2: Download once, use everywhere (production)
-        elif task_id and file_name:
-            print(f"📡 Downloading file for reuse by specialists: {task_id}")
-            local_file_path = self._download_file_python_native(task_id, file_name)
-            
-        # METHOD 3: No file available
-        else:
-            print("📄 No file attachment")
-            local_file_path = None
-        
-        # Extract file extension for smart routing
-        file_extension = ""
-        if file_name:
-            file_extension = os.path.splitext(file_name)[1].lower()
-            print(f"🎯 File extension: {file_extension}")
-        
-        # Update state with file access results
-        return {
-            **state,
-            "file_path": local_file_path,           # Verified local path for all agents
-            "file_extension": file_extension,       # For coordinator routing
-            "has_file": bool(local_file_path),      # Updated file status
-            "file_accessible": bool(local_file_path and os.path.exists(local_file_path))
-        }
-    
-    def _download_file_python_native(self, task_id: str, file_name: str) -> Optional[str]:
-        """
-        Download file once, reuse for all agents - eliminates GetAttachmentTool performance issues
-        """
-        
-        try:
-            # Production API endpoint
-            agent_evaluation_api = getattr(self.config, 'agent_evaluation_api', 
-                                         "https://agents-course-unit4-scoring.hf.space/")
-            file_url = f"{agent_evaluation_api}files/{task_id}"
-            
-            print(f"📡 Single download request: {file_url}")
-            
-            # Direct Python download with streaming for large files
-            response = requests.get(
-                file_url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-                timeout=30,
-                stream=True
-            )
-            
-            if response.status_code == 200:
-                # Create temp file with correct extension (important for SmolagAgents)
-                file_extension = os.path.splitext(file_name)[1]
-                with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        tmp_file.write(chunk)
-                    local_path = tmp_file.name
-                
-                file_size = os.path.getsize(local_path)
-                print(f"✅ Downloaded once: {local_path} ({file_size} bytes)")
-                return local_path
-                
-            else:
-                print(f"❌ Download failed: HTTP {response.status_code}")
-                return None
-                
-        except Exception as e:
-            print(f"❌ Download error: {e}")
-            return None
 
 # ============================================================================
 # OTHER UTILITY FUNCTIONS
@@ -345,38 +233,36 @@ def validate_gaia_format(answer: str) -> bool:
 # ============================================================================
 # MAIN GAIA AGENT
 # ============================================================================
-
 class GAIAAgent:
-    """GAIA agent using hybrid LangGraph state + simplified context bridge"""
+    """GAIA agent using SmolagAgents coordinator pattern within LangGraph workflow"""
     
-    def __init__(self, config: GAIAConfig = None):
+    def __init__(self, config: Optional[GAIAConfig] = None) -> None:
         if config is None:
             config = GAIAConfig()
         
-        self.config = config
-        self.retriever = self._initialize_retriever()
-        self.model = self._initialize_model()
+        self.config: GAIAConfig = config
+        self.retriever: Any = self._initialize_retriever()
+        self.orchestration_model: Any = self._initialize_orchestration_model()  # LangChain for workflow
+        self.specialist_model: LiteLLMModel = self._initialize_specialist_model()        # LiteLLM for SmolagAgents
         
-        # Setup logging
+        # Setup enhanced logging
         if config.enable_csv_logging:
-            self.logging = AgentLoggingSetup(
+            self.logging: Optional[EnhancedAgentLoggingSetup] = EnhancedAgentLoggingSetup(
                 debug_mode=config.debug_mode,
                 step_log_file=config.step_log_file,
                 question_log_file=config.question_log_file
             )
         else:
-            self.logging = None
+            self.logging: Optional[EnhancedAgentLoggingSetup] = None
         
-        # Create shared tool instances
-        self.shared_tools = self._create_shared_tools()
-        
-        # Create specialist agents
-        self.specialists = self._create_specialist_agents()
+        # Create coordinator and specialists (will be created fresh for each task)
+        self.coordinator: Optional[CodeAgent] = None
+        self.specialists: Dict[str, Union[CodeAgent, ToolCallingAgent]] = {}
         
         # Build workflow
-        self.workflow = self._build_workflow()
+        self.workflow: Any = self._build_workflow()  # StateGraph type is complex
         
-        print("🚀 GAIA Agent initialized with hybrid state + context bridge!")
+        print("🚀 GAIA Agent initialized with SmolagAgents coordinator pattern!")
     
     def _initialize_retriever(self):
         """Initialize retriever for similar questions in manager context."""
@@ -393,7 +279,7 @@ class GAIAAgent:
             print(f"❌ Retriever initialization error: {e}")
             raise
     
-    def _initialize_model(self):
+    def _initialize_orchestration_model(self):
         """Initialize both orchestration and specialist models"""
         try:
             # Initialize orchestration model (LangChain)
@@ -468,42 +354,242 @@ class GAIAAgent:
         except Exception as e:
             print(f"❌ Error initializing models: {e}")
             raise
-
-    def _create_coordinator_agent(self):
-        """Create coordinator CodeAgent for Python-native analysis"""
         
+    # ============================================================================
+    # FILE HANDLING WITH SMOLAGENTS INSIGHTS
+    # ============================================================================
+
+    def _download_file_once(self, task_id: str, file_name: str) -> Optional[str]:
+        """
+        Download attached file once, reuse for all agents
+        """
+        try:
+            # Production API endpoint
+            agent_evaluation_api = getattr(self.config, 'agent_evaluation_api', 
+                                         "https://agents-course-unit4-scoring.hf.space/")
+            file_url = f"{agent_evaluation_api}files/{task_id}"
+            
+            print(f"📡 Single download request: {file_url}")
+            
+            response = requests.get(
+                file_url,
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                timeout=30,
+                stream=True
+            )
+            
+            if response.status_code == 200:
+                # Create temp file with correct extension (important for SmolagAgents)
+                file_extension = os.path.splitext(file_name)[1]
+                with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        tmp_file.write(chunk)
+                    local_path = tmp_file.name
+                
+                file_size = os.path.getsize(local_path)
+                print(f"✅ Downloaded once: {local_path} ({file_size} bytes)")
+                return local_path
+                
+            else:
+                print(f"❌ Download failed: HTTP {response.status_code}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Download error: {e}")
+            return None
+
+    def _analyze_file_metadata(self, file_name: str, file_path: str) -> Dict[str, Any]:
+        """
+        Python-native file analysis needs no tool and gives coordinator Python capabilities
+        """
+        if not file_name:
+            return {"no_file": True}
+        
+        try:
+            # Basic file analysis
+            path_obj = Path(file_name)
+            extension = path_obj.suffix.lower()
+            
+            import mimetypes
+            mime_type, _ = mimetypes.guess_type(file_name)
+            
+            # Categorize file type
+            if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
+                category = "data"
+                processing_approach = "direct_pandas"
+                recommended_specialist = "data_analyst"
+                specialist_guidance = {
+                    "tool_command": "pd.read_excel(file_path) or pd.read_csv(file_path)",
+                    "imports_needed": ["pandas", "openpyxl"],
+                    "processing_strategy": "Load data → analyze structure → perform calculations"
+                }
+            elif extension in ['.pdf', '.docx', '.doc', '.txt']:
+                category = "document"
+                processing_approach = "content_extraction"
+                recommended_specialist = "document_processor"
+                specialist_guidance = {
+                    "tool_command": "Use ContentRetrieverTool with file_path from additional_args",
+                    "imports_needed": [],
+                    "processing_strategy": "Extract content → analyze text → answer question"
+                }
+            elif extension in ['.mp3', '.mp4', '.wav', '.m4a', '.mov']:
+                category = "media"
+                processing_approach = "transcription"
+                recommended_specialist = "document_processor"
+                specialist_guidance = {
+                    "tool_command": "Use SpeechToTextTool with file_path from additional_args",
+                    "imports_needed": [],
+                    "processing_strategy": "Transcribe audio → analyze transcript → extract information"
+                }
+            elif extension in ['.png', '.jpg', '.jpeg', '.gif', '.bmp']:
+                category = "image"
+                processing_approach = "vision_analysis"
+                recommended_specialist = "document_processor"
+                specialist_guidance = {
+                    "tool_command": "Use vision tools with file_path from additional_args",
+                    "imports_needed": [],
+                    "processing_strategy": "Analyze image → extract visual information → answer question"
+                }
+            else:
+                category = "unknown"
+                processing_approach = "content_extraction"
+                recommended_specialist = "document_processor"
+                specialist_guidance = {
+                    "tool_command": "Use ContentRetrieverTool with file_path from additional_args",
+                    "imports_needed": [],
+                    "processing_strategy": "Extract content → analyze → answer question"
+                }
+            
+            return {
+                "file_name": file_name,
+                "file_path": file_path,
+                "extension": extension,
+                "mime_type": mime_type,
+                "category": category,
+                "processing_approach": processing_approach,
+                "recommended_specialist": recommended_specialist,
+                "specialist_guidance": specialist_guidance,
+                "estimated_complexity": "medium"
+            }
+            
+        except Exception as e:
+            print(f"⚠️ File analysis error: {e}")
+            return {
+                "file_name": file_name,
+                "file_path": file_path,
+                "category": "unknown",
+                "processing_approach": "content_extraction",
+                "recommended_specialist": "document_processor",
+                "error": str(e)
+            }
+
+    # ============================================================================
+    # SMOLAGENTS COORDINATOR AND SPECIALISTS
+    # ============================================================================        
+    # ============================================================================
+    # SMOLAGENTS COORDINATOR AND SPECIALISTS
+    # ============================================================================
+
+    def _create_coordinator(self) -> CodeAgent:
+        """
+        🔥 Create coordinator CodeAgent for strategic analysis
+        Pure Python - no tools needed
+        """
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         
         coordinator = CodeAgent(
-            name="coordinator",
+            name="gaia_coordinator",
             description="""Strategic coordinator for GAIA task analysis and specialist selection.
 
-    CAPABILITIES:
-    - Python-native file analysis using pathlib and mimetypes
-    - Strategic task decomposition and approach planning
-    - Specialist selection based on file type and question analysis
-    - Execution guidance for selected specialists
+CAPABILITIES:
+- Python-native file analysis using pathlib and mimetypes
+- Strategic task decomposition and approach planning
+- Specialist selection based on file type and question analysis
+- Execution guidance for selected specialists
 
-    WORKFLOW:
-    1. Analyze question for core problem and requirements
-    2. Perform Python file analysis if file present
-    3. Select optimal specialist based on analysis
-    4. Provide strategic execution guidance
-    """,
-            tools=[],  # No tools - pure Python analysis
+WORKFLOW:
+1. Analyze question for core problem and requirements
+2. Perform Python file analysis if file present
+3. Select optimal specialist based on analysis
+4. Provide strategic execution guidance
+""",
+            tools=[],  # 🔥 No tools - pure Python analysis
             additional_authorized_imports=[
-                "pathlib", "mimetype", "re", "json", "os"
+                "pathlib", "mimetypes", "re", "json", "os", "pandas"
             ],
-            model=self.model,
+            model=self.specialist_model,  # 🔥 LiteLLM for SmolagAgents coordinator
             planning_interval=7,
-            max_steps=8,  # Keep coordinator focused
+            max_steps=8,
             logger=logger
         )
         
         return coordinator
 
-    def _build_coordinator_analysis_task(self, state: GAIAState) -> str:
-        """Build comprehensive coordination analysis task"""
+    def _create_specialists(self) -> Dict[str, Union[CodeAgent, ToolCallingAgent]]:
+        """
+        🔥 Create three specialist agents with proper tool configuration
+        """
+        logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
+        specialists = {}
+
+        # 1. Data Analyst - CodeAgent for direct Python file access
+        specialists["data_analyst"] = CodeAgent(
+            name="data_analyst", 
+            description="Excel/CSV analysis and numerical calculations using pandas",
+            tools=[],  # 🔥 No tools - pure Python file access
+            additional_authorized_imports=[
+                "pandas", "numpy", "openpyxl", "xlrd", "csv",
+                "scipy", "matplotlib", "seaborn", 
+                "sklearn", "scikit-learn", "statistics", "math"
+            ],
+            model=self.specialist_model,  # 🔥 LiteLLM for SmolagAgents specialists
+            max_steps=self.config.max_agent_steps,
+            add_base_tools=True,
+            logger=logger
+        )
+        
+        # 2. Web Researcher - ToolCallingAgent for search
+        web_tools = [
+            GoogleSearchTool(),
+            VisitWebpageTool(), 
+            WikipediaSearchTool()
+        ]
+        
+        specialists["web_researcher"] = ToolCallingAgent(
+            name="web_researcher",
+            description="Web search using GoogleSearchTool, Wikipedia, and content extraction",
+            tools=web_tools,
+            model=self.specialist_model,  # 🔥 LiteLLM for SmolagAgents web researcher
+            max_steps=self.config.max_agent_steps,
+            add_base_tools=True,
+            logger=logger
+        )
+        
+        # 3. Document Processor - ToolCallingAgent for file processing
+        doc_tools = [SpeechToTextTool()]
+        
+        if CUSTOM_TOOLS_AVAILABLE:
+            doc_tools.append(ContentRetrieverTool())
+        
+        specialists["document_processor"] = ToolCallingAgent(
+            name="document_processor",
+            description="Document extraction and audio transcription specialist",
+            tools=doc_tools,
+            model=self.specialist_model,  # 🔥 LiteLLM for SmolagAgents document processor
+            max_steps=self.config.max_agent_steps,
+            add_base_tools=True,
+            logger=logger
+        )
+        
+        print(f"🎯 Created {len(specialists)} specialized agents:")
+        print(f"   data_analyst: CodeAgent with {len(specialists['data_analyst'].additional_authorized_imports)} imports")
+        print(f"   web_researcher: ToolCallingAgent with {len(specialists['web_researcher'].tools)} tools")
+        print(f"   document_processor: ToolCallingAgent with {len(specialists['document_processor'].tools)} tools")
+        
+        return specialists
+
+    def _build_coordinator_task(self, state: GAIAState) -> str:
+        """Build comprehensive coordination task for CodeAgent coordinator"""
         
         question = state["question"]
         file_name = state.get("file_name", "")
@@ -520,525 +606,285 @@ class GAIAAgent:
                 examples_context += f"{i}. Q: {example.get('question', '')[:100]}...\n"
                 examples_context += f"   A: {example.get('answer', '')}\n"
         
-        # Build file context
-        file_context = ""
-        if has_file and file_name:
-            file_context = f"""
-    FILE INFORMATION:
-    - Name: {file_name}
-    - Path: {file_path}
-    - Has file: {has_file}
-    """
-        
         task = f"""
-    You are the GAIA coordination agent. Analyze this question and provide strategic guidance.
+You are the GAIA coordination agent. Analyze this question and provide strategic guidance.
 
-    QUESTION: {question}
+QUESTION: {question}
+COMPLEXITY: {complexity}
+FILE INFO: {file_name} (path: {file_path}, has_file: {has_file})
+{examples_context}
 
-    COMPLEXITY: {complexity}
-    {file_context}{examples_context}
+ANALYSIS TASKS:
 
-    ANALYSIS TASKS:
-    1. CORE PROBLEM ANALYSIS:
-    - What is the fundamental problem to solve?
-    - What type of processing is needed?
-    - What are the key requirements?
+1. CORE PROBLEM ANALYSIS:
+```python
+# Analyze the fundamental problem
+question = "{question}"
+print(f"Core problem: {{analyze_core_problem(question)}}")
+print(f"Required capabilities: {{identify_capabilities_needed(question)}}")
+```
 
-    2. FILE ANALYSIS (if file present):
-    ```python
-    # Analyze file using Python
-    from pathlib import Path
-    import mimetypes
+2. FILE ANALYSIS (if file present):
+```python
+# Analyze file using Python
+from pathlib import Path
+import mimetypes
+
+if "{file_name}":
+    file_path = Path("{file_name}")
+    extension = file_path.suffix.lower()
+    mime_type, _ = mimetypes.guess_type(str(file_path))
     
-    if "{file_name}":
-        file_path = Path("{file_name}")
-        extension = file_path.suffix.lower()
-        mime_type, _ = mimetypes.guess_type(str(file_path))
-        
-        # Categorize file type
-        if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
-            category = "data"
-            processing_approach = "direct_pandas"
-            recommended_specialist = "data_analyst"
-        elif extension in ['.pdf', '.docx', '.doc', '.txt']:
-            category = "document"
-            processing_approach = "content_extraction"
-            recommended_specialist = "document_processor"
-        elif extension in ['.mp3', '.mp4', '.wav', '.m4a']:
-            category = "media"
-            processing_approach = "transcription"
-            recommended_specialist = "document_processor"
-        elif extension in ['.png', '.jpg', '.jpeg', '.gif']:
-            category = "image"
-            processing_approach = "vision_analysis"
-            recommended_specialist = "document_processor"
-        else:
-            category = "unknown"
-            processing_approach = "content_extraction"
-            recommended_specialist = "document_processor"
-        
-        print(f"File analysis: {{extension}} → {{category}} → {{processing_approach}}")
-    ```
+    # Categorize file type and determine processing approach
+    if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
+        category = "data"
+        processing_approach = "direct_pandas"
+        recommended_specialist = "data_analyst"
+        file_access_method = "direct_file_path"  # CodeAgent can use file paths directly
+    elif extension in ['.pdf', '.docx', '.doc', '.txt']:
+        category = "document"
+        processing_approach = "content_extraction"
+        recommended_specialist = "document_processor"
+        file_access_method = "additional_args"  # ToolCallingAgent needs additional_args
+    elif extension in ['.mp3', '.mp4', '.wav', '.m4a']:
+        category = "media"
+        processing_approach = "transcription"
+        recommended_specialist = "document_processor"
+        file_access_method = "additional_args"  # ToolCallingAgent needs additional_args
+    else:
+        category = "unknown"
+        processing_approach = "content_extraction"
+        recommended_specialist = "document_processor"
+        file_access_method = "additional_args"
+    
+    print(f"File analysis: {{extension}} → {{category}} → {{processing_approach}}")
+    print(f"Recommended specialist: {{recommended_specialist}}")
+    print(f"File access method: {{file_access_method}}")
+```
 
-    3. SPECIALIST SELECTION:
-    Available specialists:
-    - data_analyst: Excel/CSV processing, calculations, pandas analysis
-    - web_researcher: Google search, current information, web content
-    - document_processor: PDF/document extraction, transcription, vision
+3. SPECIALIST SELECTION:
+```python
+# Available specialists and their capabilities:
+specialists = {{
+    "data_analyst": "CodeAgent - Excel/CSV processing, calculations, direct file access",
+    "web_researcher": "ToolCallingAgent - Google search, current information, web content",
+    "document_processor": "ToolCallingAgent - PDF/document extraction, transcription, vision"
+}}
 
-    4. EXECUTION STRATEGY:
-    - What's the step-by-step approach?
-    - What tools should the specialist use?
-    - What specific guidance to provide?
+# Selection logic based on question and file analysis
+if "calculate" in question.lower() or "data" in question.lower():
+    if category == "data":
+        selected = "data_analyst"
+        reasoning = "Data file + calculation requirements"
+    else:
+        selected = "data_analyst"  # Can still handle calculations
+        reasoning = "Calculation requirements"
+elif "current" in question.lower() or "latest" in question.lower():
+    selected = "web_researcher"
+    reasoning = "Current information needed"
+elif has_file and category in ["document", "media", "image"]:
+    selected = "document_processor"
+    reasoning = "File processing required"
+else:
+    # Default based on file type or question type
+    selected = recommended_specialist if has_file else "web_researcher"
+    reasoning = "Best match for question type"
 
-    RETURN ANALYSIS AS JSON:
-    ```json
-    {{
-        "core_problem": "Brief description of fundamental problem",
-        "selected_specialist": "data_analyst|web_researcher|document_processor",
-        "selection_reasoning": "Why this specialist is optimal",
-        "execution_approach": "High-level approach description",
-        "confidence": 0.9,
-        "file_metadata": {{
-            "file_name": "{file_name}",
-            "extension": ".xlsx",
-            "category": "data",
-            "processing_approach": "direct_pandas",
-            "specialist_guidance": {{
-                "tool_command": "file_path = get_attachment(fmt='LOCAL_FILE_PATH'); df = pd.read_excel(file_path)",
-                "imports_needed": ["pandas", "openpyxl"],
-                "processing_strategy": "Load Excel → identify columns → perform calculations"
-            }},
-            "estimated_complexity": "medium"
-        }},
-        "execution_strategy": {{
-            "approach": "Python-native file analysis with pandas",
-            "steps": [
-                "Download file using get_attachment",
-                "Load data with appropriate method",
-                "Analyze structure and content",
-                "Perform required calculations"
-            ]
-        }}
-    }}
-    ```
+print(f"SELECTED SPECIALIST: {{selected}}")
+print(f"REASONING: {{reasoning}}")
+```
 
-    Focus on Python-native analysis and provide specific, actionable guidance.
-    """
+4. EXECUTION STRATEGY:
+```python
+# Build execution strategy
+execution_steps = []
+if selected == "data_analyst":
+    if has_file:
+        execution_steps = [
+            "Access file using direct file path (CodeAgent capability)",
+            "Load data with pandas (pd.read_excel or pd.read_csv)",
+            "Analyze data structure and content",
+            "Perform required calculations or analysis",
+            "Format answer according to GAIA requirements"
+        ]
+    else:
+        execution_steps = [
+            "Perform calculations using Python",
+            "Use appropriate mathematical libraries",
+            "Format numerical answer according to GAIA requirements"
+        ]
+elif selected == "web_researcher":
+    execution_steps = [
+        "Search for current information using GoogleSearchTool",
+        "Visit relevant web pages for detailed information",
+        "Cross-reference multiple sources",
+        "Extract and verify factual information",
+        "Format answer according to GAIA requirements"
+    ]
+else:  # document_processor
+    execution_steps = [
+        "Access file via additional_args parameter",
+        "Use appropriate tool (ContentRetrieverTool or SpeechToTextTool)",
+        "Extract relevant content from file",
+        "Analyze extracted content for answer",
+        "Format answer according to GAIA requirements"
+    ]
+
+for i, step in enumerate(execution_steps, 1):
+    print(f"Step {{i}}: {{step}}")
+```
+
+FINAL OUTPUT: Print a clear summary of your analysis and recommendations.
+"""
         
         return task
 
-    def _parse_coordination_result(self, coordination_result: str) -> Dict:
-        """Parse coordinator's analysis result into structured data"""
-        
+    def _parse_coordinator_analysis(self, coordination_result: str) -> Dict[str, Any]:
+        """Parse coordinator's Python output into structured analysis"""
         try:
-            # Try to extract JSON from coordinator result
-            import json
-            import re
+            lines = coordination_result.split('\n')
             
-            # Look for JSON block in the result
-            json_match = re.search(r'```json\s*(\{.*?\})\s*```', coordination_result, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(1)
-                coordination_analysis = json.loads(json_str)
-            else:
-                # Try to find JSON without markdown
-                json_match = re.search(r'\{.*\}', coordination_result, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(0)
-                    coordination_analysis = json.loads(json_str)
-                else:
-                    raise ValueError("No JSON found in coordinator result")
+            analysis = {
+                "core_problem": "Unknown",
+                "selected_specialist": "data_analyst",  # Safe default
+                "selection_reasoning": "Default selection",
+                "execution_approach": "Standard processing",
+                "confidence": 0.8,
+                "file_metadata": {},
+                "execution_strategy": {"steps": ["Standard processing"]}
+            }
             
-            # Validate required fields
-            required_fields = ["selected_specialist", "selection_reasoning", "core_problem", "execution_approach"]
-            for field in required_fields:
-                if field not in coordination_analysis:
-                    coordination_analysis[field] = f"Missing {field}"
+            # Parse coordinator output
+            for line in lines:
+                line = line.strip()
+                
+                if "SELECTED SPECIALIST:" in line:
+                    specialist = line.split(":")[-1].strip()
+                    if specialist in ["data_analyst", "web_researcher", "document_processor"]:
+                        analysis["selected_specialist"] = specialist
+                
+                elif "REASONING:" in line:
+                    analysis["selection_reasoning"] = line.split(":")[-1].strip()
+                
+                elif "Core problem:" in line:
+                    analysis["core_problem"] = line.split(":")[-1].strip()
             
-            # Ensure confidence is set
-            if "confidence" not in coordination_analysis:
-                coordination_analysis["confidence"] = 0.8
+            # Validate specialist selection
+            if analysis["selected_specialist"] not in ["data_analyst", "web_researcher", "document_processor"]:
+                print(f"⚠️ Invalid specialist '{analysis['selected_specialist']}', defaulting to data_analyst")
+                analysis["selected_specialist"] = "data_analyst"
             
-            # Ensure valid specialist selection
-            valid_specialists = ["data_analyst", "web_researcher", "document_processor"]
-            if coordination_analysis["selected_specialist"] not in valid_specialists:
-                print(f"⚠️ Invalid specialist '{coordination_analysis['selected_specialist']}', defaulting to data_analyst")
-                coordination_analysis["selected_specialist"] = "data_analyst"
-            
-            return coordination_analysis
+            return analysis
             
         except Exception as e:
-            print(f"⚠️ Failed to parse coordinator result: {e}")
+            print(f"⚠️ Failed to parse coordinator analysis: {e}")
             
-            # Fallback analysis based on simple heuristics
-            return self._create_fallback_analysis(coordination_result)
-
-    def _create_fallback_analysis(self, coordination_result: str) -> Dict:
-        """Create fallback analysis when parsing fails"""
-        
-        # Simple heuristics for fallback
-        result_lower = coordination_result.lower()
-        
-        if any(term in result_lower for term in ["excel", "csv", "data", "calculation"]):
-            selected_specialist = "data_analyst"
-            reasoning = "Data processing keywords detected"
-        elif any(term in result_lower for term in ["search", "web", "current", "online"]):
-            selected_specialist = "web_researcher"
-            reasoning = "Web search keywords detected"
-        elif any(term in result_lower for term in ["document", "pdf", "transcribe", "extract"]):
-            selected_specialist = "document_processor"
-            reasoning = "Document processing keywords detected"
-        else:
-            selected_specialist = "data_analyst"
-            reasoning = "Default fallback selection"
-        
-        return {
-            "core_problem": "Analysis failed - using heuristic approach",
-            "selected_specialist": selected_specialist,
-            "selection_reasoning": reasoning,
-            "execution_approach": "Standard processing approach",
-            "confidence": 0.5,
-            "file_metadata": {},
-            "execution_strategy": {
-                "approach": "Fallback approach",
-                "steps": ["Standard processing"]
+            # Fallback analysis
+            return {
+                "core_problem": "Analysis parsing failed",
+                "selected_specialist": "data_analyst",
+                "selection_reasoning": "Fallback due to parsing error",
+                "execution_approach": "Standard processing",
+                "confidence": 0.5,
+                "file_metadata": {},
+                "execution_strategy": {"steps": ["Standard processing"]}
             }
-        }
 
-    def _build_specialist_task_with_coordinator_context(self, state: GAIAState) -> str:
-        """
-        Build specialist task with coordinator's rich context.
-        This is where the magic happens - rich context assembly.
-        """
-        
+    def _build_specialist_task(self, state: GAIAState, specialist_name: str) -> str:
+        """Build tasks with proper file access patterns"""
         question = state["question"]
         coordination_analysis = state.get("coordination_analysis", {})
         file_metadata = state.get("file_metadata", {})
-        selected_specialist = state.get("selected_agent", "data_analyst")
         
-        # Start with the core question
         task_parts = [f"QUESTION: {question}"]
         
-        # Add coordinator's file analysis (if available)
-        if file_metadata:
-            file_analysis_section = f"""
-    COORDINATOR FILE ANALYSIS:
-    - File: {file_metadata.get('file_name', 'No file')}
-    - Extension: {file_metadata.get('extension', 'Unknown')}
-    - Category: {file_metadata.get('category', 'Unknown')}
-    - Processing approach: {file_metadata.get('processing_approach', 'Standard')}"""
-            
-            # Add specialist-specific guidance
-            specialist_guidance = file_metadata.get('specialist_guidance', {})
-            if specialist_guidance:
-                file_analysis_section += f"""
-    - Processing strategy: {specialist_guidance.get('processing_strategy', 'Standard processing')}
-    - Required imports: {', '.join(specialist_guidance.get('imports_needed', []))}"""
-            
-            task_parts.append(file_analysis_section)
-        
-        # Add coordinator's strategic analysis (if available)
+        # Add coordinator's analysis
         if coordination_analysis:
             strategy_section = f"""
-    COORDINATOR STRATEGIC ANALYSIS:
-    - Core problem: {coordination_analysis.get('core_problem', 'Standard processing')}
-    - Execution approach: {coordination_analysis.get('execution_approach', 'Standard approach')}
-    - Confidence level: {coordination_analysis.get('confidence', 0.8):.1f}"""
-            
-            # Add execution strategy steps
-            execution_strategy = coordination_analysis.get('execution_strategy', {})
-            if execution_strategy and execution_strategy.get('steps'):
-                strategy_section += f"""
-    - Processing steps:
-    {chr(10).join(f"  {i+1}. {step}" for i, step in enumerate(execution_strategy.get('steps', [])))}"""
-            
+COORDINATOR ANALYSIS:
+- Core problem: {coordination_analysis.get('core_problem', 'Standard processing')}
+- Selection reasoning: {coordination_analysis.get('selection_reasoning', 'Selected for this task')}
+- Execution approach: {coordination_analysis.get('execution_approach', 'Standard approach')}"""
             task_parts.append(strategy_section)
         
+        # Add file information
+        if file_metadata:
+            file_section = f"""
+FILE INFORMATION:
+- File: {file_metadata.get('file_name', 'No file')}
+- Category: {file_metadata.get('category', 'Unknown')}
+- Processing approach: {file_metadata.get('processing_approach', 'Standard')}"""
+            task_parts.append(file_section)
+        
         # Add specialist-specific instructions
-        specialist_instructions = self._get_specialist_specific_instructions(selected_specialist, coordination_analysis, file_metadata)
+        specialist_instructions = self._get_specialist_instructions(specialist_name, state)
         if specialist_instructions:
             task_parts.append(specialist_instructions)
         
-        # Add GAIA format requirement (critical)
+        # Add GAIA format requirement
         task_parts.append("""
-    CRITICAL REQUIREMENTS:
-    - Use the coordinator's analysis and file information above
-    - Follow the recommended processing approach and tool commands
-    - End your response with 'FINAL ANSWER: [your specific answer]' in exact GAIA format
-    - Provide the actual answer, never use placeholder text like '[your answer]'""")
+CRITICAL REQUIREMENTS:
+- Follow the coordinator's analysis and file guidance above
+- Use the recommended processing approach for any file handling
+- End your response with 'FINAL ANSWER: [your specific answer]' in exact GAIA format
+- Provide the actual answer, never use placeholder text
+- Numbers: no commas, no units unless specified
+- Strings: no articles (the, a, an), no abbreviations
+- Lists: comma separated, apply above rules to each element""")
         
         return "\n".join(task_parts)
 
-    def _get_specialist_specific_instructions(self, specialist_name: str, coordination_analysis: Dict, file_metadata: Dict) -> str:
-        """Generate specialist-specific instructions based on coordinator analysis"""
+    def _get_specialist_instructions(self, specialist_name: str, state: GAIAState) -> str:
+        """Generate specialist-specific instructions"""
+        file_metadata = state.get("file_metadata", {})
+        file_path = state.get("file_path", "")
         
         if specialist_name == "data_analyst":
             instructions = """
-    DATA ANALYST SPECIFIC GUIDANCE:
-    - Use the coordinator's file analysis to determine the correct pandas approach
-    - If Excel file: Use the recommended processing strategy from file metadata
-    - Focus on numerical calculations and data processing
-    - Provide specific numerical results, not general descriptions"""
+DATA ANALYST GUIDANCE (CodeAgent):
+- You can access files directly using file paths in your Python code
+- Use pandas for Excel/CSV files: pd.read_excel(file_path) or pd.read_csv(file_path)
+- Focus on numerical calculations and data processing
+- Provide specific numerical results, not general descriptions"""
             
-            # Add file-specific guidance for data analyst
-            if file_metadata.get('category') == 'data':
-                processing_approach = file_metadata.get('processing_approach', 'direct_pandas')
-                if processing_approach == 'direct_pandas':
-                    instructions += """
-    - File Processing: The coordinator has analyzed the file - use appropriate pandas methods
-    - Data Analysis: Focus on the specific question requirements (calculations, summaries, etc.)
-    - Note: File path information will be available through existing tool configuration"""
+            if file_path and file_metadata.get('category') == 'data':
+                instructions += f"""
+- File Processing: Load the file using: pd.read_excel("{file_path}") or pd.read_csv("{file_path}")
+- The file path is directly available for your Python code execution"""
             
             return instructions
         
         elif specialist_name == "web_researcher":
-            instructions = """
-    WEB RESEARCHER SPECIFIC GUIDANCE:
-    - Use search tools to find current, relevant information
-    - Cross-reference multiple sources for accuracy
-    - Focus on recent and authoritative sources
-    - Provide specific factual answers with sources when possible"""
-            
-            # Add context-specific guidance
-            if coordination_analysis.get('core_problem'):
-                core_problem = coordination_analysis['core_problem']
-                instructions += f"""
-    - Research Focus: {core_problem}
-    - Search Strategy: Use specific keywords related to the core problem identified by coordinator"""
-            
-            return instructions
+            return """
+WEB RESEARCHER GUIDANCE (ToolCallingAgent):
+- Use GoogleSearchTool for current information and facts
+- Use VisitWebpageTool to read webpage content for detailed information
+- Use WikipediaSearchTool for encyclopedic knowledge
+- Cross-reference multiple sources for accuracy
+- Focus on recent and authoritative sources"""
         
         elif specialist_name == "document_processor":
             instructions = """
-    DOCUMENT PROCESSOR SPECIFIC GUIDANCE:
-    - Use content extraction tools for documents, transcription for media
-    - Focus on extracting relevant information for the specific question
-    - Process the file according to the coordinator's recommended approach"""
+DOCUMENT PROCESSOR GUIDANCE (ToolCallingAgent):
+- File access: The file_path will be available via additional_args
+- For documents: Use ContentRetrieverTool to extract text content
+- For audio/video: Use SpeechToTextTool for transcription
+- Process the file according to the coordinator's recommended approach"""
             
-            # Add file-specific guidance for document processor
             if file_metadata:
                 category = file_metadata.get('category', 'unknown')
-                processing_approach = file_metadata.get('processing_approach', 'content_extraction')
-                
                 if category == 'document':
-                    instructions += """
-    - Document Processing: Use available content extraction tools to read document content
-    - Focus on finding specific information requested in the question"""
+                    instructions += "\n- Document Processing: Use ContentRetrieverTool to read document content"
                 elif category == 'media':
-                    instructions += """
-    - Media Processing: Use available transcription tools to convert audio/video to text
-    - Extract relevant information from the transcribed content"""
-                elif category == 'image':
-                    instructions += """
-    - Image Processing: Use available vision analysis tools to describe and analyze image content
-    - Focus on visual elements relevant to the question"""
+                    instructions += "\n- Media Processing: Use SpeechToTextTool to transcribe audio/video to text"
             
             return instructions
         
         else:
-            return """
-    GENERAL GUIDANCE:
-    - Follow the coordinator's recommended approach
-    - Use appropriate tools for the task type
-    - Provide specific, factual answers"""
-           
-    def _create_specialist_agents(self):
-        """Create specialized agents managed by coordinator."""
-        
-        logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
-        specialists = {}
-
-        # Data Analyst - Excel/CSV specialist
-        specialists["data_analyst"] = CodeAgent(
-            name="data_analyst", 
-            description="Excel/CSV analysis and numerical calculations using pandas",
-            tools=[],
-            additional_authorized_imports=[
-                "pandas", "numpy", "openpyxl", "xlrd",
-                "scipy", "matplotlib", "seaborn", 
-                "sklearn", "scikit-learn"
-            ],
-            model=self.model,
-            max_steps=self.config.max_agent_steps,
-            add_base_tools=True,
-            logger=logger
-        )
-        
-        # Web Researcher - Focused search toolkit
-        web_tools = [
-            GoogleSearchTool(),
-            VisitWebpageTool(), 
-            WikipediaSearchTool()
-        ]
-        
-        specialists["web_researcher"] = ToolCallingAgent(
-            name="web_researcher",
-            description="Web search using GoogleSearchTool (Serper API), Wikipedia, and content extraction",
-            tools=web_tools,
-            model=self.model,
-            max_steps=self.config.max_agent_steps,
-            add_base_tools=True,
-            logger=logger
-        )
-        
-        # Document Processor - Media and document specialist
-        doc_tools = [SpeechToTextTool()]
-        
-        if CUSTOM_TOOLS_AVAILABLE:
-            doc_tools.append(ContentRetrieverTool())
-        
-        specialists["document_processor"] = ToolCallingAgent(
-            name="document_processor",
-            description="Document extraction with ContentRetrieverTool and audio transcription",
-            tools=doc_tools,
-            model=self.model,
-            max_steps=self.config.max_agent_steps,
-            add_base_tools=True,
-            logger=logger
-        )
-        
-        print(f"🎯 Created {len(specialists)} specialized agents:")
-        print(f"   data_analyst: {len(specialists['data_analyst'].tools)} tools (CodeAgent)")
-        print(f"   web_researcher: {len(specialists['web_researcher'].tools)} tools (ToolCallingAgent)")
-        print(f"   document_processor: {len(specialists['document_processor'].tools)} tools (ToolCallingAgent)")
-        
-        return specialists
-    
-def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
-    """Configure tools with state information for file processing"""
-    task_id = state.get("task_id")
-    question = state.get("question")
-    file_path = state.get("file_path", "")
-    file_name = state.get("file_name", "")
-    has_file = state.get("has_file", False)
-    
-    if not task_id:
-        return
-    
-    if self.config.debug_mode:
-        print(f"🔧 Configuring tools for {agent_name}")
-        if has_file:
-            print(f"   📁 File: {file_name}")
-            print(f"   📍 Path: {file_path}")
-    
-    # Get the specialist agent
-    specialist = self.specialists[agent_name]
-    
-    # Handle CodeAgent (data_analyst) - tools are in base_tools or empty
-    if agent_name == "data_analyst":
-        # CodeAgent with pure Python - no tool configuration needed
-        if self.config.debug_mode:
-            print(f"✅ CodeAgent {agent_name} - no tool configuration required")
-        return
-    
-    # Handle ToolCallingAgent tools (web_researcher, document_processor)
-    elif hasattr(specialist, 'tools') and isinstance(specialist.tools, list):
-        for tool in specialist.tools:
-            tool_class_name = tool.__class__.__name__
-            
-            # Configure ContentRetrieverTool with question context
-            if tool_class_name == "ContentRetrieverTool":
-                if hasattr(tool, 'configure_from_state'):
-                    try:
-                        tool.configure_from_state(question)
-                        if self.config.debug_mode:
-                            print(f"✅ Configured ContentRetrieverTool with question context")
-                    except Exception as e:
-                        if self.config.debug_mode:
-                            print(f"⚠️ ContentRetrieverTool configuration failed: {e}")
-            
-            # Configure SpeechToTextTool with file information if audio file
-            elif tool_class_name == "SpeechToTextTool":
-                if has_file and file_name:
-                    audio_extensions = ['.mp3', '.wav', '.m4a', '.mp4', '.mov', '.avi']
-                    if any(ext in file_name.lower() for ext in audio_extensions):
-                        if hasattr(tool, 'configure_from_state'):
-                            try:
-                                tool.configure_from_state(file_path, file_name)
-                                if self.config.debug_mode:
-                                    print(f"✅ Configured SpeechToTextTool for audio file")
-                            except Exception as e:
-                                if self.config.debug_mode:
-                                    print(f"⚠️ SpeechToTextTool configuration failed: {e}")
-                        elif self.config.debug_mode:
-                            print(f"✅ SpeechToTextTool ready for: {file_name}")
-            
-            # Configure web search tools with query enhancement
-            elif tool_class_name in ["GoogleSearchTool", "WikipediaSearchTool"]:
-                if hasattr(tool, 'configure_from_state'):
-                    try:
-                        tool.configure_from_state(question)
-                        if self.config.debug_mode:
-                            print(f"✅ Configured {tool_class_name} with question context")
-                    except Exception as e:
-                        if self.config.debug_mode:
-                            print(f"⚠️ {tool_class_name} configuration failed: {e}")
-                elif self.config.debug_mode:
-                    print(f"✅ {tool_class_name} ready for search")
-            
-            # Configure VisitWebpageTool
-            elif tool_class_name == "VisitWebpageTool":
-                if hasattr(tool, 'configure_from_state'):
-                    try:
-                        tool.configure_from_state(question)
-                        if self.config.debug_mode:
-                            print(f"✅ Configured VisitWebpageTool with question context")
-                    except Exception as e:
-                        if self.config.debug_mode:
-                            print(f"⚠️ VisitWebpageTool configuration failed: {e}")
-                elif self.config.debug_mode:
-                    print(f"✅ VisitWebpageTool ready for content extraction")
-            
-            # Handle any legacy GetAttachmentTool if present
-            elif tool_class_name == "GetAttachmentTool":
-                if has_file and file_path and hasattr(tool, 'configure_from_state'):
-                    try:
-                        tool.configure_from_state(file_path, file_name)
-                        if self.config.debug_mode:
-                            print(f"✅ Configured GetAttachmentTool with file info")
-                    except Exception as e:
-                        if self.config.debug_mode:
-                            print(f"⚠️ GetAttachmentTool configuration failed: {e}")
-    
-    # Handle CodeAgent with tools dictionary (legacy support)
-    elif hasattr(specialist, 'tools') and isinstance(specialist.tools, dict):
-        for tool_name, tool in specialist.tools.items():
-            tool_class_name = tool.__class__.__name__
-            
-            # Configure ContentRetrieverTool with question context
-            if tool_class_name == "ContentRetrieverTool":
-                if hasattr(tool, 'configure_from_state'):
-                    try:
-                        tool.configure_from_state(question)
-                        if self.config.debug_mode:
-                            print(f"✅ Configured ContentRetrieverTool (dict access)")
-                    except Exception as e:
-                        if self.config.debug_mode:
-                            print(f"⚠️ ContentRetrieverTool configuration failed: {e}")
-            
-            # Handle GetAttachmentTool
-            elif tool_class_name == "GetAttachmentTool":
-                if has_file and file_path and hasattr(tool, 'configure_from_state'):
-                    try:
-                        tool.configure_from_state(file_path, file_name)
-                        if self.config.debug_mode:
-                            print(f"✅ Configured GetAttachmentTool (dict access)")
-                    except Exception as e:
-                        if self.config.debug_mode:
-                            print(f"⚠️ GetAttachmentTool configuration failed: {e}")
-    
-    else:
-        if self.config.debug_mode:
-            print(f"⚠️ No tools found for {agent_name} or unsupported tool structure")
-    
-    # Summary logging
-    if self.config.debug_mode:
-        total_tools = len(specialist.tools) if hasattr(specialist, 'tools') and isinstance(specialist.tools, list) else 0
-        print(f"🎯 Tool configuration complete for {agent_name} ({total_tools} tools)
+            return "GENERAL GUIDANCE: Follow the coordinator's recommended approach"
                    
     # ============================================================================
-    # WORKFLOW 
+    # LANGGRAPH WORKFLOW 
     # ============================================================================
 
     def _build_workflow(self):
@@ -1094,14 +940,10 @@ def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
         
         return builder.compile()
 
-    def _read_question_node(self, state: GAIAState):
-        """Question reading with file info extraction if relevant"""
+    def _read_question_node(self, state: GAIAState) -> GAIAState:
+        """Question reading with file info extraction and download"""
         task_id = state.get("task_id")
         question = state["question"]
-        
-        if 'get_attachment' in self.shared_tools:
-            self.shared_tools['get_attachment'].attachment_for(task_id)
-            print(f"✅ Activated GetAttachmentTool for task: {task_id}")
         
         # Start context bridge tracking
         if self.config.enable_context_bridge:
@@ -1109,15 +951,49 @@ def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
             ContextBridge.track_operation("Processing question and extracting file info")
         
         if self.logging:
-            self.logging.log_step("question_setup", f"Processing question: {question[:50]}...")
+            self.logging.log_step("question_setup", f"Processing question: {question[:50]}...", {
+                'node_name': 'read_question'
+            })
         
-        # NEW: Extract file information from task_id
+        # Extract file information from task_id
         file_info = extract_file_info_from_task_id(task_id)
         
-        # Initialize similar_examples
-        similar_examples = []
+        # Download file once if present
+        local_file_path = None
+        if file_info.get("has_file") and file_info.get("file_name"):
+            print(f"📁 File detected: {file_info['file_name']}")
+            
+            # Try existing path first (development/testing)
+            if file_info.get("file_path") and os.path.exists(file_info["file_path"]):
+                local_file_path = file_info["file_path"]
+                print(f"✅ Using existing file: {local_file_path}")
+            else:
+                # Download file for production use
+                local_file_path = self._download_file_once(task_id, file_info["file_name"])
+            
+            # Update file info with local path
+            if local_file_path:
+                file_info["file_path"] = local_file_path
+                file_info["has_file"] = True
+            else:
+                file_info["has_file"] = False
+                print("❌ File download failed")
         
-        # RAG retrieval (unchanged logic)
+        # Analyze file metadata using Python-native approach
+        file_metadata = {}
+        if file_info.get("has_file"):
+            file_metadata = self._analyze_file_metadata(
+                file_info.get("file_name", ""),
+                file_info.get("file_path", "")
+            )
+            print(f"📊 File analysis: {file_metadata.get('category', 'unknown')} → {file_metadata.get('recommended_specialist', 'unknown')}")
+            
+            # Enhanced logging for file metadata
+            if self.logging:
+                self.logging.log_file_metadata(file_metadata)
+        
+        # RAG retrieval for similar examples
+        similar_examples = []
         if not self.config.enable_smart_routing or not self.config.skip_rag_for_simple:
             try:
                 similar_docs = self.retriever.search(question, k=self.config.rag_examples_count)
@@ -1140,15 +1016,16 @@ def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
                                 
             except Exception as e:
                 print(f"⚠️  RAG retrieval error: {e}")
-                similar_examples = []
         
-        # Return enhanced state with file information
+        # Return enhanced state
         return {
+            **state,
             "similar_examples": similar_examples,
             "file_name": file_info.get("file_name", ""),
             "file_path": file_info.get("file_path", ""),
             "has_file": file_info.get("has_file", False),
-            "steps": state["steps"] + ["Question setup and file info extracted"]
+            "file_metadata": file_metadata,
+            "steps": state["steps"] + ["Question setup and file analysis completed"]
         }
 
     def _complexity_check_node(self, state: GAIAState):
