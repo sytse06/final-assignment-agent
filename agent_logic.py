@@ -113,20 +113,23 @@ class GAIAState(TypedDict):
     file_name: Optional[str]
     file_path: Optional[str]
     has_file: Optional[bool]
+    file_metadata: Optional[Dict]
     
-    # Workflow tracking
+    # Task flow
     steps: List[str]
+    agent_used: Optional[str]
+    current_error: Optional[str]
     raw_answer: Optional[str]
     final_answer: Optional[str]
     
-    # RAG and routing
+    # Coordination
     similar_examples: Optional[List[Dict]]
     complexity: Optional[str]
     selected_agent: Optional[str]
+    coordination_analysis: Optional[Dict]
     
     # Execution tracking
     execution_successful: Optional[bool]
-    agent_used: Optional[str]
 
 # ============================================================================
 # LLM RETRY LOGIC
