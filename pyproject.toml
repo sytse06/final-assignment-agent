@@ -81,6 +81,10 @@ markdownify = "^1.1.0"
 wikipedia = "^1.4.0"
 arxiv = "^2.2.0"
 pymupdf = "^1.26.1"
+scikit-learn = "^1.7.0"
+xlrd = "^2.0.2"
+python-pptx = "^1.0.2"
+mimetype = "^0.1.5"
 
 [tool.poetry.group.dev.dependencies]
 # Testing
