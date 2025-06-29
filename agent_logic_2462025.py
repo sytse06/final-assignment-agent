@@ -23,14 +23,9 @@ import openai
 from smolagents import (
     CodeAgent,
     ToolCallingAgent,
-    ManagedAgent,
     LiteLLMModel,
     AgentLogger,
-    LogLevel,
-    GoogleSearchTool,
-    VisitWebpageTool,
-    WikipediaSearchTool,
-    SpeechToTextTool
+    LogLevel
 )
 
 # Import agent context system
@@ -43,12 +38,28 @@ from dev_retriever import load_gaia_retriever
 from agent_logging import AgentLoggingSetup
 
 try:
-    from tools import (ContentRetrieverTool)
+    from tools import (GetAttachmentTool, 
+                       ContentRetrieverTool
+                       # ContentGroundingTool,  # DISABLED
+                       # CONTENT_GROUNDING_AVAILABLE  # DISABLED
+                       )
     CUSTOM_TOOLS_AVAILABLE = True
-    print("✅ Custom tools imported successfully")
+    CONTENT_GROUNDING_AVAILABLE = False  # Force disable
+    print("✅ Custom tools imported successfully (grounding disabled)")
 except ImportError as e:
     print(f"⚠️  Custom tools not available: {e}")
     CUSTOM_TOOLS_AVAILABLE = False
+    CONTENT_GROUNDING_AVAILABLE = False
+
+try:
+    # Fixed: Import from the specific langchain_tools submodule
+    from tools.langchain_tools import ALL_LANGCHAIN_TOOLS
+    LANGCHAIN_TOOLS_AVAILABLE = True
+    print(f"✅ LangChain tools imported successfully: {len(ALL_LANGCHAIN_TOOLS)} tools")
+except ImportError as e:
+    print(f"⚠️  LangChain tools not available: {e}")
+    ALL_LANGCHAIN_TOOLS = []
+    LANGCHAIN_TOOLS_AVAILABLE = False
 
 # ============================================================================
 # CONFIGURATION
@@ -102,23 +113,20 @@ class GAIAState(TypedDict):
     file_name: Optional[str]
     file_path: Optional[str]
     has_file: Optional[bool]
-    file_metadata: Optional[Dict]
     
-    # Task flow
+    # Workflow tracking
     steps: List[str]
-    agent_used: Optional[str]
-    current_error: Optional[str]
     raw_answer: Optional[str]
     final_answer: Optional[str]
     
-    # Coordination
+    # RAG and routing
     similar_examples: Optional[List[Dict]]
     complexity: Optional[str]
     selected_agent: Optional[str]
-    coordination_analysis: Optional[Dict]
     
     # Execution tracking
     execution_successful: Optional[bool]
+    agent_used: Optional[str]
 
 # ============================================================================
 # LLM RETRY LOGIC
@@ -233,35 +241,38 @@ def validate_gaia_format(answer: str) -> bool:
 # ============================================================================
 # MAIN GAIA AGENT
 # ============================================================================
+
 class GAIAAgent:
-    """GAIA agent using SmolagAgents coordinator pattern within LangGraph workflow"""
+    """GAIA agent using hybrid LangGraph state + simplified context bridge"""
     
-    def __init__(self, config: Optional[GAIAConfig] = None) -> None:
+    def __init__(self, config: GAIAConfig = None):
         if config is None:
             config = GAIAConfig()
         
-        self.config: GAIAConfig = config
-        self.retriever: Any = self._initialize_retriever()
-        self.orchestration_model: Any = self._initialize_orchestration_model()  # LangChain for workflow
-        self.specialist_model: LiteLLMModel = self._initialize_specialist_model()        # LiteLLM for SmolagAgents
+        self.config = config
+        self.retriever = self._initialize_retriever()
+        self.model = self._initialize_model()
         
-        # Setup enhanced logging
+        # Setup logging
         if config.enable_csv_logging:
-            self.logging: Optional[AgentLoggingSetup] = AgentLoggingSetup(
+            self.logging = AgentLoggingSetup(
                 debug_mode=config.debug_mode,
                 step_log_file=config.step_log_file,
                 question_log_file=config.question_log_file
             )
         else:
-            self.logging: Optional[AgentLoggingSetup] = None
+            self.logging = None
         
-        # Create coordinator and specialists (will be created fresh for each task)
-        self.coordinator: Optional[CodeAgent] = None
+        # Create shared tool instances
+        self.shared_tools = self._create_shared_tools()
+        
+        # Create specialist agents
+        self.specialists = self._create_specialist_agents()
         
         # Build workflow
-        self.workflow: Any = self._build_workflow()  # StateGraph type is complex
+        self.workflow = self._build_workflow()
         
-        print("🚀 GAIA Agent initialized with SmolagAgents coordinator pattern!")
+        print("🚀 GAIA Agent initialized with hybrid state + context bridge!")
     
     def _initialize_retriever(self):
         """Initialize retriever for similar questions in manager context."""
@@ -278,55 +289,48 @@ class GAIAAgent:
             print(f"❌ Retriever initialization error: {e}")
             raise
     
-    def _initialize_orchestration_model(self):
-        """Initialize orchestration model (LangChain)"""
+    def _initialize_model(self):
+        """Initialize both orchestration and specialist models"""
         try:
             # Initialize orchestration model (LangChain)
             if self.config.model_provider == "groq":
-                orchestration_model = ChatGroq(
+                self.orchestration_model = ChatGroq(
                     model=self.config.model_name,
                     api_key=os.getenv("GROQ_API_KEY"),
                     temperature=self.config.temperature
                 )
             elif self.config.model_provider == "openrouter":
-                orchestration_model = ChatOpenAI(
+                self.orchestration_model = ChatOpenAI(
                     model=self.config.model_name,
                     api_key=os.getenv("OPENROUTER_API_KEY"),
                     base_url="https://openrouter.ai/api/v1",
                     temperature=self.config.temperature
                 )
             elif self.config.model_provider == "google":
-                orchestration_model = ChatGoogleGenerativeAI(
+                self.orchestration_model = ChatGoogleGenerativeAI(
                     model=self.config.model_name,
                     google_api_key=os.getenv("GOOGLE_API_KEY"),
                     temperature=self.config.temperature
                 )
             elif self.config.model_provider == "ollama":
                 from langchain_ollama import ChatOllama
-                orchestration_model = ChatOllama(
+                self.orchestration_model = ChatOllama(
                     model=self.config.model_name,
                     base_url=self.config.api_base or "http://localhost:11434",
                     temperature=self.config.temperature
                 )
             else:
                 # Fallback to Openrouter
-                orchestration_model = ChatOpenAI(
+                self.orchestration_model = ChatOpenAI(
                     model="qwen/qwen3-32b",
                     api_key=os.getenv("OPENROUTER_API_KEY"),
                     base_url="https://openrouter.ai/api/v1",
                     temperature=self.config.temperature
                 )
             
-            print(f"✅ Orchestration model: {getattr(orchestration_model, 'model_name', getattr(orchestration_model, 'model', 'Unknown'))}")
-            return orchestration_model
+            print(f"✅ Orchestration model: {getattr(self.orchestration_model, 'model_name', getattr(self.orchestration_model, 'model', 'Unknown'))}")
             
-        except Exception as e:
-            print(f"❌ Error initializing orchestration model: {e}")
-            raise
-
-    def _initialize_specialist_model(self) -> LiteLLMModel:
-        """🔥 NEW: Initialize LiteLLM model for SmolagAgents"""
-        try:
+            # Initialize specialist model (SmolAgents)
             if self.config.model_provider == "groq":
                 model_id = f"groq/{self.config.model_name}"
                 api_key = os.getenv("GROQ_API_KEY")
@@ -335,18 +339,18 @@ class GAIAAgent:
                 api_key = os.getenv("OPENROUTER_API_KEY")
             elif self.config.model_provider == "ollama":
                 model_id = f"ollama_chat/{self.config.model_name}"
-                return LiteLLMModel(
+                specialist_model = LiteLLMModel(
                     model_id=model_id,
                     api_base=self.config.api_base or "http://localhost:11434",
                     num_ctx=self.config.num_ctx,
                     temperature=self.config.temperature)
+                print(f"✅ Specialist model: {model_id}")
+                return specialist_model
             elif self.config.model_provider == "google":
                 model_id = f"gemini/{self.config.model_name}"
                 api_key = os.getenv("GOOGLE_API_KEY")
             else:
-                # Fallback to OpenRouter
-                model_id = "openrouter/qwen/qwen-2.5-coder-32b-instruct:free"
-                api_key = os.getenv("OPENROUTER_API_KEY")
+                raise ValueError(f"Unknown provider: {self.config.model_provider}")
             
             specialist_model = LiteLLMModel(
                 model_id=model_id,
@@ -358,604 +362,234 @@ class GAIAAgent:
             return specialist_model
             
         except Exception as e:
-            print(f"❌ Error initializing specialist model: {e}")
+            print(f"❌ Error initializing models: {e}")
             raise
+            
+    def _create_specialist_agents(self):
+        """Create specialized agents with optimized tool configuration"""
         
-    # ============================================================================
-    # FILE HANDLING WITH SMOLAGENTS INSIGHTS
-    # ============================================================================
-
-    def _download_file_once(self, task_id: str, file_name: str) -> Optional[str]:
-        """
-        Download attached file once, reuse for all agents
-        """
-        try:
-            # Production API endpoint
-            agent_evaluation_api = getattr(self.config, 'agent_evaluation_api', 
-                                         "https://agents-course-unit4-scoring.hf.space/")
-            file_url = f"{agent_evaluation_api}files/{task_id}"
-            
-            print(f"📡 Single download request: {file_url}")
-            
-            response = requests.get(
-                file_url,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                timeout=30,
-                stream=True
-            )
-            
-            if response.status_code == 200:
-                # Create temp file with correct extension (important for SmolagAgents)
-                file_extension = os.path.splitext(file_name)[1]
-                with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        tmp_file.write(chunk)
-                    local_path = tmp_file.name
-                
-                file_size = os.path.getsize(local_path)
-                print(f"✅ Downloaded once: {local_path} ({file_size} bytes)")
-                return local_path
-                
-            else:
-                print(f"❌ Download failed: HTTP {response.status_code}")
-                return None
-                
-        except Exception as e:
-            print(f"❌ Download error: {e}")
-            return None
-
-    def _analyze_file_metadata(self, file_name: str, file_path: str) -> Dict[str, Any]:
-        """
-        Python-native file analysis needs no tool and gives coordinator Python capabilities
-        """
-        if not file_name:
-            return {"no_file": True}
-        
-        try:
-            # Basic file analysis
-            path_obj = Path(file_name)
-            extension = path_obj.suffix.lower()
-            
-            import mimetypes
-            mime_type, _ = mimetypes.guess_type(file_name)
-            
-            # Categorize file type
-            if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
-                category = "data"
-                processing_approach = "direct_pandas"
-                recommended_specialist = "data_analyst"
-                specialist_guidance = {
-                    "tool_command": "pd.read_excel(file_path) or pd.read_csv(file_path)",
-                    "imports_needed": ["pandas", "openpyxl"],
-                    "processing_strategy": "Load data → analyze structure → perform calculations"
-                }
-            elif extension in ['.pdf', '.docx', '.doc', '.txt']:
-                category = "document"
-                processing_approach = "content_extraction"
-                recommended_specialist = "document_processor"
-                specialist_guidance = {
-                    "tool_command": "Use ContentRetrieverTool with file_path from additional_args",
-                    "imports_needed": [],
-                    "processing_strategy": "Extract content → analyze text → answer question"
-                }
-            elif extension in ['.mp3', '.mp4', '.wav', '.m4a', '.mov']:
-                category = "media"
-                processing_approach = "transcription"
-                recommended_specialist = "document_processor"
-                specialist_guidance = {
-                    "tool_command": "Use SpeechToTextTool with file_path from additional_args",
-                    "imports_needed": [],
-                    "processing_strategy": "Transcribe audio → analyze transcript → extract information"
-                }
-            elif extension in ['.png', '.jpg', '.jpeg', '.gif', '.bmp']:
-                category = "image"
-                processing_approach = "vision_analysis"
-                recommended_specialist = "document_processor"
-                specialist_guidance = {
-                    "tool_command": "Use vision tools with file_path from additional_args",
-                    "imports_needed": [],
-                    "processing_strategy": "Analyze image → extract visual information → answer question"
-                }
-            else:
-                category = "unknown"
-                processing_approach = "content_extraction"
-                recommended_specialist = "document_processor"
-                specialist_guidance = {
-                    "tool_command": "Use ContentRetrieverTool with file_path from additional_args",
-                    "imports_needed": [],
-                    "processing_strategy": "Extract content → analyze → answer question"
-                }
-            
-            return {
-                "file_name": file_name,
-                "file_path": file_path,
-                "extension": extension,
-                "mime_type": mime_type,
-                "category": category,
-                "processing_approach": processing_approach,
-                "recommended_specialist": recommended_specialist,
-                "specialist_guidance": specialist_guidance,
-                "estimated_complexity": "medium"
-            }
-            
-        except Exception as e:
-            print(f"⚠️ File analysis error: {e}")
-            return {
-                "file_name": file_name,
-                "file_path": file_path,
-                "category": "unknown",
-                "processing_approach": "content_extraction",
-                "recommended_specialist": "document_processor",
-                "error": str(e)
-            }
-
-    # ============================================================================
-    # SMOLAGENTS COORDINATOR AND SPECIALISTS
-    # ============================================================================        
-
-    def _create_managed_specialists(self) -> List[ManagedAgent]:
-        """Create managed specialists for hierarchical coordinator"""
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
+        specialists = {}
+
+        # Create env_tools list
+        env_tools = []
+        if 'get_attachment' in self.shared_tools:
+            env_tools.append(self.shared_tools['get_attachment'])
         
-        # 1. Data Analyst - CodeAgent for direct Python file access
-        data_analyst = CodeAgent(
+        # Data Analyst - Excel/CSV specialist
+        specialists["data_analyst"] = CodeAgent(
             name="data_analyst", 
-            description="Excel/CSV analysis and numerical calculations using pandas",
-            tools=[],  # No tools - pure Python file access
+            description="Data analyst specialized in Excel/CSV analysis, calculations, and file processing.",
+            tools=env_tools,
             additional_authorized_imports=[
-                "pandas", "numpy", "openpyxl", "xlrd", "csv",
-                "scipy", "matplotlib", "seaborn", 
-                "sklearn", "scikit-learn", "statistics", "math"
+                "numpy", "pandas", "matplotlib", "seaborn", "scipy", "io",
+                "json", "csv", "statistics", "math", "re", "openpyxl", "xlrd"
             ],
-            model=self.specialist_model,
+            model=self.model,
+            planning_interval=7,
             max_steps=self.config.max_agent_steps,
-            add_base_tools=True,
             logger=logger
         )
         
-        # 2. Web Researcher - ToolCallingAgent for search
-        web_tools = [
-            GoogleSearchTool(),
-            VisitWebpageTool(), 
-            WikipediaSearchTool()
-        ]
+        # Web Researcher - Information retrieval specialist
+        web_tools = env_tools.copy()
+        if LANGCHAIN_TOOLS_AVAILABLE:
+            web_tools.extend(ALL_LANGCHAIN_TOOLS)
+        if 'content_retriever' in self.shared_tools:
+            web_tools.append(self.shared_tools['content_retriever'])
         
-        web_researcher = ToolCallingAgent(
+        specialists["web_researcher"] = ToolCallingAgent(
             name="web_researcher",
-            description="Web search using GoogleSearchTool, Wikipedia, and content extraction",
+            description="Answers questions that require grounding in unknown information through search on web sites and other online resources.",
             tools=web_tools,
-            model=self.specialist_model,
+            model=self.model,
             max_steps=self.config.max_agent_steps,
-            add_base_tools=True,
+            planning_interval=self.config.planning_interval,
+            add_base_tools=False,
             logger=logger
         )
         
-        # 3. Document Processor - ToolCallingAgent for file processing
-        doc_tools = [SpeechToTextTool()]
+        print(f"🎯 Created {len(specialists)} specialized agents:")
+        print(f"   data_analyst: {len(specialists['data_analyst'].tools)} tools (CodeAgent)")
+        print(f"   web_researcher: {len(specialists['web_researcher'].tools)} tools (ToolCallingAgent)")
+        
+        return specialists
+
+    def _create_shared_tools(self):
+        print("🚨 DEBUG _create_specialist_agents CALLED!")
+        """🔍 DEBUG VERSION: Check shared tool creation"""
+        shared_tools = {}
+        
+        print("🔧 DEBUG: Creating shared tools...")
         
         if CUSTOM_TOOLS_AVAILABLE:
-            doc_tools.append(ContentRetrieverTool())
+            try:
+                # Create tools directly - no wrappers
+                tool = ContentRetrieverTool()
+                shared_tools['content_retriever'] = tool
+                print(f"✅ ContentRetrieverTool: type={type(tool)}, class={tool.__class__.__name__}")
+            except Exception as e:
+                print(f"❌ ContentRetrieverTool failed: {e}")
+            
+            try:
+                # Create attachment tool directly - no wrappers  
+                tool = GetAttachmentTool()
+                shared_tools['get_attachment'] = tool
+                print(f"✅ GetAttachmentTool: type={type(tool)}, class={tool.__class__.__name__}")
+                print(f"   tool.name: {repr(getattr(tool, 'name', 'NOT_FOUND'))}")
+            except Exception as e:
+                print(f"❌ GetAttachmentTool failed: {e}")
+            
+            print(f"🔧 Direct shared_tools created: {list(shared_tools.keys())}")
+            print("🚫 ContentGroundingTool disabled for better GAIA performance")
+        else:
+            print("⚠️  Custom tools not available - shared_tools will be empty")
         
-        document_processor = ToolCallingAgent(
-            name="document_processor",
-            description="Document extraction and audio transcription specialist",
-            tools=doc_tools,
-            model=self.specialist_model,
-            max_steps=self.config.max_agent_steps,
-            add_base_tools=True,
-            logger=logger
-        )
-        
-        # 🔥 KEY: Wrap in ManagedAgents for hierarchy
-        managed_specialists = [
-            ManagedAgent(
-                agent=data_analyst,
-                name="analyze_data",
-                description="Analyzes Excel/CSV files and performs numerical calculations. Pass file paths directly in task description."
-            ),
-            ManagedAgent(
-                agent=web_researcher, 
-                name="search_web",
-                description="Searches the web for information. Pass your search query as an argument."
-            ),
-            ManagedAgent(
-                agent=document_processor,
-                name="process_document", 
-                description="Processes documents/audio using tools. Files accessed via additional_args file_path parameter."
-            )
-        ]
-        
-        print(f"🎯 Created {len(managed_specialists)} managed specialists:")
-        print(f"   analyze_data: CodeAgent with direct Python file access")
-        print(f"   search_web: ToolCallingAgent with web search tools")
-        print(f"   process_document: ToolCallingAgent with document/audio tools")
-        
-        return managed_specialists
-
-    def _create_coordinator(self) -> CodeAgent:
-        """🔥 CHANGED: Create hierarchical coordinator with managed agents"""
-        logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
-        
-        # Get managed specialists
-        managed_specialists = self._create_managed_specialists()
-        
-        # 🔥 KEY: Create coordinator with managed_agents for hierarchy
-        coordinator = CodeAgent(
-            name="gaia_coordinator",
-            description="""Hierarchical coordinator that manages three specialist agents for GAIA tasks.
-
-    MANAGED AGENTS:
-    - analyze_data: For Excel/CSV analysis and calculations  
-    - search_web: For web searches and information gathering
-    - process_document: For document extraction and audio transcription
-
-    WORKFLOW:
-    1. Analyze the question and identify required capabilities
-    2. Delegate to appropriate specialist agent(s) using their names
-    3. Coordinate multiple specialists if needed
-    4. Synthesize results into final answer
-    """,
-            tools=[],  # No direct tools - delegates to managed agents
-            managed_agents=managed_specialists,  # 🔥 HIERARCHY: This creates the hierarchy
-            additional_authorized_imports=[
-                "pathlib", "mimetypes", "re", "json", "os"
-            ],
-            model=self.specialist_model,
-            planning_interval=7,
-            max_steps=12,
-            logger=logger
-        )
-        
-        return coordinator
-
-    def _build_coordinator_task(self, state: GAIAState) -> str:
-        """Build coordination task for hierarchical coordinator with managed specialists"""
-        
-        question = state["question"]
-        file_name = state.get("file_name", "")
+        return shared_tools
+    
+    def _configure_tools_from_state(self, agent_name: str, state: GAIAState):
+        """Configure tools with state information for file processing"""
+        task_id = state.get("task_id")
+        question = state.get("question")
         file_path = state.get("file_path", "")
+        file_name = state.get("file_name", "")
         has_file = state.get("has_file", False)
-        similar_examples = state.get("similar_examples", [])
-        complexity = state.get("complexity", "unknown")
         
-        # Build similar examples context
+        if not task_id:
+            return
+        
+        if self.config.debug_mode:
+            print(f"🔧 Configuring tools for {agent_name}")
+            if has_file:
+                print(f"   📁 File: {file_name}")
+        
+        # Get the agent
+        specialist = self.specialists[agent_name]
+        
+        # Configure CodeAgent tools via tools dictionary
+        if hasattr(specialist, 'tools') and isinstance(specialist.tools, dict):
+            for tool_name, tool in specialist.tools.items():
+                
+                # Configure GetAttachmentTool with file information
+                if tool.__class__.__name__ == "GetAttachmentTool":
+                    if has_file and file_path and hasattr(tool, 'configure_from_state'):
+                        try:
+                            tool.configure_from_state(file_path, file_name)
+                            if self.config.debug_mode:
+                                print(f"✅ Configured GetAttachmentTool with file info")
+                        except Exception as e:
+                            if self.config.debug_mode:
+                                print(f"⚠️ GetAttachmentTool configuration failed: {e}")
+                
+                # Configure ContentRetrieverTool with question context
+                elif tool.__class__.__name__ == "ContentRetrieverTool":
+                    if hasattr(tool, 'configure_from_state'):
+                        try:
+                            tool.configure_from_state(question)
+                            if self.config.debug_mode:
+                                print(f"✅ Configured ContentRetrieverTool")
+                        except Exception as e:
+                            if self.config.debug_mode:
+                                print(f"⚠️ ContentRetrieverTool configuration failed: {e}")
+        
+        # Handle ToolCallingAgent (web_researcher)
+        elif hasattr(specialist, 'tools') and isinstance(specialist.tools, list):
+            for tool in specialist.tools:
+                if tool.__class__.__name__ == "GetAttachmentTool":
+                    if has_file and file_path and hasattr(tool, 'configure_from_state'):
+                        try:
+                            tool.configure_from_state(file_path, file_name)
+                            if self.config.debug_mode:
+                                print(f"✅ Configured GetAttachmentTool (ToolCallingAgent)")
+                        except Exception as e:
+                            if self.config.debug_mode:
+                                print(f"⚠️ GetAttachmentTool configuration failed: {e}")
+
+    def _llm_select_agent(self, question: str, similar_examples: List[Dict] = None) -> str:
+        """LLM selects agent using RAG examples - no hard-coded rules"""
+        
+        # Build agent descriptions
+        agents_description = "\n".join([
+            f"{name}: {agent.description}"
+            for name, agent in self.specialists.items()
+        ])
+        
+        # Add similar examples context
         examples_context = ""
         if similar_examples:
-            examples_context = "\n\nSIMILAR GAIA EXAMPLES:\n"
+            examples_context = "\n\nSimilar GAIA examples:\n"
             for i, example in enumerate(similar_examples[:3], 1):
-                examples_context += f"{i}. Q: {example.get('question', '')[:100]}...\n"
+                examples_context += f"{i}. Q: {example.get('question', '')}\n"
                 examples_context += f"   A: {example.get('answer', '')}\n"
         
-        # Task for coordinator with managed specialists
-        task = f"""
-    You are the GAIA coordinator with three managed specialist agents. Analyze this question and execute using your specialists.
+        # LLM selection prompt
+        prompt = f"""Select the best specialist for this question.
 
-    QUESTION: {question}
-    COMPLEXITY: {complexity}
-    FILE INFO: {file_name} (path: {file_path}, has_file: {has_file})
-    {examples_context}
+    Question: {question}
 
-    YOUR MANAGED SPECIALISTS:
-    - analyze_data: CodeAgent for Excel/CSV analysis and calculations (direct file access)
-    - search_web: ToolCallingAgent for web searches and current information  
-    - process_document: ToolCallingAgent for document/audio processing (file via additional_args)
+    Available specialists:
+    {agents_description}{examples_context}
 
-    ANALYSIS AND EXECUTION:
+    Choose: {' or '.join(self.specialists.keys())}
 
-    1. PROBLEM ANALYSIS:
-    ```python
-    # Analyze the fundamental problem
-    question = "{question}"
-    print(f"Core problem: {{analyze_problem(question)}}")
-    print(f"Required capabilities: {{identify_capabilities(question)}}")
-    ```
-
-    2. FILE ANALYSIS (if present):
-    ```python
-    # Analyze file type and processing approach
-    if "{file_name}":
-        from pathlib import Path
-        import mimetypes
+    Your choice:"""
         
-        file_path = Path("{file_name}")
-        extension = file_path.suffix.lower()
-        
-        if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
-            file_type = "data"
-            best_specialist = "analyze_data"
-            access_method = "direct_path"  # CodeAgent gets file paths directly
-            print(f"Data file detected → use analyze_data specialist")
-        elif extension in ['.pdf', '.docx', '.doc', '.txt', '.mp3', '.mp4', '.wav']:
-            file_type = "document_or_media" 
-            best_specialist = "process_document"
-            access_method = "additional_args"  # ToolCallingAgent needs additional_args
-            print(f"Document/media file detected → use process_document specialist")
-        else:
-            file_type = "unknown"
-            best_specialist = "process_document"
-            access_method = "additional_args"
-            print(f"Unknown file type → use process_document specialist")
-            
-        print(f"File analysis: {{extension}} → {{file_type}} → {{best_specialist}}")
-    ```
-
-    3. SPECIALIST SELECTION AND EXECUTION:
-    ```python
-    # Select and execute appropriate specialist
-    question_lower = "{question}".lower()
-
-    if "calculate" in question_lower or "data" in question_lower:
-        if "{file_name}" and file_type == "data":
-            selected_specialist = "analyze_data"
-            reasoning = "Data file + calculation requirements"
-        else:
-            selected_specialist = "analyze_data"  
-            reasoning = "Calculation requirements"
-    elif "current" in question_lower or "latest" in question_lower or "recent" in question_lower:
-        selected_specialist = "search_web"
-        reasoning = "Current information needed"
-    elif "{file_name}" and file_type in ["document_or_media", "unknown"]:
-        selected_specialist = "process_document"
-        reasoning = "File processing required"
-    else:
-        # Default logic
-        if "{file_name}":
-            selected_specialist = best_specialist
-            reasoning = "File-based selection"
-        else:
-            selected_specialist = "search_web"
-            reasoning = "General information query"
-
-    print(f"SELECTED SPECIALIST: {{selected_specialist}}")
-    print(f"REASONING: {{reasoning}}")
-    ```
-
-    4. EXECUTE WITH SELECTED SPECIALIST:
-    Now execute the task using your selected specialist:
-
-    If selected_specialist == "analyze_data":
-        # Use analyze_data for calculations and data processing
-        # File paths can be used directly in code
-        
-    If selected_specialist == "search_web":
-        # Use search_web for current information and facts
-        # No file processing needed
-        
-    If selected_specialist == "process_document":
-        # Use process_document for document/audio/video processing
-        # Files will be available via additional_args
-
-    EXECUTE NOW: Use your selected specialist to answer the question.
-
-    CRITICAL OUTPUT REQUIREMENTS:
-    - End your final response with 'FINAL ANSWER: [specific answer]'
-    - Follow GAIA format: numbers (no commas), strings (no articles), lists (comma separated)
-    - Provide actual answers, never use placeholder text like "[your answer]"
-    """
-        
-        return task
-
-    def _parse_coordinator_analysis(self, coordination_result: str) -> Dict[str, Any]:
-        """Parse coordinator's Python output into structured analysis"""
         try:
-            lines = coordination_result.split('\n')
+            response = llm_invoke_with_retry(self.orchestration_model, [HumanMessage(content=prompt)])
+            choice = response.content.strip().lower()
             
-            analysis = {
-                "core_problem": "Unknown",
-                "selected_specialist": "analyze_data",  # Safe default
-                "selection_reasoning": "Default selection",
-                "execution_approach": "Standard processing",
-                "confidence": 0.8,
-                "file_metadata": {},
-                "execution_strategy": {"steps": ["Standard processing"]}
-            }
+            # Parse LLM response
+            for agent_name in self.specialists.keys():
+                if agent_name in choice:
+                    return agent_name
             
-            # Parse coordinator output
-            for line in lines:
-                line = line.strip()
-                
-                if "SELECTED SPECIALIST:" in line:
-                    specialist = line.split(":")[-1].strip()
-                    if specialist in ["analyze_data", "search_web", "process_document"]:
-                        analysis["selected_specialist"] = specialist
-                
-                elif "REASONING:" in line:
-                    analysis["selection_reasoning"] = line.split(":")[-1].strip()
-                
-                elif "Core problem:" in line:
-                    analysis["core_problem"] = line.split(":")[-1].strip()
+            # Default if unclear
+            return list(self.specialists.keys())[0]
             
-            # Validate,  # Extract everything after FINAL ANSWER:
-            r'(?i)final\s*answer\s*:\s*(.+?)(?:\n|$)',  # Match until newline
-            r'(?i).*final\s*answer\s*:\s*(.+)',  # Match anything after FINAL ANSWER:
-        ]
-        
-        for pattern in final_answer_patterns:
-            match = re.search(pattern, answer, re.DOTALL)
-            if match:
-                extracted = match.group(1).strip()
-                if extracted:  # Only use if we got something meaningful
-                    answer = extracted
-                    if self.logging:
-                        self.logging.log_step("gaia_format_extract", f"Extracted from FINAL ANSWER: '{answer}'")
-                    break
-        
-        # Remove any remaining prefixes
-        prefixes_to_remove = [
-            "final answer:", "the answer is:", "answer:", "result:", "solution:",
-            "the result is:", "therefore", "so", "thus", "final answer",
-            "the final answer is", "my answer is"
-        ]
-        
-        answer_lower = answer.lower()
-        for prefix in prefixes_to_remove:
-            if answer_lower.startswith(prefix):
-                answer = answer[len(prefix):].strip()
-                answer_lower = answer.lower()
-                break
-        
-        # Remove quotes and excess punctuation
-        answer = answer.strip('.,!?:;"\'')
-        
-        # Question-specific formatting requirements
-        question = getattr(self, '_current_question', '').lower()
-        
-        # Keep commas when explicitly requested
-        if "comma" in question and ("list" in question or "delimited" in question):
-            if self.logging:
-                self.logging.log_step("gaia_format_comma_list", "Preserving commas for comma-delimited list")
-            # Don't remove commas for comma-separated lists
-            pass
-        else:
-            # Standard GAIA rule: remove commas from numbers
-            if answer.replace('.', '').replace('-', '').replace(',', '').replace(' ', '').isdigit():
-                answer = answer.replace(',', '')
-                if self.logging:
-                    self.logging.log_step("gaia_format_number", f"Removed commas from number: '{answer}'")
-        
-        # Handle rounding instructions
-        if "round" in question and "integer" in question:
-            numbers = re.findall(r'\d+', answer)
-            if numbers:
-                answer = numbers[0]  # Take first number found
-                if self.logging:
-                    self.logging.log_step("gaia_format_round", f"Extracted rounded integer: '{answer}'")
-        
-        # Extract count from descriptive answers
-        if "how many" in question and any(term in question for term in ["albums", "studio", "books", "papers"]):
-            numbers = re.findall(r'\b\d+\b', answer)
-            if numbers:
-                answer = numbers[0]
-                if self.logging:
-                    self.logging.log_step("gaia_format_count", f"Extracted count: '{answer}'")
-        
-        # Ensure alphabetical ordering in geographical questions
-        if "countries" in question and "comma separated" in question:
-            if "," in answer:
-                countries = [c.strip() for c in answer.split(",")]
-                countries.sort()
-                answer = ", ".join(countries)
-                if self.logging:
-                    self.logging.log_step("gaia_format_countries", f"Sorted countries: '{answer}'")
-        
-        # Standard GAIA formatting (only if not a special case above)
-        if not any(special in question for special in ["comma", "list", "countries"]):
-            # Remove articles (the, a, an) - but be careful with meaningful words
-            answer = re.sub(r'\b(the|a|an)\s+', '', answer, flags=re.IGNORECASE)
-            
-            # Remove units unless specified in question
-            if not any(keep_unit in question for keep_unit in ["$", "%", "units", "meters", "degrees", "km"]):
-                # Only remove obvious unit markers, not letters that might be part of the answer
-                answer = re.sub(r'[^\w\s,.-]', '', answer)
-        
-        # Clean up whitespace
-        answer = ' '.join(answer.split())
-        
-        if self.logging:
-            self.logging.log_step("gaia_format_final", f"Final GAIA formatted answer: '{answer}'")
-        
-        return answer
+        except Exception as e:
+            # Fallback to first agent
+            return list(self.specialists.keys())[0]
 
-    def _build_specialist_task(self, state: GAIAState, specialist_name: str) -> str:
-        """🔥 CORRECTED: Build delegation prompts for coordinator instead of direct specialist tasks"""
-        question = state["question"]
-        coordination_analysis = state.get("coordination_analysis", {})
-        file_metadata = state.get("file_metadata", {})
-        file_path = state.get("file_path", "")
+    def _add_directional_info(self, question: str, agent_name: str, state: GAIAState) -> str:
+        """Add essential directional info to the task"""
         
-        # Build delegation instruction for coordinator
-        if specialist_name == "analyze_data":
-            # CodeAgent: Embed file path directly in prompt for coordinator
-            if file_path:
-                delegation_prompt = f"""Execute using your analyze_data specialist:
-                
-    QUESTION: {question}
-    FILE: {file_path}
-
-    Use your analyze_data specialist to load the file and analyze:
-    ```python
-    import pandas as pd
-    df = pd.read_excel("{file_path}")  # or pd.read_csv("{file_path}")
-    # Perform the required analysis for the question
-    ```
-
-    COORDINATOR ANALYSIS: {coordination_analysis.get('selection_reasoning', 'Data analysis required')}
-
-    Delegate to analyze_data specialist with the file path embedded in the task.
-    """
-            else:
-                delegation_prompt = f"""Execute using your analyze_data specialist:
-                
-    QUESTION: {question}
-
-    Use your analyze_data specialist for numerical calculations and data processing.
-
-    COORDINATOR ANALYSIS: {coordination_analysis.get('selection_reasoning', 'Calculation required')}
-
-    Delegate to analyze_data specialist for computational tasks.
-    """
+        # Get file info from state
+        has_file = state.get("has_file", False)
+        file_name = state.get("file_name", "")
         
-        elif specialist_name == "search_web":
-            delegation_prompt = f"""Execute using your search_web specialist:
-            
-    QUESTION: {question}
-
-    Use your search_web specialist to find current information and facts.
-
-    COORDINATOR ANALYSIS: {coordination_analysis.get('selection_reasoning', 'Web search required')}
-
-    Delegate to search_web specialist for information gathering.
-    """
+        # Build enhanced task with directional info
+        task_parts = [question]
         
-        elif specialist_name == "process_document":
-            delegation_prompt = f"""Execute using your process_document specialist:
-            
-    QUESTION: {question}
-    FILE INFO: {file_metadata.get('category', 'unknown')} file processing required
-
-    Use your process_document specialist with the attached file.
-    The file_path will be available to your specialist's tools via additional_args.
-
-    COORDINATOR ANALYSIS: {coordination_analysis.get('selection_reasoning', 'Document processing required')}
-
-    Delegate to process_document specialist for file processing.
-    """
+        # Add file handling direction
+        if has_file:
+            task_parts.append(f"\nNote: There is an attached file '{file_name}'. Use get_attachment tool to access it.")
         
-        else:
-            delegation_prompt = f"""Execute using appropriate specialist:
-            
-    QUESTION: {question}
-
-    Select and use the most appropriate specialist for this task.
-    """
+        # Add agent-specific direction
+        if agent_name == "data_analyst":
+            task_parts.append("\nProvide numerical calculations and data analysis. Use Python code for processing.")
+        elif agent_name == "web_researcher":
+            task_parts.append("\nSearch for current information using available research tools.")
         
-        # Add GAIA formatting requirement
-        delegation_prompt += """
-
-    CRITICAL REQUIREMENTS:
-    - End response with 'FINAL ANSWER: [specific answer]' in exact GAIA format
-    - Numbers: no commas, no units unless specified
-    - Strings: no articles (the, a, an), no abbreviations
-    - Lists: comma separated, apply above rules to each element
-    - Provide actual answer, never use placeholder text
-    """
+        # Add GAIA format requirement
+        task_parts.append("\nIMPORTANT: End your response with 'FINAL ANSWER: [your answer]' in the exact GAIA format.")
         
-        return delegation_prompt
+        return "\n".join(task_parts)
                    
     # ============================================================================
-    # LANGGRAPH WORKFLOW 
+    # WORKFLOW 
     # ============================================================================
 
     def _build_workflow(self):
-        """🔥 OPTIMIZED: Build LangGraph workflow without superfluous specialist_execution node"""
+        """Build LangGraph workflow with smart routing - Updated with SmolagAgents pattern"""
         builder = StateGraph(GAIAState)
         
         if self.config.enable_smart_routing:
-            # Enhanced smart routing workflow with optimized coordinator
+            # Smart routing workflow with proper agent selection/delegation separation
             builder.add_node("read_question", self._read_question_node)
             builder.add_node("complexity_check", self._complexity_check_node)
             builder.add_node("one_shot_answering", self._one_shot_answering_node)
-            builder.add_node("coordinator", self._coordinator_node)
+            builder.add_node("agent_selector", self._agent_selector_node)
+            builder.add_node("delegate_to_agent", self._delegate_to_agent_node)  # NEW
             builder.add_node("format_answer", self._format_answer_node)
             
             # Routing flow
@@ -968,38 +602,44 @@ class GAIAAgent:
                 self._route_by_complexity,
                 {
                     "simple": "one_shot_answering",
-                    "complex": "coordinator"
+                    "complex": "agent_selector"
                 }
             )
             
-            # 🔥 OPTIMIZED: Direct flow from coordinator to format (skip superfluous node)
-            builder.add_edge("coordinator", "format_answer")
+            # Agent workflow: select → delegate → format
+            builder.add_edge("agent_selector", "delegate_to_agent")
+            builder.add_edge("delegate_to_agent", "format_answer")
             
-            # Simple workflow: one-shot → format
+            # Simple path: direct to formatting
             builder.add_edge("one_shot_answering", "format_answer")
             
-            # Both paths converge at formatting
+            # Both paths end at formatting
             builder.add_edge("format_answer", END)
             
         else:
-            # Linear workflow with optimized coordinator
+            # Original linear workflow - Updated with proper separation
             builder.add_node("read_question", self._read_question_node)
-            builder.add_node("coordinator", self._coordinator_node)  # 🔥 Does analysis + execution
-            # 🔥 REMOVED: "specialist_execution" node - no longer needed
+            builder.add_node("agent_selector", self._agent_selector_node)
+            builder.add_node("delegate_to_agent", self._delegate_to_agent_node)
             builder.add_node("format_answer", self._format_answer_node)
             
-            # 🔥 OPTIMIZED: Direct flow - read → coordinate → format (skip superfluous node)
+            # Linear flow: read → select → delegate → format
             builder.add_edge(START, "read_question")
-            builder.add_edge("read_question", "coordinator")
-            builder.add_edge("coordinator", "format_answer")
+            builder.add_edge("read_question", "agent_selector")
+            builder.add_edge("agent_selector", "delegate_to_agent")
+            builder.add_edge("delegate_to_agent", "format_answer")
             builder.add_edge("format_answer", END)
         
         return builder.compile()
 
-    def _read_question_node(self, state: GAIAState) -> GAIAState:
-        """Question reading with file info extraction and download"""
+    def _read_question_node(self, state: GAIAState):
+        """Question reading with file info extraction if relevant"""
         task_id = state.get("task_id")
         question = state["question"]
+        
+        if 'get_attachment' in self.shared_tools:
+            self.shared_tools['get_attachment'].attachment_for(task_id)
+            print(f"✅ Activated GetAttachmentTool for task: {task_id}")
         
         # Start context bridge tracking
         if self.config.enable_context_bridge:
@@ -1007,49 +647,15 @@ class GAIAAgent:
             ContextBridge.track_operation("Processing question and extracting file info")
         
         if self.logging:
-            self.logging.log_step("question_setup", f"Processing question: {question[:50]}...", {
-                'node_name': 'read_question'
-            })
+            self.logging.log_step("question_setup", f"Processing question: {question[:50]}...")
         
-        # Extract file information from task_id
+        # NEW: Extract file information from task_id
         file_info = extract_file_info_from_task_id(task_id)
         
-        # Download file once if present
-        local_file_path = None
-        if file_info.get("has_file") and file_info.get("file_name"):
-            print(f"📁 File detected: {file_info['file_name']}")
-            
-            # Try existing path first (development/testing)
-            if file_info.get("file_path") and os.path.exists(file_info["file_path"]):
-                local_file_path = file_info["file_path"]
-                print(f"✅ Using existing file: {local_file_path}")
-            else:
-                # Download file for production use
-                local_file_path = self._download_file_once(task_id, file_info["file_name"])
-            
-            # Update file info with local path
-            if local_file_path:
-                file_info["file_path"] = local_file_path
-                file_info["has_file"] = True
-            else:
-                file_info["has_file"] = False
-                print("❌ File download failed")
-        
-        # Analyze file metadata using Python-native approach
-        file_metadata = {}
-        if file_info.get("has_file"):
-            file_metadata = self._analyze_file_metadata(
-                file_info.get("file_name", ""),
-                file_info.get("file_path", "")
-            )
-            print(f"📊 File analysis: {file_metadata.get('category', 'unknown')} → {file_metadata.get('recommended_specialist', 'unknown')}")
-            
-            # Enhanced logging for file metadata
-            if self.logging:
-                self.logging.log_file_metadata(file_metadata)
-        
-        # RAG retrieval for similar examples
+        # Initialize similar_examples
         similar_examples = []
+        
+        # RAG retrieval (unchanged logic)
         if not self.config.enable_smart_routing or not self.config.skip_rag_for_simple:
             try:
                 similar_docs = self.retriever.search(question, k=self.config.rag_examples_count)
@@ -1072,16 +678,15 @@ class GAIAAgent:
                                 
             except Exception as e:
                 print(f"⚠️  RAG retrieval error: {e}")
+                similar_examples = []
         
-        # Return enhanced state
+        # Return enhanced state with file information
         return {
-            **state,
             "similar_examples": similar_examples,
             "file_name": file_info.get("file_name", ""),
             "file_path": file_info.get("file_path", ""),
             "has_file": file_info.get("has_file", False),
-            "file_metadata": file_metadata,
-            "steps": state["steps"] + ["Question setup and file analysis completed"]
+            "steps": state["steps"] + ["Question setup and file info extracted"]
         }
 
     def _complexity_check_node(self, state: GAIAState):
@@ -1247,74 +852,142 @@ class GAIAAgent:
                 "steps": state["steps"] + [error_msg]
             }
 
-    def _coordinator_node(self, state: GAIAState) -> GAIAState:
-        """🔥 CORRECTED: Hierarchical coordinator node - Analysis and execution in one step"""
-        print(f"🧠 Hierarchical Coordinator: {state['question'][:80]}...")
-        
-        if self.config.enable_context_bridge:
-            ContextBridge.track_operation("Starting hierarchical coordinator")
+    def _agent_selector_node(self, state: GAIAState):
+        """Enhanced agent selection with file awareness"""
         
         if self.logging:
-            self.logging.log_step("coordinator_start", "Starting hierarchical coordinator analysis and execution")
+            self.logging.log_step("agent_selector", "Selecting appropriate specialist agent")
+        
+        print(f"🎯 Agent Selection for: {state['question'][:100]}...")
+        
+        # Use file information from state for better selection
+        has_file = state.get("has_file", False)
+        file_name = state.get("file_name", "")
+        similar_examples = state.get("similar_examples", [])
+        
+        # Build enhanced examples context
+        examples_context = ""
+        if similar_examples:
+            examples_context = "\n\nSimilar GAIA examples:\n"
+            for i, example in enumerate(similar_examples[:3], 1):
+                examples_context += f"{i}. Q: {example.get('question', '')[:100]}...\n"
+                examples_context += f"   A: {example.get('answer', '')}\n"
+        
+        # Enhanced selection prompt with file awareness
+        file_context = ""
+        if has_file:
+            file_context = f"\n\nFile Information:\n- Has file: {file_name}\n- File processing needed: Yes"
+        
+        selection_prompt = f"""
+        Based on these successful GAIA examples, select the best agent for this question:
+        
+        QUESTION: {state["question"]}
+        {file_context}
+        {examples_context}
+        
+        Available agents:
+        - data_analyst: Python code execution, file analysis, calculations, Excel/CSV processing
+        - web_researcher: Google search, web browsing, current information, document research
+        
+        Consider:
+        1. Does the question require file processing? → data_analyst
+        2. Does it need web search or current information? → web_researcher
+        3. What type of question succeeded in similar examples?
+        4. File information: {file_name if has_file else "No files"}
+        
+        Reply with just: data_analyst OR web_researcher
+        """
         
         try:
-            # 🔥 Create fresh coordinator with managed specialists for this task
-            self.coordinator = self._create_coordinator()
+            if self.logging:
+                self.logging.log_step("agent_selection_prompt", "LLM selecting best agent with file awareness")
             
-            # 🔥 Build integrated coordination task (analysis + execution)
-            coordination_task = self._build_coordinator_task(state)
+            response = self.orchestration_model.invoke([HumanMessage(content=selection_prompt)])
+            selected_agent = response.content.strip().lower()
             
-            if self.config.enable_context_bridge:
-                ContextBridge.track_operation("Executing hierarchical coordinator with managed specialists")
+            # Validate selection
+            if selected_agent not in self.specialists:
+                print(f"⚠️ Invalid agent selection '{selected_agent}', using data_analyst")
+                selected_agent = "data_analyst"
             
-            # 🔥 KEY: Execute coordinator with proper file access
-            file_path = state.get("file_path", "")
-            
-            if file_path:
-                # Pass file via additional_args for ToolCallingAgent specialists
-                coordination_result = self.coordinator.run(
-                    coordination_task,
-                    additional_args={"file_path": file_path}
-                )
-            else:
-                # No file needed
-                coordination_result = self.coordinator.run(coordination_task)
-            
-            if self.config.enable_context_bridge:
-                ContextBridge.track_operation("Hierarchical coordinator completed analysis and execution")
-            
-            print(f"✅ Hierarchical coordinator completed analysis and execution")
+            print(f"🤖 Selected agent: {selected_agent}")
             
             if self.logging:
-                self.logging.log_step("coordinator_complete", "Hierarchical coordinator analysis and execution completed")
+                self.logging.log_step("agent_selected", f"Selected agent: {selected_agent}")
             
-            # 🔥 CHANGED: Return with execution results (not just analysis)
             return {
                 **state,
-                "agent_used": "hierarchical_coordinator",
-                "raw_answer": coordination_result,
-                "execution_successful": True,
-                "steps": state["steps"] + ["Hierarchical coordinator analysis and execution completed"]
+                "selected_agent": selected_agent,
+                "similar_examples": similar_examples
             }
             
         except Exception as e:
-            error_msg = f"Hierarchical coordinator failed: {str(e)}"
-            print(f"❌ {error_msg}")
-            
-            if self.config.enable_context_bridge:
-                ContextBridge.track_error(error_msg)
+            print(f"❌ Agent selection failed: {e}")
+            print("🔄 Falling back to data_analyst")
             
             if self.logging:
-                self.logging.log_step("coordinator_error", error_msg)
+                self.logging.log_step("agent_selection_failed", f"Selection failed: {e}, using data_analyst fallback")
             
             return {
                 **state,
-                "current_error": error_msg,
-                "agent_used": "hierarchical_coordinator",
-                "raw_answer": error_msg,
-                "execution_successful": False,
-                "steps": state["steps"] + [f"Hierarchical coordinator failed: {error_msg}"]
+                "selected_agent": "data_analyst",
+                "similar_examples": similar_examples,
+                "selection_fallback": True
             }
+
+    def _delegate_to_agent_node(self, state: GAIAState):
+        """ULTRA MINIMAL: Pass original question directly like reference"""
+        selected_agent = state.get("selected_agent", "data_analyst")
+        task_id = state.get("task_id")
+        question = state.get("question")  # Original question only
+        
+        if self.logging:
+            self.logging.log_step("delegate_to_agent", f"Executing agent: {selected_agent}")
+        
+        print(f"🚀 Executing agent: {selected_agent}")
+        
+        try:
+            # EXISTING: Configure tools from LangGraph state
+            self._configure_tools_from_state(selected_agent, state)
+            
+            # Get the specialist agent
+            specialist = self.specialists[selected_agent]
+            
+            if self.logging:
+                self.logging.log_step("agent_execution_start", f"Agent execution: {selected_agent}")
+            
+            # ULTRA MINIMAL: Pass original question directly (like reference)
+            result = specialist.run(task=question)
+            
+            if self.logging:
+                self.logging.log_step("agent_execution_complete", f"Agent {selected_agent} completed")
+            
+            print(f"✅ Agent {selected_agent} completed execution")
+            
+            return {
+                **state,
+                "agent_used": selected_agent,
+                "raw_answer": result,
+                "execution_successful": True
+            }
+            
+        except Exception as e:
+            print(f"❌ Agent execution failed: {e}")
+            
+            if self.logging:
+                self.logging.log_step("agent_execution_failed", f"Agent {selected_agent} failed: {str(e)}")
+            
+            return {
+                **state,
+                "agent_used": selected_agent,
+                "raw_answer": f"Agent execution failed: {str(e)}",
+                "execution_successful": False,
+                "execution_error": True
+            }
+        
+    def _get_current_temporal_context(self) -> str:
+        """DISABLED: Is interfering with GAIA historical queries"""
+        return ""  # Returns empty string
 
     def _format_answer_node(self, state: GAIAState):
         """Enhanced answer formatting with question context"""
