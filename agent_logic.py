@@ -5,10 +5,14 @@ import os
 import uuid
 import re
 import backoff
-from typing import TypedDict, Optional, List, Dict
+import requests
+import tempfile
+from typing import Any, TypedDict, Optional, List, Dict
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import time
 from pathlib import Path
+from contextvars import ContextVar
 
 # Core dependencies
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
@@ -32,9 +36,6 @@ from smolagents import (
     WikipediaSearchTool,
     SpeechToTextTool
 )
-
-# Import agent context system
-from agent_context import ContextBridge
 
 # Import retriever system
 from dev_retriever import load_gaia_retriever
@@ -60,6 +61,7 @@ class GAIAConfig:
     model_provider: str = "groq"
     model_name: str = "qwen-qwq-32b"
     temperature: float = 0.3
+    agent_evaluation_api: str = "https://agents-course-unit4-scoring.hf.space/"
     
     # For testing with Ollama
     api_base: Optional[str] = None
@@ -119,6 +121,75 @@ class GAIAState(TypedDict):
     
     # Execution tracking
     execution_successful: Optional[bool]
+
+# ============================================================================
+# Context bridge for execution tracking
+# ============================================================================
+class ContextBridge:
+    """Simple execution tracking integrated into GAIAAgent"""
+    
+    current_operation: ContextVar[Optional[str]] = ContextVar('current_operation', default=None)
+    step_counter: ContextVar[int] = ContextVar('step_counter', default=0)
+    execution_start: ContextVar[Optional[float]] = ContextVar('execution_start', default=None)
+    active_task_id: ContextVar[Optional[str]] = ContextVar('active_task_id', default=None)
+    last_error: ContextVar[Optional[str]] = ContextVar('last_error', default=None)
+    
+    @classmethod
+    def start_task_execution(cls, task_id: str):
+        """Start tracking task execution"""
+        cls.active_task_id.set(task_id)
+        cls.execution_start.set(time.time())
+        cls.step_counter.set(0)
+        cls.last_error.set(None)
+        print(f"🚀 Started execution tracking: {task_id}")
+    
+    @classmethod
+    def track_operation(cls, operation: str):
+        """Track current operation"""
+        cls.current_operation.set(operation)
+        current_step = cls.step_counter.get(0)
+        cls.step_counter.set(current_step + 1)
+        print(f"📝 Step {current_step + 1}: {operation}")
+    
+    @classmethod
+    def track_error(cls, error: str):
+        """Track error occurrence"""
+        cls.last_error.set(error)
+        cls.track_operation(f"ERROR: {error}")
+        print(f"❌ Error tracked: {error}")
+    
+    @classmethod
+    def get_execution_metrics(cls) -> Dict:
+        """Get current execution metrics"""
+        start_time = cls.execution_start.get()
+        return {
+            "execution_time": time.time() - start_time if start_time else 0,
+            "steps_executed": cls.step_counter.get(0),
+            "current_operation": cls.current_operation.get(),
+            "last_error": cls.last_error.get()
+        }
+    
+    @classmethod
+    def clear_tracking(cls):
+        """Clear execution tracking"""
+        task_id = cls.active_task_id.get()
+        metrics = cls.get_execution_metrics()
+        
+        cls.active_task_id.set(None)
+        cls.execution_start.set(None)
+        cls.step_counter.set(0)
+        cls.current_operation.set(None)
+        cls.last_error.set(None)
+        
+        print(f"🏁 Execution complete: {task_id}, {metrics['steps_executed']} steps, {metrics['execution_time']:.2f}s")
+
+def track(operation: str, config):
+    """Simple tracking helper"""
+    if config.enable_context_bridge:
+        try:
+            ContextBridge.track_operation(operation)
+        except:
+            pass    
 
 # ============================================================================
 # LLM RETRY LOGIC
@@ -192,31 +263,31 @@ def extract_file_info_from_task_id(task_id: str) -> Dict[str, str]:
     
     try:
         # Try to get file info from GAIA dataset
-        from gaia_dataset_utils import GAIADatasetManager
-        
-        # This should be passed in or configured, but for now use default path
-        dataset_manager = GAIADatasetManager("./tests/gaia_data")
-        
-        # Get the actual question data for this task_id
-        question_data = dataset_manager.get_question_by_id(task_id)
-        
-        if question_data:
-            file_name = question_data.get('file_name', '')
-            file_path = question_data.get('file_path', '')
-            has_file = bool(file_name)
+        try:
+            from gaia_dataset_utils import GAIADatasetManager
+            dataset_manager = GAIADatasetManager("./tests/gaia_data")
+            question_data = dataset_manager.get_question_by_id(task_id)
             
-            return {
-                "file_name": file_name,
-                "file_path": file_path, 
-                "has_file": has_file
-            }
-        else:
-            # Task not found in dataset
-            return {"file_name": "", "file_path": "", "has_file": False}
+            if question_data:
+                file_name = question_data.get('file_name', '')
+                file_path = question_data.get('file_path', '')
+                has_file = bool(file_name)
+                
+                return {
+                    "file_name": file_name,
+                    "file_path": file_path, 
+                    "has_file": has_file
+                }
+        except ImportError:
+            print("⚠️  GAIADatasetManager not available, using fallback")
+        except Exception as e:
+            print(f"⚠️  GAIA dataset error: {e}, using fallback")
+        
+        # Fallback: No file for arbitrary task_ids
+        return {"file_name": "", "file_path": "", "has_file": False}
             
     except Exception as e:
         print(f"⚠️  Could not extract file info for task {task_id}: {e}")
-        # For development/testing with arbitrary task_ids, return no file
         return {"file_name": "", "file_path": "", "has_file": False}
 
 def validate_gaia_format(answer: str) -> bool:
@@ -367,15 +438,14 @@ class GAIAAgent:
 
     def _download_file_once(self, task_id: str, file_name: str) -> Optional[str]:
         """
-        Download attached file once, reuse for all agents
+        Download attached file with comprehensive error handling
         """
         try:
-            # Production API endpoint
-            agent_evaluation_api = getattr(self.config, 'agent_evaluation_api', 
-                                         "https://agents-course-unit4-scoring.hf.space/")
+            # Use config field (make sure it's defined in GAIAConfig)
+            agent_evaluation_api = self.config.agent_evaluation_api
             file_url = f"{agent_evaluation_api}files/{task_id}"
             
-            print(f"📡 Single download request: {file_url}")
+            print(f"📡 Downloading: {file_url}")
             
             response = requests.get(
                 file_url,
@@ -385,7 +455,7 @@ class GAIAAgent:
             )
             
             if response.status_code == 200:
-                # Create temp file with correct extension (important for SmolagAgents)
+                # Create temp file with correct extension
                 file_extension = os.path.splitext(file_name)[1]
                 with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
                     for chunk in response.iter_content(chunk_size=8192):
@@ -393,13 +463,16 @@ class GAIAAgent:
                     local_path = tmp_file.name
                 
                 file_size = os.path.getsize(local_path)
-                print(f"✅ Downloaded once: {local_path} ({file_size} bytes)")
+                print(f"✅ Downloaded: {local_path} ({file_size} bytes)")
                 return local_path
                 
             else:
                 print(f"❌ Download failed: HTTP {response.status_code}")
                 return None
                 
+        except requests.RequestException as e:
+            print(f"❌ Network error downloading file: {e}")
+            return None
         except Exception as e:
             print(f"❌ Download error: {e}")
             return None
@@ -546,7 +619,7 @@ class GAIAAgent:
             logger=logger
         )
         
-        # 🔥 KEY: Wrap in ManagedAgents for hierarchy
+        # Wrap in ManagedAgents for hierarchy
         managed_specialists = [
             ManagedAgent(
                 agent=data_analyst,
@@ -596,7 +669,7 @@ class GAIAAgent:
     4. Synthesize results into final answer
     """,
             tools=[],  # No direct tools - delegates to managed agents
-            managed_agents=managed_specialists,  # 🔥 HIERARCHY: This creates the hierarchy
+            managed_agents=managed_specialists,
             additional_authorized_imports=[
                 "pathlib", "mimetypes", "re", "json", "os"
             ],
@@ -643,12 +716,13 @@ class GAIAAgent:
     ANALYSIS AND EXECUTION:
 
     1. PROBLEM ANALYSIS:
-    ```python
-    # Analyze the fundamental problem
-    question = "{question}"
-    print(f"Core problem: {{analyze_problem(question)}}")
-    print(f"Required capabilities: {{identify_capabilities(question)}}")
-    ```
+    Analyze the fundamental problem in this question:
+    - Is this primarily a mathematical calculation?
+    - Does it require current/recent information from the web?
+    - Does it involve file processing or data extraction?
+    - What type of reasoning is needed?
+
+    Consider the question: "{question}"
 
     2. FILE ANALYSIS (if present):
     ```python
@@ -680,57 +754,73 @@ class GAIAAgent:
     ```
 
     3. SPECIALIST SELECTION AND EXECUTION:
+    Based on your analysis, select the most appropriate specialist:
+
     ```python
-    # Select and execute appropriate specialist
+    # Select specialist based on question requirements
     question_lower = "{question}".lower()
 
-    if "calculate" in question_lower or "data" in question_lower:
+    # Determine best specialist based on question content and file type
+    if "calculate" in question_lower or "data" in question_lower or "number" in question_lower:
         if "{file_name}" and file_type == "data":
             selected_specialist = "analyze_data"
-            reasoning = "Data file + calculation requirements"
+            reasoning = "Data file + calculation requirements → analyze_data specialist"
         else:
             selected_specialist = "analyze_data"  
-            reasoning = "Calculation requirements"
+            reasoning = "Calculation requirements → analyze_data specialist"
     elif "current" in question_lower or "latest" in question_lower or "recent" in question_lower:
         selected_specialist = "search_web"
-        reasoning = "Current information needed"
+        reasoning = "Current information needed → search_web specialist"
     elif "{file_name}" and file_type in ["document_or_media", "unknown"]:
         selected_specialist = "process_document"
-        reasoning = "File processing required"
+        reasoning = "File processing required → process_document specialist"
     else:
-        # Default logic
-        if "{file_name}":
+        # Default logic based on question keywords
+        if any(keyword in question_lower for keyword in ["search", "find", "who", "when", "where", "what is"]):
+            selected_specialist = "search_web"
+            reasoning = "Information retrieval → search_web specialist"
+        elif "{file_name}":
             selected_specialist = best_specialist
-            reasoning = "File-based selection"
+            reasoning = "File-based selection → {{best_specialist}} specialist"
         else:
             selected_specialist = "search_web"
-            reasoning = "General information query"
+            reasoning = "General information query → search_web specialist"
 
     print(f"SELECTED SPECIALIST: {{selected_specialist}}")
     print(f"REASONING: {{reasoning}}")
     ```
 
     4. EXECUTE WITH SELECTED SPECIALIST:
-    Now execute the task using your selected specialist:
+    Now execute the task using your selected specialist. Remember:
 
-    If selected_specialist == "analyze_data":
-        # Use analyze_data for calculations and data processing
-        # File paths can be used directly in code
-        
-    If selected_specialist == "search_web":
-        # Use search_web for current information and facts
-        # No file processing needed
-        
-    If selected_specialist == "process_document":
-        # Use process_document for document/audio/video processing
-        # Files will be available via additional_args
+    - **analyze_data**: For Excel/CSV files and calculations. File paths can be used directly in your code.
+    - **search_web**: For current information and web searches. No file processing.
+    - **process_document**: For document/audio/video processing. Files available via additional_args.
 
-    EXECUTE NOW: Use your selected specialist to answer the question.
+    SPECIALIST EXECUTION GUIDELINES:
+
+    If using **analyze_data**:
+    - You can directly access files using pandas: `pd.read_excel("{file_path}")` or `pd.read_csv("{file_path}")`
+    - Use numerical computation libraries: numpy, scipy, statistics, math
+    - Perform calculations and data analysis directly in Python
+
+    If using **search_web**:
+    - Search for current information using GoogleSearchTool
+    - Use VisitWebpageTool to extract content from specific URLs
+    - Use WikipediaSearchTool for factual information
+
+    If using **process_document**:
+    - Use ContentRetrieverTool for document extraction (files via additional_args)
+    - Use SpeechToTextTool for audio transcription (files via additional_args)
+    - Handle PDFs, Word docs, audio, video, and other media files
+
+    EXECUTE NOW: Use your selected specialist to answer the question: "{question}"
 
     CRITICAL OUTPUT REQUIREMENTS:
     - End your final response with 'FINAL ANSWER: [specific answer]'
     - Follow GAIA format: numbers (no commas), strings (no articles), lists (comma separated)
     - Provide actual answers, never use placeholder text like "[your answer]"
+    - Be specific and factual in your response
     """
         
         return task
@@ -797,7 +887,7 @@ class GAIAAgent:
         # Start context bridge tracking
         if self.config.enable_context_bridge:
             ContextBridge.start_task_execution(task_id)
-            ContextBridge.track_operation("Processing question and extracting file info")
+            track("Processing question and extracting file info", self.config)
         
         if self.logging:
             self.logging.log_step("question_setup", f"Processing question: {question[:50]}...", {
@@ -883,8 +973,7 @@ class GAIAAgent:
         task_id = state.get("task_id", "")
         has_file = state.get("has_file", False)
         
-        if self.config.enable_context_bridge:
-            ContextBridge.track_operation("Analyzing question complexity")
+        track("Analyzing question complexity", self.config)
         
         if self.logging:
             self.logging.log_step("complexity_analysis", f"Analyzing complexity for: {question[:50]}...")
@@ -910,6 +999,8 @@ class GAIAAgent:
             reason = "LLM complexity assessment"
         
         print(f"📊 Complexity: {complexity} ({reason})")
+        
+        track(f"Complexity: {complexity} - {reason}", self.config)
         
         # Update context bridge
         if self.config.enable_context_bridge:
@@ -990,8 +1081,7 @@ class GAIAAgent:
         
         print("⚡ Using one-shot direct answering")
         
-        if self.config.enable_context_bridge:
-            ContextBridge.track_operation("Direct LLM answering for simple question")
+        track("Direct LLM answering for simple question", self.config)
         
         if self.logging:
             self.logging.set_routing_path("one_shot_llm")
@@ -1042,25 +1132,27 @@ class GAIAAgent:
 
     def _coordinator_node(self, state: GAIAState) -> GAIAState:
         """🔥 CORRECTED: Hierarchical coordinator node - Analysis and execution in one step"""
-        print(f"🧠 Hierarchical Coordinator: {state['question'][:80]}...")
+        print(f"🧠 Coordinator: {state['question'][:80]}...")
+        
+        track("Starting coordinator", self.config)
         
         if self.config.enable_context_bridge:
-            ContextBridge.track_operation("Starting hierarchical coordinator")
+            ContextBridge.track_operation("Starting coordinator")
         
         if self.logging:
-            self.logging.log_step("coordinator_start", "Starting hierarchical coordinator analysis and execution")
+            self.logging.log_step("coordinator_start", "Starting coordinator analysis and execution")
         
         try:
-            # 🔥 Create fresh coordinator with managed specialists for this task
+            # Create fresh coordinator with managed specialists for this task
             self.coordinator = self._create_coordinator()
             
-            # 🔥 Build integrated coordination task (analysis + execution)
+            # Build integrated coordination task (analysis + execution)
             coordination_task = self._build_coordinator_task(state)
             
             if self.config.enable_context_bridge:
-                ContextBridge.track_operation("Executing hierarchical coordinator with managed specialists")
+                ContextBridge.track_operation("Executing coordinator with managed specialists")
             
-            # 🔥 KEY: Execute coordinator with proper file access
+            #  Give coordinator file access
             file_path = state.get("file_path", "")
             
             if file_path:
@@ -1073,15 +1165,14 @@ class GAIAAgent:
                 # No file needed
                 coordination_result = self.coordinator.run(coordination_task)
             
-            if self.config.enable_context_bridge:
-                ContextBridge.track_operation("Hierarchical coordinator completed analysis and execution")
+            track("Hierarchical coordinator completed analysis and execution", self.config)
             
             print(f"✅ Hierarchical coordinator completed analysis and execution")
             
             if self.logging:
                 self.logging.log_step("coordinator_complete", "Hierarchical coordinator analysis and execution completed")
             
-            # 🔥 CHANGED: Return with execution results (not just analysis)
+            # Return with execution results (not just analysis)
             return {
                 **state,
                 "agent_used": "hierarchical_coordinator",
@@ -1091,7 +1182,7 @@ class GAIAAgent:
             }
             
         except Exception as e:
-            error_msg = f"Hierarchical coordinator failed: {str(e)}"
+            error_msg = f"Coordinator failed: {str(e)}"
             print(f"❌ {error_msg}")
             
             if self.config.enable_context_bridge:
@@ -1118,6 +1209,8 @@ class GAIAAgent:
         # Store question for formatting context
         self._current_question = question
         
+        track("Formatting final answer", self.config)
+        
         if self.config.enable_context_bridge:
             ContextBridge.track_operation("Formatting final answer")
         
@@ -1142,7 +1235,7 @@ class GAIAAgent:
             execution_metrics = {}
             if self.config.enable_context_bridge:
                 execution_metrics = ContextBridge.get_execution_metrics()
-                ContextBridge.track_operation(f"Final answer: {formatted_answer}")
+                track(f"Final answer: {formatted_answer}")
             
             return {
                 "final_answer": formatted_answer,
@@ -1153,11 +1246,8 @@ class GAIAAgent:
         except Exception as e:
             error_msg = f"Answer formatting error: {str(e)}"
             
-            if self.config.enable_context_bridge:
-                ContextBridge.track_operation(f"Format error: {error_msg}")
-                execution_metrics = ContextBridge.get_execution_metrics()
-            else:
-                execution_metrics = {}
+            track(f"Format error: {error_msg}", self.config)
+            execution_metrics = ContextBridge.get_execution_metrics() if self.config.enable_context_bridge else {}
             
             if self.logging:
                 self.logging.log_step("format_error", error_msg)
@@ -1230,10 +1320,7 @@ class GAIAAgent:
         return fallback
 
     def _apply_gaia_formatting(self, answer: str) -> str:
-        """
-        FIXED: Apply GAIA formatting rules to final answers
-        Addresses the doubling issue and improves format compliance
-        """
+        """GAIA formatting with safe regex operations"""
         if not answer:
             return "No answer"
         
@@ -1243,99 +1330,99 @@ class GAIAAgent:
         if self.logging:
             self.logging.log_step("gaia_format_start", f"Original answer: '{answer}'")
         
-        # FIXED: More aggressive duplicate FINAL ANSWER removal
-        # Handle various patterns that can cause duplication
+        # SAFE: Extract from FINAL ANSWER patterns
         final_answer_patterns = [
-            r'(?i)^.*?final\s*answer\s*:\s*(.*)$',  # Extract everything after FINAL ANSWER:
-            r'(?i)final\s*answer\s*:\s*(.+?)(?:\n|$)',  # Match until newline
-            r'(?i).*final\s*answer\s*:\s*(.+)',  # Match anything after FINAL ANSWER:
+            r'(?i)^.*?final\s*answer\s*:\s*(.*)$',
+            r'(?i)final\s*answer\s*:\s*(.+?)(?:\n|$)',
+            r'(?i).*final\s*answer\s*:\s*(.+)',
         ]
         
         for pattern in final_answer_patterns:
-            match = re.search(pattern, answer, re.DOTALL)
+            match = safe_regex_search(pattern, answer, re.DOTALL)
             if match:
                 extracted = match.group(1).strip()
-                if extracted:  # Only use if we got something meaningful
+                if extracted:
                     answer = extracted
                     if self.logging:
-                        self.logging.log_step("gaia_format_extract", f"Extracted from FINAL ANSWER: '{answer}'")
+                        self.logging.log_step("gaia_format_extract", f"Extracted: '{answer}'")
                     break
         
-        # Remove any remaining prefixes
+        # SAFE: Remove prefixes
         prefixes_to_remove = [
-            "final answer:", "the answer is:", "answer:", "result:", "solution:",
-            "the result is:", "therefore", "so", "thus", "final answer",
-            "the final answer is", "my answer is"
+            "final answer:", "the answer is:", "answer:", "result:",
+            "solution:", "the result is:", "therefore", "so", "thus"
         ]
         
         answer_lower = answer.lower()
         for prefix in prefixes_to_remove:
             if answer_lower.startswith(prefix):
                 answer = answer[len(prefix):].strip()
-                answer_lower = answer.lower()
                 break
         
-        # Remove quotes and excess punctuation
+        # Clean quotes and punctuation
         answer = answer.strip('.,!?:;"\'')
         
-        # Question-specific formatting requirements
+        # Question-specific formatting
         question = getattr(self, '_current_question', '').lower()
         
-        # Keep commas when explicitly requested
-        if "comma" in question and ("list" in question or "delimited" in question):
-            if self.logging:
-                self.logging.log_step("gaia_format_comma_list", "Preserving commas for comma-delimited list")
-            # Don't remove commas for comma-separated lists
-            pass
-        else:
-            # Standard GAIA rule: remove commas from numbers
-            if answer.replace('.', '').replace('-', '').replace(',', '').replace(' ', '').isdigit():
-                answer = answer.replace(',', '')
-                if self.logging:
-                    self.logging.log_step("gaia_format_number", f"Removed commas from number: '{answer}'")
+        # SAFE: Standard GAIA formatting
+        if not any(special in question for special in ["comma", "list", "countries"]):
+            # SAFE: Remove articles
+            answer = safe_regex_sub(r'\b(the|a|an)\s+', '', answer, re.IGNORECASE)
+            
+            # SAFE: Remove units (carefully)
+            if not any(keep_unit in question for keep_unit in ["$", "%", "units", "meters"]):
+                answer = safe_regex_sub(r'[^\w\s,.-]', '', answer)
         
-        # Handle rounding instructions
-        if "round" in question and "integer" in question:
-            numbers = re.findall(r'\d+', answer)
-            if numbers:
-                answer = numbers[0]  # Take first number found
-                if self.logging:
-                    self.logging.log_step("gaia_format_round", f"Extracted rounded integer: '{answer}'")
-        
-        # Extract count from descriptive answers
-        if "how many" in question and any(term in question for term in ["albums", "studio", "books", "papers"]):
-            numbers = re.findall(r'\b\d+\b', answer)
+        # SAFE: Extract numbers for specific question types
+        if "how many" in question:
+            numbers = safe_regex_findall(r'\b\d+\b', answer)
             if numbers:
                 answer = numbers[0]
-                if self.logging:
-                    self.logging.log_step("gaia_format_count", f"Extracted count: '{answer}'")
         
-        # Ensure alphabetical ordering in geographical questions
-        if "countries" in question and "comma separated" in question:
-            if "," in answer:
-                countries = [c.strip() for c in answer.split(",")]
-                countries.sort()
-                answer = ", ".join(countries)
-                if self.logging:
-                    self.logging.log_step("gaia_format_countries", f"Sorted countries: '{answer}'")
-        
-        # Standard GAIA formatting (only if not a special case above)
-        if not any(special in question for special in ["comma", "list", "countries"]):
-            # Remove articles (the, a, an) - but be careful with meaningful words
-            answer = re.sub(r'\b(the|a|an)\s+', '', answer, flags=re.IGNORECASE)
-            
-            # Remove units unless specified in question
-            if not any(keep_unit in question for keep_unit in ["$", "%", "units", "meters", "degrees", "km"]):
-                # Only remove obvious unit markers, not letters that might be part of the answer
-                answer = re.sub(r'[^\w\s,.-]', '', answer)
-        
-        # Clean up whitespace
+        # Clean whitespace
         answer = ' '.join(answer.split())
         
         if self.logging:
-            self.logging.log_step("gaia_format_final", f"Final GAIA formatted answer: '{answer}'")
+            self.logging.log_step("gaia_format_final", f"Final: '{answer}'")
         
         return answer
+
+    def safe_regex_search(pattern: str, text: str, flags=0):
+        """Safe regex search with error handling"""
+        if not isinstance(text, str):
+            return None
+            
+        try:
+            compiled_pattern = re.compile(pattern, flags)
+            return compiled_pattern.search(text)
+        except (re.error, MemoryError, Exception) as e:
+            print(f"⚠️  Regex search error: {e}")
+            return None
+
+    def safe_regex_sub(pattern: str, replacement: str, text: str, flags=0) -> str:
+        """Safely apply regex substitution with error handling"""
+        if not isinstance(text, str):
+            return str(text) if text is not None else ""
+        
+        try:
+            compiled_pattern = re.compile(pattern, flags)
+            return compiled_pattern.sub(replacement, text)
+        except (re.error, MemoryError, Exception) as e:
+            print(f"⚠️  Regex error: {e}, returning original text")
+            return text
+
+    def safe_regex_findall(pattern: str, text: str, flags=0) -> List[str]:
+        """Safe regex findall with error handling"""
+        if not isinstance(text, str):
+            return []
+            
+        try:
+            compiled_pattern = re.compile(pattern, flags)
+            return compiled_pattern.findall(text)
+        except (re.error, MemoryError, Exception) as e:
+            print(f"⚠️  Regex findall error: {e}")
+            return []
 
     def process_question(self, question: str, task_id: str = None) -> Dict:
         """

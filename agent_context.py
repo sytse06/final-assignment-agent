@@ -1,5 +1,3 @@
-# agent_context.py
-
 from contextvars import ContextVar
 from typing import Dict, Optional
 import time
@@ -24,6 +22,7 @@ class ContextBridge:
         cls.active_task_id.set(task_id)
         cls.execution_start.set(time.time())
         cls.step_counter.set(0)
+        cls.last_error.set(None)
         print(f"🚀 Started execution tracking: {task_id}")
     
     @classmethod
@@ -35,9 +34,11 @@ class ContextBridge:
         print(f"📝 Step {current_step + 1}: {operation}")
     
     @classmethod
-    def get_task_id(cls) -> Optional[str]:
-        """Get active task ID"""
-        return cls.active_task_id.get()
+    def track_error(cls, error: str):
+        """Track error occurrence"""
+        cls.last_error.set(error)
+        cls.track_operation(f"ERROR: {error}")
+        print(f"❌ Error tracked: {error}")
     
     @classmethod
     def get_execution_metrics(cls) -> Dict:
@@ -46,7 +47,8 @@ class ContextBridge:
         return {
             "execution_time": time.time() - start_time if start_time else 0,
             "steps_executed": cls.step_counter.get(0),
-            "current_operation": cls.current_operation.get()
+            "current_operation": cls.current_operation.get(),
+            "last_error": cls.last_error.get()
         }
     
     @classmethod
@@ -59,89 +61,18 @@ class ContextBridge:
         cls.execution_start.set(None)
         cls.step_counter.set(0)
         cls.current_operation.set(None)
+        cls.last_error.set(None)
         
         print(f"🏁 Execution complete: {task_id}, {metrics['steps_executed']} steps, {metrics['execution_time']:.2f}s")
 
-    @classmethod
-    def track_error(cls, error: str):
-        """Track error occurrence with automatic operation logging"""
-        cls.last_error.set(error)
-        cls.track_operation(f"ERROR: {error}")
-        print(f"❌ Error tracked: {error}")
-
-    # ================================
-    # INTEGRATION METHODS (GAIAState sync)
-    # ================================
-    
-    @classmethod
-    def get_current_error(cls) -> Optional[str]:
-        """Get current error for GAIAState integration"""
-        return cls.last_error.get()
-    
-    @classmethod
-    def has_error(cls) -> bool:
-        """Check if there's a current error"""
-        return cls.last_error.get() is not None
-    
-    @classmethod
-    def clear_error(cls):
-        """Clear current error (for recovery scenarios)"""
-        cls.last_error.set(None)
-        cls.track_operation("Error cleared - continuing execution")
-
 # ============================================================================
-# VALIDATION
+# SIMPLE INTEGRATION (Just use this in agent_logic.py)
 # ============================================================================
 
-def test_coordinator_readiness():
-    """Test that ContextBridge is ready for coordinator integration"""
-    
-    print("🧪 Testing Coordinator Readiness")
-    print("=" * 35)
-    
-    # Test 1: Clean start
-    ContextBridge.start_task_execution("coord_test_1")
-    assert ContextBridge.get_current_error() is None
-    assert not ContextBridge.has_error()
-    print("✅ Clean start - no error carryover")
-    
-    # Test 2: Error tracking and metrics
-    ContextBridge.track_error("Coordinator test error")
-    metrics = ContextBridge.get_execution_metrics()
-    assert metrics['last_error'] == "Coordinator test error"
-    assert ContextBridge.has_error()
-    print("✅ Error tracking and metrics integration")
-    
-    # Test 3: Error recovery
-    ContextBridge.clear_error()
-    assert not ContextBridge.has_error()
-    print("✅ Error recovery mechanism")
-    
-    # Test 4: Clean shutdown
-    ContextBridge.clear_tracking()
-    print("✅ Clean shutdown")
-    
-    # Test 5: New task isolation
-    ContextBridge.start_task_execution("coord_test_2")
-    assert ContextBridge.get_current_error() is None
-    print("✅ Task isolation - errors don't carry over")
-    
-    ContextBridge.clear_tracking()
-    print("\n🎯 ContextBridge ready for new task")
-
-if __name__ == "__main__":
-    print("🔥 Enhanced ContextBridge - Coordinator Ready")
-    print("=" * 50)
-    print("✅ Complete error integration:")
-    print("   - Error reset on task start")
-    print("   - Error included in metrics")
-    print("   - Error cleared on tracking clear")
-    print("   - GAIAState synchronization ready")
-    print("")
-    
-    test_coordinator_readiness()
-    
-    print("\n🚀 Ready for coordinator node implementation!")
-    print("   - Error tracking: Complete")
-    print("   - GAIAState sync: Ready")
-    print("   - Task isolation: Working")
+def track(operation: str, config):
+    """Simple tracking - just one function"""
+    if config.enable_context_bridge:
+        try:
+            ContextBridge.track_operation(operation)
+        except:
+            pass  # Silent fail - don't care about errors
