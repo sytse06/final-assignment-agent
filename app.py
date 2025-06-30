@@ -1,4 +1,4 @@
-# app.py - Course Integration Adapter
+# app.py - Course Integration Adapter with Quick Test
 import os
 import gradio as gr
 import requests
@@ -50,6 +50,51 @@ class GAIAAgent:
             return "Paris"
         else:
             return "Question processed"
+
+# Quick test function for individual question testing
+def quick_test_question(question: str) -> str:
+    """Quick single question test function"""
+    if not question.strip():
+        return "❓ Please enter a question to test"
+    
+    if not SYSTEM_AVAILABLE:
+        return "❌ System not available - agent import failed"
+    
+    try:
+        # Create a test agent with minimal config
+        config = get_openrouter_config()
+        
+        # Disable logging for testing
+        if hasattr(config, '__dataclass_fields__'):
+            config.enable_csv_logging = False
+            config.debug_mode = False
+            config.max_agent_steps = 5
+        else:
+            config.update({
+                "enable_csv_logging": False, 
+                "debug_mode": False,
+                "max_agent_steps": 5
+            })
+        
+        agent = create_gaia_agent(config)
+        result = agent.run_single_question(question)
+        
+        # Format result
+        answer = result.get('final_answer', 'No answer')
+        complexity = result.get('complexity', 'unknown')
+        steps = len(result.get('steps', []))
+        
+        return f"""✅ **Test Successful!**
+**Question:** {question}
+**Answer:** {answer}
+**Complexity:** {complexity}
+**Steps:** {steps}
+**Status:** Agent working correctly! 🚀"""
+        
+    except Exception as e:
+        return f"""❌ **Test Failed:**
+**Error:** {str(e)}
+**Status:** Check logs for details"""
 
 def run_and_submit_all(profile: gr.OAuthProfile | None):
     space_id = os.getenv("SPACE_ID")
