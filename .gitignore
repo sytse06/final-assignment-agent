@@ -1,0 +1,16 @@
+# === ONLY INCLUDE ESSENTIAL DEPLOY FILES ===
+*
+!.gitignore
+!agent_logic.py
+!agent_interface.py
+!agent_logging.py
+!agent_testing.py
+!dev_retriever.py
+!gaia_embeddings.csv
+!gaia_dataset_utils.py
+!metadata.json
+!metadata.jsonl
+!app.py
+!requirements.txt
+!README.md
+!*_tool.py
