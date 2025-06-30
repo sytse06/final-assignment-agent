@@ -31,7 +31,6 @@ pandas = "^2.0.0"
 python-dotenv = "^1.0.0"
 
 # AI/ML framework - Compatible versions for Gradio 5.x
-smolagents = "^1.17.0"
 transformers = "^4.40.0"
 huggingface-hub = "^0.33.0"  # Required by Gradio 5.x
 torch = "^2.1.0"
@@ -85,6 +84,8 @@ scikit-learn = "^1.7.0"
 xlrd = "^2.0.2"
 python-pptx = "^1.0.2"
 mimetype = "^0.1.5"
+wikipedia-api = "^0.8.1"
+smolagents = {extras = ["transformers"], version = "^1.19.0"}
 
 [tool.poetry.group.dev.dependencies]
 # Testing

@@ -43,11 +43,11 @@ from dev_retriever import load_gaia_retriever
 from agent_logging import AgentLoggingSetup
 
 try:
-    from tools import (ContentRetrieverTool)
+    from tools.content_retriever_tool import (ContentRetrieverTool)
     CUSTOM_TOOLS_AVAILABLE = True
-    print("✅ Custom tools imported successfully")
+    print("✅ ContentRetrieverTool imported")
 except ImportError as e:
-    print(f"⚠️  Custom tools not available: {e}")
+    print(f"⚠️  ContentRetrieverTool not available: {e}")
     CUSTOM_TOOLS_AVAILABLE = False
 
 # ============================================================================
@@ -73,7 +73,6 @@ class GAIAConfig:
     # Agent settings
     max_agent_steps: int = 15
     planning_interval: int = 5
-    use_structured_outputs: bool = True
         
     # Routing settings
     enable_smart_routing: bool = True
@@ -185,11 +184,13 @@ class ContextBridge:
 
 def track(operation: str, config):
     """Simple tracking helper"""
-    if config.enable_context_bridge:
+    if config and config.enable_context_bridge:
         try:
             ContextBridge.track_operation(operation)
-        except:
-            pass    
+        except Exception as e:
+            if hasattr(config, 'debug_mode') and config.debug_mode:
+                print(f"⚠️  Tracking error: {e}")
+            pass  
 
 # ============================================================================
 # LLM RETRY LOGIC
@@ -305,13 +306,14 @@ def validate_gaia_format(answer: str) -> bool:
 # MAIN GAIA AGENT
 # ============================================================================
 class GAIAAgent:
-    """GAIA agent using SmolagAgents coordinator pattern within LangGraph workflow"""
+    """Initializing GAIA Agent with SmolagAgents coordinator pattern embedded in LangGraph workflow"""
     
     def __init__(self, config: Optional[GAIAConfig] = None) -> None:
         if config is None:
             config = GAIAConfig()
         
         self.config: GAIAConfig = config
+        print("🔄 Initializing core components...")
         self.retriever: Any = self._initialize_retriever()
         self.orchestration_model: Any = self._initialize_orchestration_model()  # LangChain for workflow
         self.specialist_model: LiteLLMModel = self._initialize_specialist_model()        # LiteLLM for SmolagAgents
@@ -326,14 +328,67 @@ class GAIAAgent:
         else:
             self.logging: Optional[AgentLoggingSetup] = None
         
-        # Create coordinator and specialists (will be created fresh for each task)
+        # 🔥 CRITICAL: IMMEDIATE SMOLAGENT VALIDATION
+        print("🔍 Validating SmolagAgent components...")
+        
+        try:
+            # Test specialist creation immediately - this will reveal parameter issues
+            print("  → Testing specialist agents creation...")
+            test_specialists = self._create_specialist_agents()
+            print(f"  ✅ Created {len(test_specialists)} specialists successfully")
+            print(f"     Specialists: {list(test_specialists.keys())}")
+            
+            # Test coordinator creation immediately - this will reveal managed_agents issues
+            print("  → Testing coordinator creation...")
+            test_coordinator = self._create_coordinator()
+            print("  ✅ Coordinator created successfully")
+            print(f"     Managed agents: {len(test_coordinator.managed_agents) if hasattr(test_coordinator, 'managed_agents') else 'Unknown'}")
+            
+            # Test a simple coordinator task to validate full pipeline
+            print("  → Testing coordinator execution...")
+            simple_test_result = test_coordinator.run("What is 2+2? Answer with just the number.")
+            print(f"  ✅ Coordinator execution test successful")
+            print(f"     Result preview: {str(simple_test_result)[:50]}...")
+            
+            # Store validated components for later use
+            self._validated_specialists = test_specialists
+            self._validated_coordinator = test_coordinator
+            
+        except Exception as e:
+            print(f"\n❌ SMOLAGENT VALIDATION FAILED!")
+            print(f"   Error: {str(e)}")
+            print(f"   Type: {type(e).__name__}")
+            print(f"   Module: {getattr(e, '__module__', 'Unknown')}")
+            
+            # Additional debugging info
+            import traceback
+            print(f"\n🔍 Full traceback:")
+            traceback.print_exc()
+            
+            print(f"\n💡 This error occurred during SmolagAgent initialization.")
+            print(f"   Common causes:")
+            print(f"   - SmolagAgent API changes (deprecated parameters)")
+            print(f"   - Missing dependencies or version mismatches")
+            print(f"   - Configuration parameter conflicts")
+            print(f"   - Model initialization issues")
+            
+            # Re-raise with clear context
+            raise RuntimeError(f"SmolagAgent initialization failed during {e.__class__.__name__}: {str(e)}") from e
+        
+        print("✅ All SmolagAgent components validated successfully!")
+        
+        # Initialize coordinator as None (will be created fresh for each task)
         self.coordinator: Optional[CodeAgent] = None
         
-        # Build workflow
-        self.workflow: Any = self._build_workflow()  # StateGraph type is complex
+        # Build LangGraph workflow
+        print("🔄 Building LangGraph workflow...")
+        self.workflow: Any = self._build_workflow()
         
-        print("🚀 GAIA Agent initialized with SmolagAgents coordinator pattern!")
-    
+        print("🚀 GAIA Agent initialization complete!")
+        print("   → SmolagAgent validation: ✅ PASSED")
+        print("   → LangGraph workflow: ✅ BUILT") 
+        print("   → Ready for question processing")
+            
     def _initialize_retriever(self):
         """Initialize retriever for similar questions in manager context."""
         try:
@@ -567,7 +622,7 @@ class GAIAAgent:
     # ============================================================================        
 
     def _create_specialist_agents(self) -> Dict[str, Any]:
-        """Create specialist agents using smolagents pattern""""
+        """Create specialist agents using smolagents pattern"""
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         
         # 1. Data Analyst - CodeAgent for direct Python file access
@@ -583,7 +638,6 @@ class GAIAAgent:
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
             add_base_tools=True,
-            use_structured_outputs_internally=True,
             logger=logger
         )
         
@@ -601,12 +655,18 @@ class GAIAAgent:
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
             add_base_tools=True,
-            use_structured_outputs_internally=True,
             logger=logger
         )
         
         # 3. Document Processor - ToolCallingAgent for file processing
-        doc_tools = [SpeechToTextTool()]
+        doc_tools = []
+        try:
+            doc_tools.append(SpeechToTextTool())
+        except ImportError:
+            print("⚠️  SpeechToTextTool requires transformers - skipping")
+
+        if CUSTOM_TOOLS_AVAILABLE:
+            doc_tools.append(ContentRetrieverTool())
         
         if CUSTOM_TOOLS_AVAILABLE:
             doc_tools.append(ContentRetrieverTool())
@@ -618,7 +678,6 @@ class GAIAAgent:
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
             add_base_tools=True,
-            use_structured_outputs_internally=True,
             logger=logger
         )
         
@@ -634,10 +693,10 @@ class GAIAAgent:
         print(f"   web_researcher: ToolCallingAgent with web search tools")
         print(f"   document_processor: ToolCallingAgent with document/audio tools")
         
-        return managed_specialists
+        return specialist_agents
 
     def _create_coordinator(self) -> CodeAgent:
-        """Create hierarchical coordinator using smolagents pattern"""
+        """Create coordinator using smolagents hierarchical pattern"""
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         
         # Define specialists
@@ -846,7 +905,6 @@ class GAIAAgent:
                 }
             )
             
-            # 🔥 OPTIMIZED: Direct flow from coordinator to format (skip superfluous node)
             builder.add_edge("coordinator", "format_answer")
             
             # Simple workflow: one-shot → format
@@ -858,11 +916,10 @@ class GAIAAgent:
         else:
             # Linear workflow with optimized coordinator
             builder.add_node("read_question", self._read_question_node)
-            builder.add_node("coordinator", self._coordinator_node)  # 🔥 Does analysis + execution
-            # 🔥 REMOVED: "specialist_execution" node - no longer needed
+            builder.add_node("coordinator", self._coordinator_node)
             builder.add_node("format_answer", self._format_answer_node)
             
-            # 🔥 OPTIMIZED: Direct flow - read → coordinate → format (skip superfluous node)
+            # Direct flow - read → coordinate → format
             builder.add_edge(START, "read_question")
             builder.add_edge("read_question", "coordinator")
             builder.add_edge("coordinator", "format_answer")
@@ -1379,42 +1436,6 @@ class GAIAAgent:
         
         return answer
 
-    def safe_regex_search(pattern: str, text: str, flags=0):
-        """Safe regex search with error handling"""
-        if not isinstance(text, str):
-            return None
-            
-        try:
-            compiled_pattern = re.compile(pattern, flags)
-            return compiled_pattern.search(text)
-        except (re.error, MemoryError, Exception) as e:
-            print(f"⚠️  Regex search error: {e}")
-            return None
-
-    def safe_regex_sub(pattern: str, replacement: str, text: str, flags=0) -> str:
-        """Safely apply regex substitution with error handling"""
-        if not isinstance(text, str):
-            return str(text) if text is not None else ""
-        
-        try:
-            compiled_pattern = re.compile(pattern, flags)
-            return compiled_pattern.sub(replacement, text)
-        except (re.error, MemoryError, Exception) as e:
-            print(f"⚠️  Regex error: {e}, returning original text")
-            return text
-
-    def safe_regex_findall(pattern: str, text: str, flags=0) -> List[str]:
-        """Safe regex findall with error handling"""
-        if not isinstance(text, str):
-            return []
-            
-        try:
-            compiled_pattern = re.compile(pattern, flags)
-            return compiled_pattern.findall(text)
-        except (re.error, MemoryError, Exception) as e:
-            print(f"⚠️  Regex findall error: {e}")
-            return []
-
     def process_question(self, question: str, task_id: str = None) -> Dict:
         """
         Main entry point with context bridge integration.
@@ -1515,6 +1536,43 @@ class GAIAAgent:
                 "selected_agent": "error",
                 "file_info": {"file_name": "", "file_path": "", "has_file": False}
             }
+
+def safe_regex_search(pattern: str, text: str, flags=0):
+    """Safe regex search with error handling"""
+    if not isinstance(text, str):
+        return None
+        
+    try:
+        compiled_pattern = re.compile(pattern, flags)
+        return compiled_pattern.search(text)
+    except (re.error, MemoryError, Exception) as e:
+        print(f"⚠️  Regex search error: {e}")
+        return None
+
+def safe_regex_sub(pattern: str, replacement: str, text: str, flags=0) -> str:
+    """Safely apply regex substitution with error handling"""
+    if not isinstance(text, str):
+        return str(text) if text is not None else ""
+    
+    try:
+        compiled_pattern = re.compile(pattern, flags)
+        return compiled_pattern.sub(replacement, text)
+    except (re.error, MemoryError, Exception) as e:
+        print(f"⚠️  Regex error: {e}, returning original text")
+        return text
+
+def safe_regex_findall(pattern: str, text: str, flags=0) -> List[str]:
+    """Safe regex findall with error handling"""
+    if not isinstance(text, str):
+        return []
+        
+    try:
+        compiled_pattern = re.compile(pattern, flags)
+        return compiled_pattern.findall(text)
+    except (re.error, MemoryError, Exception) as e:
+        print(f"⚠️  Regex findall error: {e}")
+        return []
+
 
 # ============================================================================
 # MAIN EXECUTION

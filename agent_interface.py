@@ -32,10 +32,23 @@ def get_openrouter_config() -> GAIAConfig:
     """OpenRouter configuration"""
     return GAIAConfig(
         model_provider="openrouter",
-        model_name="google/gemini-2.0-flash",
+        model_name="google/gemini-2.5-flash",
         temperature=0.1,
         enable_smart_routing=True,
         enable_csv_logging=True
+    )
+    
+def get_ollama_config(model_name: str = "devstral-16k") -> GAIAConfig:
+    """Get Ollama configuration with enhanced defaults"""
+    return GAIAConfig(
+        model_provider="ollama",
+        model_name=model_name,
+        temperature=0.1,
+        max_agent_steps=15,
+        enable_smart_routing=True,
+        skip_rag_for_simple=True,
+        enable_csv_logging=True,
+        debug_mode=True
     )
 
 def get_performance_config() -> GAIAConfig:
