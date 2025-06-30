@@ -6,7 +6,7 @@ import pandas as pd
 
 # Import existing system
 try:
-    from agent_interface import create_gaia_agent, get_groq_config
+    from agent_interface import create_gaia_agent, get_openrouter_config
     SYSTEM_AVAILABLE = True
 except ImportError:
     SYSTEM_AVAILABLE = False
@@ -19,10 +19,19 @@ class GAIAAgent:
         
         if SYSTEM_AVAILABLE:
             try:
-                config = get_groq_config()
-                config.update({"enable_csv_logging": False, "debug_mode": False})
+                config = get_openrouter_config()
+                
+                # Handle both dataclass and dict config types
+                if hasattr(config, '__dataclass_fields__'):
+                    # It's a dataclass - set attributes directly
+                    config.enable_csv_logging = False
+                    config.debug_mode = False
+                else:
+                    # It's a dict - use update method
+                    config.update({"enable_csv_logging": False, "debug_mode": False})
+                
                 self.agent = create_gaia_agent(config)
-                print("Agent initialized")
+                print("Agent initialized with OpenRouter + Gemini 2.5 Flash")
             except Exception as e:
                 print(f"Agent initialization failed: {e}")
     

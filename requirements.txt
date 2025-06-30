@@ -1,51 +1,73 @@
-# Core dependencies
+# Core application dependencies  
 gradio>=5.13.2
 requests>=2.32.3
 pandas>=2.0.0
 python-dotenv>=1.0.0
 
-# AI/ML framework
+# AI/ML framework - Compatible with Gradio 5.x
 transformers>=4.40.0
 huggingface-hub>=0.33.0
 torch>=2.1.0
+datasets>=2.14.0
+evaluate>=0.4.0
 
-# SmolagAgents with transformers support
+# SmolagAgents with transformers support - CRITICAL
 smolagents[transformers]>=1.19.0
 
-# LangChain ecosystem
+# LangChain ecosystem for multi-agent coordination
 langchain-community>=0.3.24
 langchain-huggingface>=0.2.0
 langgraph>=0.4.8
+langchain-openai>=0.3.19
 langchain-groq>=0.3.2
 langchain-google-genai>=2.1.5
+langchain-ollama>=0.3.3
 
-# Model providers
-groq>=0.4.0
+# Model providers and utilities
 litellm>=1.72.1
+backoff>=2.2.1
 
-# File processing
+# Data processing and file handling
 beautifulsoup4>=4.12.0
 pillow>=11.0.0
 openpyxl>=3.1.0
 pypdf2>=3.0.0
 python-docx>=1.1.0
+python-pptx>=1.0.2
 
 # Scientific computing
 numpy>=2.0.0,<3.0.0
 scipy>=1.11.0
+scikit-learn>=1.7.0
 
 # Document processing
 docling>=2.36.1
 pymupdf>=1.26.1
+markdownify>=1.1.0
 
-# Web scraping
-duckduckgo-search>=8.0.2
+# Web scraping and search
 lxml>=5.3.0
+duckduckgo-search>=8.0.2
+wikipedia>=1.4.0
+arxiv>=2.2.0
 
 # RAG and embeddings
 sentence-transformers>=4.1.0
 weaviate-client>=4.14.4
 langchain-weaviate>=0.0.5
 
-# Utilities
-backoff>=2.2.1
+# File format support
+xlrd>=2.0.2
+
+# Optional but useful
+seaborn>=0.13.2
+wikipedia-api>=0.8.1
+
+# Media processing (comment out if hitting size limits)
+# librosa>=0.10.0
+# soundfile>=0.12.0
+# yt-dlp>=2025.6.25
+
+# Web automation (comment out if not needed)
+# selenium>=4.15.0
+# webdriver-manager>=4.0.2itsdangerous>=2.0.0
