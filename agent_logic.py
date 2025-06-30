@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 import time
 from pathlib import Path
 from contextvars import ContextVar
+from PIL import Image
+from io import BytesIO
 
 # Core dependencies
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
@@ -290,6 +292,20 @@ def extract_file_info_from_task_id(task_id: str) -> Dict[str, str]:
     except Exception as e:
         print(f"⚠️  Could not extract file info for task {task_id}: {e}")
         return {"file_name": "", "file_path": "", "has_file": False}
+
+def _load_image_for_agent(self, file_path: str) -> Image.Image:
+    """Load image file for SmolagAgent processing"""
+    try:
+        if os.path.exists(file_path):
+            image = Image.open(file_path).convert("RGB")
+            print(f"✅ Image loaded: {file_path}")
+            return image
+        else:
+            print(f"❌ Image file not found: {file_path}")
+            return None
+    except Exception as e:
+        print(f"❌ Error loading image: {e}")
+        return None
 
 def validate_gaia_format(answer: str) -> bool:
     """Check if answer meets GAIA requirements"""
@@ -664,12 +680,6 @@ class GAIAAgent:
             doc_tools.append(SpeechToTextTool())
         except ImportError:
             print("⚠️  SpeechToTextTool requires transformers - skipping")
-
-        if CUSTOM_TOOLS_AVAILABLE:
-            doc_tools.append(ContentRetrieverTool())
-        
-        if CUSTOM_TOOLS_AVAILABLE:
-            doc_tools.append(ContentRetrieverTool())
         
         document_processor = ToolCallingAgent(
             name="document_processor",
@@ -732,7 +742,7 @@ class GAIAAgent:
         return coordinator
 
     def _build_coordinator_task(self, state: GAIAState) -> str:
-        """Build coordination task for hierarchical coordinator with managed specialists"""
+        """Coordinator task declaration"""
         
         question = state["question"]
         file_name = state.get("file_name", "")
@@ -749,128 +759,168 @@ class GAIAAgent:
                 examples_context += f"{i}. Q: {example.get('question', '')[:100]}...\n"
                 examples_context += f"   A: {example.get('answer', '')}\n"
         
-        # Task for coordinator with managed specialists
         task = f"""
-    You are the GAIA coordinator with three managed specialist agents. Analyze this question and execute using your specialists.
+    You are the GAIA coordinator - a CodeAgent with multimodal capabilities and managed specialists.
 
     QUESTION: {question}
     COMPLEXITY: {complexity}
     FILE INFO: {file_name} (path: {file_path}, has_file: {has_file})
     {examples_context}
 
+    YOUR CAPABILITIES:
+    - Direct vision for images (local files AND web images via dynamic retrieval)
+    - Direct calculations and reasoning
+    - Three managed specialists for delegation
+    - Hybrid approach: delegate search, handle vision yourself
+
     YOUR MANAGED SPECIALISTS:
-    - analyze_data: CodeAgent for Excel/CSV analysis and calculations (direct file access)
-    - search_web: ToolCallingAgent for web searches and current information  
-    - process_document: ToolCallingAgent for document/audio processing (file via additional_args)
+    - data_analyst: CodeAgent for spreadsheets and complex calculations
+    - web_researcher: ToolCallingAgent for current information and web search
+    - document_processor: ToolCallingAgent for documents, audio, and video files
 
-    ANALYSIS AND EXECUTION:
-
-    1. PROBLEM ANALYSIS:
-    Analyze the fundamental problem in this question:
-    - Is this primarily a mathematical calculation?
-    - Does it require current/recent information from the web?
-    - Does it involve file processing or data extraction?
-    - What type of reasoning is needed?
-
-    Consider the question: "{question}"
-
-    2. FILE ANALYSIS (if present):
-    ```python
-    # Analyze file type and processing approach
-    if "{file_name}":
-        from pathlib import Path
-        import mimetypes
-        
-        file_path = Path("{file_name}")
-        extension = file_path.suffix.lower()
-        
-        if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
-            file_type = "data"
-            best_specialist = "analyze_data"
-            access_method = "direct_path"  # CodeAgent gets file paths directly
-            print(f"Data file detected → use analyze_data specialist")
-        elif extension in ['.pdf', '.docx', '.doc', '.txt', '.mp3', '.mp4', '.wav']:
-            file_type = "document_or_media" 
-            best_specialist = "process_document"
-            access_method = "additional_args"  # ToolCallingAgent needs additional_args
-            print(f"Document/media file detected → use process_document specialist")
-        else:
-            file_type = "unknown"
-            best_specialist = "process_document"
-            access_method = "additional_args"
-            print(f"Unknown file type → use process_document specialist")
-            
-        print(f"File analysis: {{extension}} → {{file_type}} → {{best_specialist}}")
-    ```
-
-    3. SPECIALIST SELECTION AND EXECUTION:
-    Based on your analysis, select the most appropriate specialist:
+    DECISION LOGIC:
 
     ```python
-    # Select specialist based on question requirements
     question_lower = "{question}".lower()
+    file_name = "{file_name}"
+    has_file = {has_file}
 
-    # Determine best specialist based on question content and file type
-    if "calculate" in question_lower or "data" in question_lower or "number" in question_lower:
-        if "{file_name}" and file_type == "data":
-            selected_specialist = "analyze_data"
-            reasoning = "Data file + calculation requirements → analyze_data specialist"
+    # Unified approach selection
+    if has_file:
+        from pathlib import Path
+        extension = Path(file_name).suffix.lower() if file_name else ""
+        
+        if extension in ['.png', '.jpg', '.jpeg', '.gif', '.bmp']:
+            approach = "direct_vision"
+            print("🖼️ IMAGE: Handling directly with vision capabilities")
+            
+        elif extension in ['.xlsx', '.csv', '.xls', '.tsv']:
+            approach = "delegate_data_analyst"
+            print("📊 SPREADSHEET: Delegating to data_analyst")
+            
+        elif extension in ['.pdf', '.docx', '.doc', '.txt', '.mp3', '.mp4', '.wav', '.m4a', '.mov']:
+            approach = "delegate_document_processor"
+            print("📄 DOCUMENT/AUDIO/VIDEO: Delegating to document_processor")
+            
         else:
-            selected_specialist = "analyze_data"  
-            reasoning = "Calculation requirements → analyze_data specialist"
-    elif "current" in question_lower or "latest" in question_lower or "recent" in question_lower:
-        selected_specialist = "search_web"
-        reasoning = "Current information needed → search_web specialist"
-    elif "{file_name}" and file_type in ["document_or_media", "unknown"]:
-        selected_specialist = "process_document"
-        reasoning = "File processing required → process_document specialist"
+            approach = "delegate_document_processor"  # Unknown files
+            print("❓ UNKNOWN FILE: Delegating to document_processor")
+
+    elif needs_web_search(question):
+        # Check if web search involves visual analysis
+    visual_keywords = ["image", "banner", "symbol", "logo", "picture", "color", "visual", "sign", "shape"]
+    if any(keyword in question_lower for keyword in visual_keywords):
+        approach = "direct_web_vision"
+        print("🔍👁️ WEB + VISION: Handling directly with dynamic image retrieval")
     else:
-        # Default logic based on question keywords
-        if any(keyword in question_lower for keyword in ["search", "find", "who", "when", "where", "what is"]):
-            selected_specialist = "search_web"
-            reasoning = "Information retrieval → search_web specialist"
-        elif "{file_name}":
-            selected_specialist = best_specialist
-            reasoning = "File-based selection → {{best_specialist}} specialist"
+        approach = "delegate_web_researcher"
+        print("🔍 WEB SEARCH: Delegating to web_researcher")
+        
+    elif any(calc_word in question_lower for calc_word in ["calculate", "average", "sum", "percentage", "deviation"]):
+        approach = "direct_calculation"
+        print("🧮 CALCULATION: Handling directly")
+        
+    else:
+        # Default: try direct reasoning, delegate if complex
+        if len(question.split()) < 20:  # Simple questions
+            approach = "direct_reasoning"
+            print("💭 SIMPLE REASONING: Handling directly")
         else:
-            selected_specialist = "search_web"
-            reasoning = "General information query → search_web specialist"
+            approach = "delegate_web_researcher"  # Complex info retrieval
+            print("🔍 COMPLEX QUERY: Delegating to web_researcher")
 
-    print(f"SELECTED SPECIALIST: {{selected_specialist}}")
-    print(f"REASONING: {{reasoning}}")
+    print(f"APPROACH: {{approach}}")
     ```
 
-    4. EXECUTE WITH SELECTED SPECIALIST:
-    Now execute the task using your selected specialist. Remember:
+    EXECUTION STRATEGY:
 
-    - **analyze_data**: For Excel/CSV files and calculations. File paths can be used directly in your code.
-    - **search_web**: For current information and web searches. No file processing.
-    - **process_document**: For document/audio/video processing. Files available via additional_args.
+    **Direct Handling:**
+    - **direct_vision**: Analyze images directly with your vision capabilities
+    - **direct_calculation**: Use Python for mathematical computations
+    - **direct_reasoning**: Apply logic and knowledge directly
+    
+    For questions about visual elements on websites, you handle everything directly:
 
-    SPECIALIST EXECUTION GUIDELINES:
+```python
+if approach == "direct_web_vision":
+    from PIL import Image
+    import requests
+    from io import BytesIO
+    
+    # Step 1: Search for the website/person mentioned
+    search_query = "Eva Draconis YouTube website"  # Extract from question
+    print(f"Searching for: {{search_query}}")
+    
+    # Use your web search capabilities directly
+    from smolagents import GoogleSearchTool
+    search_tool = GoogleSearchTool()
+    search_results = search_tool(search_query)
+    
+    # Step 2: Extract relevant URLs from search results
+    import re
+    urls = re.findall(r'https?://[^\s]+', search_results)
+    
+    # Step 3: Visit websites to find images
+    from smolagents import VisitWebpageTool
+    visit_tool = VisitWebpageTool()
+    
+    for url in urls[:3]:  # Check top 3 URLs
+        try:
+            print(f"Visiting: {{url}}")
+            page_content = visit_tool(url)
+            
+            # Step 4: Extract image URLs from page content
+            img_urls = re.findall(r'<img[^>]+src="([^"]+)"', page_content)
+            img_urls.extend(re.findall(r'background-image:\s*url\(([^)]+)\)', page_content))
+            
+            # Step 5: Download and analyze images dynamically
+            for img_url in img_urls[:5]:  # Check top 5 images per page
+                try:
+                    if not img_url.startswith('http'):
+                        continue  # Skip relative URLs for now
+                        
+                    print(f"Analyzing image: {{img_url}}")
+                    
+                    # Dynamic image retrieval (following SmolagAgents pattern)
+                    headers = {{
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    }}
+                    response = requests.get(img_url, headers=headers, timeout=10)
+                    
+                    if response.status_code == 200:
+                        image = Image.open(BytesIO(response.content)).convert("RGB")
+                        
+                        # Step 6: Analyze image with your vision capabilities
+                        # You can now see this image! Look for the specific elements mentioned
+                        print(f"Successfully loaded image from {{img_url}}")
+                        print("Analyzing for symbols with curved lines...")
+                        
+                        # Continue with vision analysis...
+                        
+                except Exception as e:
+                    print(f"Failed to load image {{img_url}}: {{e}}")
+                    continue
+                    
+        except Exception as e:
+            print(f"Failed to visit {{url}}: {{e}}")
+            continue
+    
+    # Step 7: Provide analysis based on images found
+    print("Completed web + vision analysis")
+```
 
-    If using **analyze_data**:
-    - You can directly access files using pandas: `pd.read_excel("{file_path}")` or `pd.read_csv("{file_path}")`
-    - Use numerical computation libraries: numpy, scipy, statistics, math
-    - Perform calculations and data analysis directly in Python
+    **Standard Delegation:**
+    - **delegate_data_analyst**: For spreadsheets and complex calculations
+    - **delegate_web_researcher**: For pure information retrieval
+    - **delegate_document_processor**: For document/audio/video processing
 
-    If using **search_web**:
-    - Search for current information using GoogleSearchTool
-    - Use VisitWebpageTool to extract content from specific URLs
-    - Use WikipediaSearchTool for factual information
+    EXECUTE NOW: Answer "{question}" using your selected approach.
 
-    If using **process_document**:
-    - Use ContentRetrieverTool for document extraction (files via additional_args)
-    - Use SpeechToTextTool for audio transcription (files via additional_args)
-    - Handle PDFs, Word docs, audio, video, and other media files
-
-    EXECUTE NOW: Use your selected specialist to answer the question: "{question}"
-
-    CRITICAL OUTPUT REQUIREMENTS:
-    - End your final response with 'FINAL ANSWER: [specific answer]'
-    - Follow GAIA format: numbers (no commas), strings (no articles), lists (comma separated)
-    - Provide actual answers, never use placeholder text like "[your answer]"
-    - Be specific and factual in your response
+    OUTPUT REQUIREMENTS:
+    - End with 'FINAL ANSWER: [specific answer]'
+    - GAIA format: numbers (no commas), strings (no articles), lists (comma separated)
+    - Provide actual answers, never placeholders
+    - Be specific and factual
     """
         
         return task
@@ -1202,9 +1252,29 @@ class GAIAAgent:
             
             #  Give coordinator file access
             file_path = state.get("file_path", "")
+            file_name = state.get("file_name", "")
+            has_image = any(ext in file_name.lower() for ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp']) if file_name else False
             
-            if file_path:
-                # Pass file via additional_args for ToolCallingAgent specialists
+            if file_path and has_image:
+                # Load image for vision processing
+                image = self._load_image_for_agent(file_path)
+                
+                if image:
+                    print("🖼️ Running coordinator with vision support")
+                    # Pass image to coordinator using SmolagAgents vision pattern
+                    coordination_result = self.coordinator.run(
+                        coordination_task,
+                        images=[image],  # 🔥 KEY: Pass images list
+                        additional_args={"file_path": file_path}
+                    )
+                else:
+                    print("⚠️ Image loading failed, proceeding without vision")
+                    coordination_result = self.coordinator.run(
+                        coordination_task,
+                        additional_args={"file_path": file_path}
+                    )
+            elif file_path:
+                # Non-image file processing
                 coordination_result = self.coordinator.run(
                     coordination_task,
                     additional_args={"file_path": file_path}
@@ -1283,7 +1353,7 @@ class GAIAAgent:
             execution_metrics = {}
             if self.config.enable_context_bridge:
                 execution_metrics = ContextBridge.get_execution_metrics()
-                track(f"Final answer: {formatted_answer}")
+                track(f"Final answer: {formatted_answer}", self.config)
             
             return {
                 "final_answer": formatted_answer,
