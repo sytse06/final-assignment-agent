@@ -27,7 +27,6 @@ import openai
 from smolagents import (
     CodeAgent,
     ToolCallingAgent,
-    ManagedAgent,
     LiteLLMModel,
     AgentLogger,
     LogLevel,
