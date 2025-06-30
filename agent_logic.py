@@ -74,6 +74,7 @@ class GAIAConfig:
     # Agent settings
     max_agent_steps: int = 15
     planning_interval: int = 5
+    use_structured_outputs: bool = True
         
     # Routing settings
     enable_smart_routing: bool = True
@@ -566,15 +567,15 @@ class GAIAAgent:
     # SMOLAGENTS COORDINATOR AND SPECIALISTS
     # ============================================================================        
 
-    def _create_managed_specialists(self) -> List[ManagedAgent]:
-        """Create managed specialists for hierarchical coordinator"""
+    def _create_specialist_agents(self) -> Dict[str, Any]:
+        """Create specialist agents using smolagents pattern""""
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         
         # 1. Data Analyst - CodeAgent for direct Python file access
         data_analyst = CodeAgent(
             name="data_analyst", 
             description="Excel/CSV analysis and numerical calculations using pandas",
-            tools=[],  # No tools - pure Python file access
+            tools=[],
             additional_authorized_imports=[
                 "pandas", "numpy", "openpyxl", "xlrd", "csv",
                 "scipy", "matplotlib", "seaborn", 
@@ -583,6 +584,7 @@ class GAIAAgent:
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
             add_base_tools=True,
+            use_structured_outputs_internally=True,
             logger=logger
         )
         
@@ -600,6 +602,7 @@ class GAIAAgent:
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
             add_base_tools=True,
+            use_structured_outputs_internally=True,
             logger=logger
         )
         
@@ -616,51 +619,40 @@ class GAIAAgent:
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
             add_base_tools=True,
+            use_structured_outputs_internally=True,
             logger=logger
         )
         
-        # Wrap in ManagedAgents for hierarchy
-        managed_specialists = [
-            ManagedAgent(
-                agent=data_analyst,
-                name="analyze_data",
-                description="Analyzes Excel/CSV files and performs numerical calculations. Pass file paths directly in task description."
-            ),
-            ManagedAgent(
-                agent=web_researcher, 
-                name="search_web",
-                description="Searches the web for information. Pass your search query as an argument."
-            ),
-            ManagedAgent(
-                agent=document_processor,
-                name="process_document", 
-                description="Processes documents/audio using tools. Files accessed via additional_args file_path parameter."
-            )
-        ]
+        # Return dict
+        specialist_agents = {
+            "data_analyst": data_analyst,
+            "web_researcher": web_researcher,
+            "document_processor": document_processor
+        }
         
-        print(f"🎯 Created {len(managed_specialists)} managed specialists:")
-        print(f"   analyze_data: CodeAgent with direct Python file access")
-        print(f"   search_web: ToolCallingAgent with web search tools")
-        print(f"   process_document: ToolCallingAgent with document/audio tools")
+        print(f"🎯 Created {len(specialist_agents)} specialist agents:")
+        print(f"   data_analyst: CodeAgent with direct Python file access")
+        print(f"   web_researcher: ToolCallingAgent with web search tools")
+        print(f"   document_processor: ToolCallingAgent with document/audio tools")
         
         return managed_specialists
 
     def _create_coordinator(self) -> CodeAgent:
-        """🔥 CHANGED: Create hierarchical coordinator with managed agents"""
+        """Create hierarchical coordinator using smolagents pattern"""
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         
-        # Get managed specialists
-        managed_specialists = self._create_managed_specialists()
+        # Define specialists
+        specialist_agents = self._create_specialist_agents()
         
         # 🔥 KEY: Create coordinator with managed_agents for hierarchy
         coordinator = CodeAgent(
             name="gaia_coordinator",
-            description="""Hierarchical coordinator that manages three specialist agents for GAIA tasks.
+            description="""Coordinator that manages three specialist agents for GAIA tasks.
 
-    MANAGED AGENTS:
-    - analyze_data: For Excel/CSV analysis and calculations  
-    - search_web: For web searches and information gathering
-    - process_document: For document extraction and audio transcription
+    SPECIALIST AGENTS:
+    - data_analyst: For Excel/CSV analysis and calculations  
+    - web_researcher: For web searches and information gathering
+    - document_processor: For document extraction and audio transcription
 
     WORKFLOW:
     1. Analyze the question and identify required capabilities
@@ -669,7 +661,7 @@ class GAIAAgent:
     4. Synthesize results into final answer
     """,
             tools=[],  # No direct tools - delegates to managed agents
-            managed_agents=managed_specialists,
+            managed_agents=list(specialist_agents.values()),
             additional_authorized_imports=[
                 "pathlib", "mimetypes", "re", "json", "os"
             ],
