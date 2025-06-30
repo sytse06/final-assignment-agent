@@ -14,5 +14,5 @@
 !requirements.txt
 !README.md
 !*_tool.py
-!tool/
-!tool/**
+!tools/
+!tools/*.py
