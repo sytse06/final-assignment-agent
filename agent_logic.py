@@ -333,6 +333,7 @@ class GAIAAgent:
         self.retriever: Any = self._initialize_retriever()
         self.orchestration_model: Any = self._initialize_orchestration_model()  # LangChain for workflow
         self.specialist_model: LiteLLMModel = self._initialize_specialist_model()        # LiteLLM for SmolagAgents
+        self.run_single_question = self.process_question
         
         # Setup enhanced logging
         if config.enable_csv_logging:
@@ -420,52 +421,77 @@ class GAIAAgent:
             print(f"❌ Retriever initialization error: {e}")
             raise
     
-    def _initialize_orchestration_model(self):
-        """Initialize orchestration model (LangChain)"""
+    def _initialize_orchestration_model(self) -> Any:
+        """Initialize orchestration model for LangGraph workflow"""
         try:
-            # Initialize orchestration model (LangChain)
-            if self.config.model_provider == "groq":
+            import os
+            from langchain_openai import ChatOpenAI
+            
+            if self.config.model_provider == "openrouter":
+                # OpenRouter configuration
+                api_key = os.getenv("OPENROUTER_API_KEY")
+                if not api_key:
+                    raise ValueError("OPENROUTER_API_KEY not found in environment variables")
+                
+                orchestration_model = ChatOpenAI(
+                    model=self.config.model_name,  # e.g., "google/gemini-2.5-flash"
+                    openai_api_key=api_key,
+                    openai_api_base="https://openrouter.ai/api/v1",
+                    temperature=self.config.temperature,
+                    timeout=60
+                )
+                print(f"✅ OpenRouter orchestration model initialized: {self.config.model_name}")
+                
+            elif self.config.model_provider == "groq":
+                # Groq configuration  
+                api_key = os.getenv("GROQ_API_KEY")
+                if not api_key:
+                    raise ValueError("GROQ_API_KEY not found in environment variables")
+                    
+                from langchain_groq import ChatGroq
                 orchestration_model = ChatGroq(
                     model=self.config.model_name,
-                    api_key=os.getenv("GROQ_API_KEY"),
-                    temperature=self.config.temperature
+                    groq_api_key=api_key,
+                    temperature=self.config.temperature,
+                    timeout=60
                 )
-            elif self.config.model_provider == "openrouter":
-                orchestration_model = ChatOpenAI(
-                    model=self.config.model_name,
-                    api_key=os.getenv("OPENROUTER_API_KEY"),
-                    base_url="https://openrouter.ai/api/v1",
-                    temperature=self.config.temperature
-                )
+                print(f"✅ Groq orchestration model initialized: {self.config.model_name}")
+                
             elif self.config.model_provider == "google":
+                # Google configuration
+                api_key = os.getenv("GOOGLE_API_KEY") 
+                if not api_key:
+                    raise ValueError("GOOGLE_API_KEY not found in environment variables")
+                    
+                from langchain_google_genai import ChatGoogleGenerativeAI
                 orchestration_model = ChatGoogleGenerativeAI(
                     model=self.config.model_name,
-                    google_api_key=os.getenv("GOOGLE_API_KEY"),
-                    temperature=self.config.temperature
+                    google_api_key=api_key,
+                    temperature=self.config.temperature,
+                    timeout=60
                 )
-            elif self.config.model_provider == "ollama":
-                from langchain_ollama import ChatOllama
-                orchestration_model = ChatOllama(
-                    model=self.config.model_name,
-                    base_url=self.config.api_base or "http://localhost:11434",
-                    temperature=self.config.temperature
-                )
+                print(f"✅ Google orchestration model initialized: {self.config.model_name}")
+                
             else:
-                # Fallback to Openrouter
+                # Fallback to OpenAI
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    raise ValueError("OPENAI_API_KEY not found in environment variables")
+                    
                 orchestration_model = ChatOpenAI(
-                    model="qwen/qwen3-32b",
-                    api_key=os.getenv("OPENROUTER_API_KEY"),
-                    base_url="https://openrouter.ai/api/v1",
-                    temperature=self.config.temperature
+                    model=self.config.model_name,
+                    openai_api_key=api_key,
+                    temperature=self.config.temperature,
+                    timeout=60
                 )
-            
-            print(f"✅ Orchestration model: {getattr(orchestration_model, 'model_name', getattr(orchestration_model, 'model', 'Unknown'))}")
+                print(f"✅ OpenAI orchestration model initialized: {self.config.model_name}")
+                
             return orchestration_model
             
         except Exception as e:
             print(f"❌ Error initializing orchestration model: {e}")
             raise
-
+    
     def _initialize_specialist_model(self) -> LiteLLMModel:
         """🔥 NEW: Initialize LiteLLM model for SmolagAgents"""
         try:
