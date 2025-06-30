@@ -87,6 +87,7 @@ mimetype = "^0.1.5"
 wikipedia-api = "^0.8.1"
 smolagents = {extras = ["transformers"], version = "^1.19.0"}
 webdriver-manager = "^4.0.2"
+yt-dlp = "^2025.6.25"
 
 [tool.poetry.group.dev.dependencies]
 # Testing

@@ -3,11 +3,13 @@
 try:
     from .get_attachment_tool import GetAttachmentTool
     from .content_retriever_tool import ContentRetrieverTool
+    from .youtube_content_tool import YouTubeContentTool  # 🔥 NEW
     print("✅ Custom tools loaded in __init__.py")
 except ImportError as e:
     print(f"⚠️ Custom tools failed to load in __init__.py: {e}")
     GetAttachmentTool = None
     ContentRetrieverTool = None
+    YouTubeContentTool = None  # 🔥 NEW
 
 # Import ContentGroundingTool for web_researcher
 try:
@@ -35,6 +37,7 @@ __all__ = [
     # Custom tools
     'GetAttachmentTool',
     'ContentRetrieverTool',
+    'YouTubeContentTool',  # 🔥 NEW
     'ContentGroundingTool',
     
     # LangChain tools - only the list, not individual tools
@@ -49,11 +52,13 @@ def get_tool_status():
     return {
         'GetAttachmentTool': GetAttachmentTool is not None,
         'ContentRetrieverTool': ContentRetrieverTool is not None,
+        'YouTubeContentTool': YouTubeContentTool is not None,  # 🔥 NEW
         'ContentGroundingTool': ContentGroundingTool is not None,
         'research_tools': LANGCHAIN_TOOLS_AVAILABLE,
         'total_core_tools': sum([
             GetAttachmentTool is not None,
             ContentRetrieverTool is not None,
+            YouTubeContentTool is not None,  # 🔥 NEW
             ContentGroundingTool is not None
         ]),
         'total_research_tools': len(ALL_LANGCHAIN_TOOLS) - 1 if LANGCHAIN_TOOLS_AVAILABLE else 0  # Exclude final_answer
@@ -71,6 +76,8 @@ def get_all_tools():
         tools.append(GetAttachmentTool())
     if ContentRetrieverTool:
         tools.append(ContentRetrieverTool())
+    if YouTubeContentTool:  # 🔥 NEW
+        tools.append(YouTubeContentTool())
     if ContentGroundingTool:
         tools.append(ContentGroundingTool())
     
@@ -90,11 +97,33 @@ def get_web_researcher_tools():
     if ContentRetrieverTool:
         tools.append(ContentRetrieverTool())
     
+    # 🔥 NEW: Add YouTube content extraction for web research
+    if YouTubeContentTool:
+        tools.append(YouTubeContentTool())
+    
     # Add content grounding for verification
     if ContentGroundingTool:
         tools.append(ContentGroundingTool())
     
     # Add file access for document research
+    if GetAttachmentTool:
+        tools.append(GetAttachmentTool())
+    
+    return tools
+
+def get_document_processor_tools():
+    """Get tools specifically for document_processor agent"""  # 🔥 NEW FUNCTION
+    tools = []
+    
+    # Add document processing tools
+    if ContentRetrieverTool:
+        tools.append(ContentRetrieverTool())
+    
+    # Add YouTube content extraction for video analysis
+    if YouTubeContentTool:
+        tools.append(YouTubeContentTool())
+    
+    # Add file access for documents
     if GetAttachmentTool:
         tools.append(GetAttachmentTool())
     
