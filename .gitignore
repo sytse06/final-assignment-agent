@@ -6,15 +6,12 @@ __pycache__/
 *.log
 .DS_Store
 *.code-workspace
-/docs
-/notebooks
-/examples
+
+# Generated data (exclude these)
+/gaia_results/*
+/test_results/*
+/logs/*
 metadata.json
-/gaia_results
-/tests/gaia_data
-/test_results
-/logs
-# Weaviate embedded files
 weaviate_binary/
 weaviate_data/
 *.sh

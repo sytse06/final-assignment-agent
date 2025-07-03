@@ -930,7 +930,7 @@ if approach == "direct_web_vision":
     # ============================================================================
 
     def _build_workflow(self):
-        """🔥 OPTIMIZED: Build LangGraph workflow without superfluous specialist_execution node"""
+        """Build LangGraph workflow for question answering"""
         builder = StateGraph(GAIAState)
         
         if self.config.enable_smart_routing:
