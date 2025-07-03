@@ -1,10 +1,5 @@
 # Trimmed down .gitignore
-!examples/**/*.py
-!examples/**/*.md
-!examples/**/*.json
-!examples/**/*.txt
-!examples/**/*.yml
-!examples/**/*.yaml
+!examples
 .env
 __pycache__/
 *.pyc
