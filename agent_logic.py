@@ -634,19 +634,19 @@ class GAIAAgent:
             }
 
     def _load_image_for_agent(self, file_path: str) -> Optional[Image.Image]:
-    """Load image file for SmolagAgent processing"""
-    try:
-        if not file_path or not os.path.exists(file_path):
-            print(f"❌ Image file not found: {file_path}")
-            return None
+        """Load image file for SmolagAgent processing"""
+        try:
+            if not file_path or not os.path.exists(file_path):
+                print(f"❌ Image file not found: {file_path}")
+                return None
+                
+            image = Image.open(file_path).convert("RGB")
+            print(f"✅ Image loaded: {file_path}")
+            return image
             
-        image = Image.open(file_path).convert("RGB")
-        print(f"✅ Image loaded: {file_path}")
-        return image
-        
-    except Exception as e:
-        print(f"❌ Error loading image: {e}")
-        return None
+        except Exception as e:
+            print(f"❌ Error loading image: {e}")
+            return None
 
     # ============================================================================
     # SMOLAGENTS COORDINATOR AND SPECIALISTS
