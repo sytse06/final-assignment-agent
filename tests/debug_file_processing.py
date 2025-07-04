@@ -1,6 +1,13 @@
 # debug_file_processing.py
 # Quick test script to debug file processing
 
+import sys
+from pathlib import Path
+
+# Add parent directory to path so we can import agent_logic
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 def test_file_info_extraction():
     """Test file info extraction with sample task"""
     from agent_logic import extract_file_info_from_task_id

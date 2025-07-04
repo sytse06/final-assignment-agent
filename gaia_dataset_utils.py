@@ -29,55 +29,88 @@ class GAIADatasetManager:
             self._load_metadata()
     
     def _find_dataset_path(self, provided_path: str = None) -> Optional[str]:
-        """Find GAIA dataset path in common locations"""
+        """Find GAIA dataset path in common locations - UPDATED for working metadata.json"""
         if provided_path and os.path.exists(provided_path):
             return provided_path
         
-        # Common locations where GAIA dataset might be
+        # UPDATED: Check for working metadata.json FIRST
         common_paths = [
+            "./metadata.json",  # Your working metadata file
+            "../metadata.json",  # If running from subdirectory
+            "./gaia_data",
+            "./test_data/gaia", 
+            "./data/gaia",
+            os.path.expanduser("~/.cache/huggingface/datasets/gaia-benchmark___gaia/2023_all/0.0.1/gaia_data"),
+            os.path.expanduser("~/.cache/huggingface/datasets/gaia-benchmark___gaia"),
             "./tests/gaia_data",
             "../tests/gaia_data",
-            "./gaia_data",
-            "./test_data/gaia",
-            "./data/gaia",
-            os.path.expanduser("~/.cache/huggingface/datasets/gaia"),
             os.path.expanduser("~/Documents/gaia_dataset")
         ]
         
         for path in common_paths:
             if os.path.exists(path):
-                metadata_file = os.path.join(path, "metadata.json")
-                if os.path.exists(metadata_file):
-                    print(f"✅ Found GAIA dataset at: {path}")
+                # Check for your working metadata.json format
+                if path.endswith('.json'):
+                    print(f"✅ Found working metadata file: {path}")
                     return path
+                else:
+                    # Check for directory with metadata files
+                    metadata_files = ["metadata.json", "dataset_info.json", "gaia_validation.jsonl"]
+                    for metadata_file in metadata_files:
+                        full_path = os.path.join(path, metadata_file)
+                        if os.path.exists(full_path):
+                            print(f"✅ Found GAIA dataset at: {path}")
+                            return path
         
         print("⚠️  GAIA dataset not found. Please specify path manually.")
         return None
-    
+
     def _load_metadata(self):
-        """Load and parse metadata.json with structure validation"""
-        metadata_file = os.path.join(self.dataset_path, "metadata.json")
+        """Load and parse metadata - UPDATED for working metadata.json format"""
         
-        if not os.path.exists(metadata_file):
-            print(f"❌ metadata.json not found at {metadata_file}")
-            return
+        # Handle direct JSON file (your working format)
+        if self.dataset_path.endswith('.json'):
+            metadata_file = self.dataset_path
+        else:
+            # Handle directory with metadata files
+            metadata_files = ["metadata.json", "dataset_info.json", "gaia_validation.jsonl"]
+            metadata_file = None
+            for filename in metadata_files:
+                potential_file = os.path.join(self.dataset_path, filename)
+                if os.path.exists(potential_file):
+                    metadata_file = potential_file
+                    break
+            
+            if not metadata_file:
+                print(f"❌ No metadata file found in {self.dataset_path}")
+                return
+        
+        print(f"📁 Loading metadata from: {metadata_file}")
         
         try:
             with open(metadata_file, 'r') as f:
                 raw_metadata = json.load(f)
             
-            # Handle GAIA dataset structure: {'validation': [...], 'test': [...], 'stats': {...}}
-            if isinstance(raw_metadata, dict) and 'validation' in raw_metadata:
-                print(f"📊 GAIA Dataset Structure Detected:")
-                print(f"  Validation set: {len(raw_metadata.get('validation', []))} questions")
-                print(f"  Test set: {len(raw_metadata.get('test', []))} questions")
+            # Handle YOUR working format: {"validation_examples": [...], "test_examples": [...]}
+            if isinstance(raw_metadata, dict) and 'validation_examples' in raw_metadata:
+                print(f"📊 Working Metadata Format Detected:")
+                self.metadata = raw_metadata['validation_examples']
+                self.test_metadata = raw_metadata.get('test_examples', [])
+                print(f"  Validation examples: {len(self.metadata)} questions")
+                print(f"  Test examples: {len(self.test_metadata)} questions")
                 
-                # Use validation set (has answers for evaluation)
+            # Handle HuggingFace cache format: {'validation': [...], 'test': [...]}
+            elif isinstance(raw_metadata, dict) and 'validation' in raw_metadata:
+                print(f"📊 HuggingFace Cache Format Detected:")
                 self.metadata = raw_metadata['validation']
                 self.test_metadata = raw_metadata.get('test', [])
+                print(f"  Validation set: {len(self.metadata)} questions")
+                print(f"  Test set: {len(self.test_metadata)} questions")
                 
             elif isinstance(raw_metadata, list):
+                print(f"📊 Simple List Format Detected:")
                 self.metadata = raw_metadata
+                print(f"  Total questions: {len(self.metadata)}")
                 
             elif isinstance(raw_metadata, dict):
                 # Handle other dict structures
@@ -86,13 +119,19 @@ class GAIADatasetManager:
                 elif 'data' in raw_metadata:
                     self.metadata = raw_metadata['data']
                 else:
-                    # Assume the dict values are the questions
-                    self.metadata = list(raw_metadata.values())
+                    print(f"⚠️  Unexpected dict structure, trying to extract values...")
+                    # Try to find the largest list in the dict
+                    largest_list = []
+                    for key, value in raw_metadata.items():
+                        if isinstance(value, list) and len(value) > len(largest_list):
+                            largest_list = value
+                            print(f"  Using '{key}' with {len(value)} items")
+                    self.metadata = largest_list
             else:
                 print(f"❌ Unexpected metadata structure: {type(raw_metadata)}")
                 return
             
-            # NEW: Separate ground truth storage during indexing
+            # Process the metadata
             self.file_questions = {}
             self.ground_truth = {}
             
@@ -104,16 +143,18 @@ class GAIADatasetManager:
                     if ('file_name' in item and item['file_name']) or ('file_path' in item and item['file_path']):
                         self.file_questions[task_id] = item
                     
-                    # NEW: Extract ground truth separately
-                    if task_id and 'Final answer' in item:
+                    # Extract ground truth separately (handles both 'Final answer' and 'final_answer')
+                    answer_field = item.get('Final answer') or item.get('final_answer')
+                    if task_id and answer_field:
                         self.ground_truth[task_id] = {
-                            'final_answer': item['Final answer'],
+                            'final_answer': answer_field,
                             'level': item.get('Level'),
                             'annotator_metadata': item.get('Annotator Metadata', {})
                         }
             
             print(f"✅ Loaded {len(self.metadata)} GAIA questions")
             print(f"📁 Found {len(self.file_questions)} questions with files")
+            print(f"🎯 Found {len(self.ground_truth)} questions with ground truth")
             
             # Show distribution by level
             level_dist = {}
@@ -128,6 +169,8 @@ class GAIADatasetManager:
             
         except Exception as e:
             print(f"❌ Error loading metadata: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _ensure_file_path_preserved(self, questions: List[Dict]) -> List[Dict]:
         """
@@ -503,7 +546,7 @@ if __name__ == "__main__":
     print("🔒 Removes 'Final answer' field from test batches")
     print("")
     
-    success = quick_dataset_check("./tests/gaia_data")
+    success = quick_dataset_check(os.path.expanduser("~/.cache/huggingface/datasets/gaia-benchmark___gaia/2023_all/0.0.1/gaia_data"))
     
     if success:
         print("\n🎯 Dataset utilities ready for agent testing!")

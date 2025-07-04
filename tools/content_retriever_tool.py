@@ -38,6 +38,22 @@ class ContentRetrieverTool(Tool):
         self._state_question = None
 
         super().__init__(**kwargs)
+        self._has_docling = self._check_docling_availability()
+        self._initialized = False
+    
+    def _check_docling_availability(self):
+        """Check if docling is available"""
+        try:
+            import docling
+            return True
+        except ImportError:
+            return False
+    
+    def setup(self):
+        """Initialize the tool"""
+        if not hasattr(self, '_has_docling'):
+            self._has_docling = self._check_docling_availability()
+        self._initialized = True
     
     def configure_from_state(self, question: str):
         """Store question for potential query enhancement"""
