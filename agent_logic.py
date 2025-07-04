@@ -746,7 +746,7 @@ class GAIAAgent:
             tools=[],  # No direct tools - delegates to managed agents
             managed_agents=list(specialist_agents.values()),
             additional_authorized_imports=[
-                "pathlib", "mimetypes", "re", "json", "os", "io"
+                "pathlib", "mimetypes", "requests", "json", "os", "io", "zipfile"
             ],
             model=self.specialist_model,
             planning_interval=7,
