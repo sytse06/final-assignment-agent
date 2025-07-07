@@ -164,7 +164,7 @@ def search_arxiv(query: str, max_papers: int = 2) -> str:
 
 def check_tool_availability():
     """Check which tools are available based on environment and dependencies"""
-    available_tools = [final_answer]  # Always available
+    available_tools = []
     status = {}
     
     # Check Wikipedia
@@ -233,7 +233,6 @@ __all__ = [
     'search_web_serper',
     'search_wikipedia', 
     'search_arxiv',
-    'final_answer',
     'ALL_LANGCHAIN_TOOLS',
     'get_langchain_tools',
     'get_tool_status'

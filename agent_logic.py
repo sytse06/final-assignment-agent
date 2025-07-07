@@ -33,6 +33,7 @@ from smolagents import (
     FinalAnswerTool,
     AgentLogger,
     LogLevel,
+    PythonInterpreterTool,
     GoogleSearchTool,
     VisitWebpageTool,
     WikipediaSearchTool,
@@ -52,6 +53,29 @@ try:
 except ImportError as e:
     print(f"⚠️  ContentRetrieverTool not available: {e}")
     CUSTOM_TOOLS_AVAILABLE = False
+
+# Add this block for LangChain tools
+try:
+    from tools.langchain_tools import (
+        get_langchain_tools,
+        get_tool_status,
+        search_web_serper,
+        search_wikipedia,
+        search_arxiv
+    )
+    LANGCHAIN_TOOLS_AVAILABLE = True
+    print("✅ LangChain research tools imported")
+    
+    # Test tool availability immediately
+    tool_status = get_tool_status()
+    print(f"📊 LangChain tools status: {tool_status}")
+    
+except ImportError as e:
+    print(f"⚠️  LangChain tools not available: {e}")
+    LANGCHAIN_TOOLS_AVAILABLE = False
+except Exception as e:
+    print(f"⚠️  LangChain tools error: {e}")
+    LANGCHAIN_TOOLS_AVAILABLE = False
 
 # ============================================================================
 # CONFIGURATION
@@ -676,30 +700,28 @@ class GAIAAgent:
         # 2. Web Researcher - ToolCallingAgent for search with API key validation
         web_tools = []
         
-        # Import your custom LangChain-based tools
-        try:
-            from langchain_tools import get_langchain_tools, get_tool_status
-            
-            # Get available research tools
-            available_research_tools = get_langchain_tools()
-            tool_status = get_tool_status()
-            
-            print(f"🔍 LangChain research tools status: {tool_status}")
-            
-            if tool_status['research_tools_available']:
-                web_tools.extend(available_research_tools)
-                print(f"✅ Added {len(available_research_tools)} LangChain research tools:")
-                for tool in available_research_tools:
-                    print(f"   - {tool.name}: {tool.description[:60]}...")
-            else:
-                print("⚠️  No LangChain research tools available")
+        # Import your LangChain-based web search tools
+        if LANGCHAIN_TOOLS_AVAILABLE:
+            try:
+                available_research_tools = get_langchain_tools()
+                tool_status = get_tool_status()
                 
-        except ImportError as e:
-            print(f"❌ Could not import LangChain tools: {e}")
-        except Exception as e:
-            print(f"⚠️  Error loading LangChain tools: {e}")
-        
-        # Fallback to native SmolagAgent tools if LangChain tools fail
+                print(f"🔍 LangChain research tools status: {tool_status}")
+                
+                if tool_status['research_tools_available']:
+                    web_tools.extend(available_research_tools)
+                    print(f"✅ Added {len(available_research_tools)} LangChain research tools:")
+                    for tool in available_research_tools:
+                        print(f"   - {tool.name}: {tool.description[:60]}...")
+                else:
+                    print("⚠️  LangChain research tools not properly configured")
+                    
+            except Exception as e:
+                print(f"⚠️  Error loading LangChain tools: {e}")
+        else:
+            print("❌ LangChain tools not available, using native SmolagAgent tools")
+                
+                # Fallback to native SmolagAgent tools if LangChain tools fail
         if not web_tools:
             print("🔄 Falling back to native SmolagAgent web tools...")
             
