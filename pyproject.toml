@@ -73,7 +73,6 @@ litellm = "^1.72.1"
 langchain-ollama = "^0.3.3"
 langchain-groq = "^0.3.2"
 langchain-google-genai = "^2.1.5"
-duckduckgo-search = "^8.0.2"
 docling = "^2.36.1"
 backoff = "^2.2.1"
 markdownify = "^1.1.0"
@@ -88,6 +87,7 @@ wikipedia-api = "^0.8.1"
 smolagents = {extras = ["transformers"], version = "^1.19.0"}
 webdriver-manager = "^4.0.2"
 yt-dlp = "^2025.6.25"
+duckduckgo-search = "^8.1.1"
 
 [tool.poetry.group.dev.dependencies]
 # Testing

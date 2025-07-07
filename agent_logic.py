@@ -30,6 +30,7 @@ from smolagents import (
     CodeAgent,
     ToolCallingAgent,
     LiteLLMModel,
+    FinalAnswerTool,
     AgentLogger,
     LogLevel,
     GoogleSearchTool,
@@ -672,23 +673,66 @@ class GAIAAgent:
             logger=logger
         )
         
-        # 2. Web Researcher - ToolCallingAgent for search
-        web_tools = [
-            GoogleSearchTool(),
-            VisitWebpageTool(), 
-            WikipediaSearchTool()
-        ]
+        # 2. Web Researcher - ToolCallingAgent for search with API key validation
+        web_tools = []
+        
+        # Try GoogleSearchTool with proper API key handling
+        google_search_tool = None
+        try:
+            # Check for Serper API key first (recommended)
+            if os.getenv("SERPER_API_KEY"):
+                google_search_tool = GoogleSearchTool(provider="serper")
+                print("✅ GoogleSearchTool created with Serper provider")
+            # Fallback to SerpApi if available
+            elif os.getenv("SERPAPI_API_KEY"):
+                google_search_tool = GoogleSearchTool(provider="serpapi")
+                print("✅ GoogleSearchTool created with SerpApi provider")
+            else:
+                print("⚠️  No API key found for GoogleSearchTool (SERPER_API_KEY or SERPAPI_API_KEY)")
+                print("    Available keys:", {
+                    "SERPER_API_KEY": "✅" if os.getenv("SERPER_API_KEY") else "❌",
+                    "SERPAPI_API_KEY": "✅" if os.getenv("SERPAPI_API_KEY") else "❌"
+                })
+                
+        except ValueError as e:
+            print(f"❌ GoogleSearchTool initialization failed: {e}")
+            google_search_tool = None
+        except Exception as e:
+            print(f"❌ Unexpected error creating GoogleSearchTool: {e}")
+            google_search_tool = None
+        
+        # Add GoogleSearchTool if successfully created
+        if google_search_tool:
+            web_tools.append(google_search_tool)
+        else:
+            # Fallback to DuckDuckGoSearchTool (no API key required)
+            try:
+                from smolagents import DuckDuckGoSearchTool
+                web_tools.append(DuckDuckGoSearchTool())
+                print("✅ Using DuckDuckGoSearchTool as fallback (no API key required)")
+            except ImportError:
+                print("❌ DuckDuckGoSearchTool not available either")
+        
+        # Add other web tools (these don't require API keys)
+        try:
+            web_tools.append(VisitWebpageTool())
+            web_tools.append(WikipediaSearchTool())
+            print(f"✅ Added VisitWebpageTool and WikipediaSearchTool")
+        except Exception as e:
+            print(f"⚠️  Error adding web tools: {e}")
+        
+        if not web_tools:
+            print("❌ No web tools available - web researcher will have limited capabilities")
         
         web_researcher = ToolCallingAgent(
             name="web_researcher",
-            description="Web search using GoogleSearchTool, Wikipedia, and content extraction",
+            description=f"Web search using available tools: {[tool.__class__.__name__ for tool in web_tools]}",
             tools=web_tools,
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
             add_base_tools=True,
             logger=logger
-        )
-        
+        )        
         # 3. Document Processor - ToolCallingAgent for file processing
         doc_tools = []
         try:

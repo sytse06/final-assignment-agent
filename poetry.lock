@@ -1455,14 +1455,14 @@ tabulate = ">=0.9.0,<1.0.0"
 
 [[package]]
 name = "duckduckgo-search"
-version = "8.0.2"
+version = "8.1.1"
 description = "Search for words, documents, images, news, maps and text translation using the DuckDuckGo.com search engine."
 optional = false
 python-versions = ">=3.9"
 groups = ["main"]
 files = [
-    {file = "duckduckgo_search-8.0.2-py3-none-any.whl", hash = "sha256:b5ff8b6b8f169b8e1b15a788a5749aa900ebcefd6e1ab485787582f8d5b4f1ef"},
-    {file = "duckduckgo_search-8.0.2.tar.gz", hash = "sha256:3109a99967b29cab8862823bbe320d140d5c792415de851b9d6288de2311b3ec"},
+    {file = "duckduckgo_search-8.1.1-py3-none-any.whl", hash = "sha256:f48adbb06626ee05918f7e0cef3a45639e9939805c4fc179e68c48a12f1b5062"},
+    {file = "duckduckgo_search-8.1.1.tar.gz", hash = "sha256:9da91c9eb26a17e016ea1da26235d40404b46b0565ea86d75a9f78cc9441f935"},
 ]
 
 [package.dependencies]
@@ -9872,4 +9872,4 @@ selenium = ["selenium"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "389f9b2867930423167da96d7aa1585784510a64d3520467ad6db52fb195fff6"
+content-hash = "594b7c211f81dcaee2b43a38532ebf373accd3d2e64c15faefd104535eb2531e"
