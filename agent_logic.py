@@ -676,63 +676,86 @@ class GAIAAgent:
         # 2. Web Researcher - ToolCallingAgent for search with API key validation
         web_tools = []
         
-        # Try GoogleSearchTool with proper API key handling
-        google_search_tool = None
+        # Import your custom LangChain-based tools
         try:
-            # Check for Serper API key first (recommended)
-            if os.getenv("SERPER_API_KEY"):
-                google_search_tool = GoogleSearchTool(provider="serper")
-                print("✅ GoogleSearchTool created with Serper provider")
-            # Fallback to SerpApi if available
-            elif os.getenv("SERPAPI_API_KEY"):
-                google_search_tool = GoogleSearchTool(provider="serpapi")
-                print("✅ GoogleSearchTool created with SerpApi provider")
+            from langchain_tools import get_langchain_tools, get_tool_status
+            
+            # Get available research tools
+            available_research_tools = get_langchain_tools()
+            tool_status = get_tool_status()
+            
+            print(f"🔍 LangChain research tools status: {tool_status}")
+            
+            if tool_status['research_tools_available']:
+                web_tools.extend(available_research_tools)
+                print(f"✅ Added {len(available_research_tools)} LangChain research tools:")
+                for tool in available_research_tools:
+                    print(f"   - {tool.name}: {tool.description[:60]}...")
             else:
-                print("⚠️  No API key found for GoogleSearchTool (SERPER_API_KEY or SERPAPI_API_KEY)")
-                print("    Available keys:", {
-                    "SERPER_API_KEY": "✅" if os.getenv("SERPER_API_KEY") else "❌",
-                    "SERPAPI_API_KEY": "✅" if os.getenv("SERPAPI_API_KEY") else "❌"
-                })
+                print("⚠️  No LangChain research tools available")
                 
-        except ValueError as e:
-            print(f"❌ GoogleSearchTool initialization failed: {e}")
-            google_search_tool = None
+        except ImportError as e:
+            print(f"❌ Could not import LangChain tools: {e}")
         except Exception as e:
-            print(f"❌ Unexpected error creating GoogleSearchTool: {e}")
-            google_search_tool = None
+            print(f"⚠️  Error loading LangChain tools: {e}")
         
-        # Add GoogleSearchTool if successfully created
-        if google_search_tool:
-            web_tools.append(google_search_tool)
-        else:
-            # Fallback to DuckDuckGoSearchTool (no API key required)
-            try:
-                from smolagents import DuckDuckGoSearchTool
-                web_tools.append(DuckDuckGoSearchTool())
-                print("✅ Using DuckDuckGoSearchTool as fallback (no API key required)")
-            except ImportError:
-                print("❌ DuckDuckGoSearchTool not available either")
-        
-        # Add other web tools (these don't require API keys)
-        try:
-            web_tools.append(VisitWebpageTool())
-            web_tools.append(WikipediaSearchTool())
-            print(f"✅ Added VisitWebpageTool and WikipediaSearchTool")
-        except Exception as e:
-            print(f"⚠️  Error adding web tools: {e}")
-        
+        # Fallback to native SmolagAgent tools if LangChain tools fail
         if not web_tools:
-            print("❌ No web tools available - web researcher will have limited capabilities")
+            print("🔄 Falling back to native SmolagAgent web tools...")
+            
+            # Try GoogleSearchTool with proper API key handling
+            try:
+                if os.getenv("SERPER_API_KEY"):
+                    web_tools.append(GoogleSearchTool(provider="serper"))
+                    print("✅ Added GoogleSearchTool (Serper)")
+                elif os.getenv("SERPAPI_API_KEY"):
+                    web_tools.append(GoogleSearchTool(provider="serpapi")) 
+                    print("✅ Added GoogleSearchTool (SerpApi)")
+                else:
+                    print("⚠️  No Google Search API key available")
+            except Exception as e:
+                print(f"⚠️  GoogleSearchTool failed: {e}")
+            
+            # Add other native tools
+            try:
+                web_tools.extend([
+                    VisitWebpageTool(),
+                    WikipediaSearchTool()
+                ])
+                print("✅ Added VisitWebpageTool and WikipediaSearchTool")
+            except Exception as e:
+                print(f"⚠️  Error adding native web tools: {e}")
+            
+            # Final fallback to DuckDuckGo
+            if not web_tools:
+                try:
+                    from smolagents import DuckDuckGoSearchTool
+                    web_tools.append(DuckDuckGoSearchTool())
+                    print("✅ Using DuckDuckGoSearchTool as final fallback")
+                except ImportError:
+                    print("❌ No web search tools available")
+        
+        # Create web researcher with descriptions
+        web_researcher_description = "Advanced web researcher with multiple search capabilities:\n"
+        if any("serper" in str(tool).lower() for tool in web_tools):
+            web_researcher_description += "- Serper API for current news and real-time information\n"
+        if any("wikipedia" in str(tool).lower() for tool in web_tools):
+            web_researcher_description += "- Wikipedia for factual and historical information\n"
+        if any("arxiv" in str(tool).lower() for tool in web_tools):
+            web_researcher_description += "- ArXiv for scientific papers and research\n"
+        if any("visit" in str(tool).lower() for tool in web_tools):
+            web_researcher_description += "- Webpage content extraction and analysis\n"
         
         web_researcher = ToolCallingAgent(
             name="web_researcher",
-            description=f"Web search using available tools: {[tool.__class__.__name__ for tool in web_tools]}",
+            description=web_researcher_description.strip(),
             tools=web_tools,
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
             add_base_tools=True,
             logger=logger
-        )        
+        )
+    
         # 3. Document Processor - ToolCallingAgent for file processing
         doc_tools = []
         try:
