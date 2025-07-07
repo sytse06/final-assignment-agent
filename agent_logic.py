@@ -34,9 +34,6 @@ from smolagents import (
     AgentLogger,
     LogLevel,
     PythonInterpreterTool,
-    GoogleSearchTool,
-    VisitWebpageTool,
-    WikipediaSearchTool,
     SpeechToTextTool
 )
 
@@ -721,56 +718,47 @@ class GAIAAgent:
         else:
             print("❌ LangChain tools not available, using native SmolagAgent tools")
                 
-                # Fallback to native SmolagAgent tools if LangChain tools fail
+        # Fallback to native SmolagAgent tools if LangChain tools fail
         if not web_tools:
-            print("🔄 Falling back to native SmolagAgent web tools...")
-            
-            # Try GoogleSearchTool with proper API key handling
-            try:
-                if os.getenv("SERPER_API_KEY"):
-                    web_tools.append(GoogleSearchTool(provider="serper"))
-                    print("✅ Added GoogleSearchTool (Serper)")
-                elif os.getenv("SERPAPI_API_KEY"):
-                    web_tools.append(GoogleSearchTool(provider="serpapi")) 
-                    print("✅ Added GoogleSearchTool (SerpApi)")
-                else:
-                    print("⚠️  No Google Search API key available")
-            except Exception as e:
-                print(f"⚠️  GoogleSearchTool failed: {e}")
-            
-            # Add other native tools
-            try:
-                web_tools.extend([
-                    VisitWebpageTool(),
-                    WikipediaSearchTool()
-                ])
-                print("✅ Added VisitWebpageTool and WikipediaSearchTool")
-            except Exception as e:
-                print(f"⚠️  Error adding native web tools: {e}")
-            
-            # Final fallback to DuckDuckGo
-            if not web_tools:
-                try:
-                    from smolagents import DuckDuckGoSearchTool
-                    web_tools.append(DuckDuckGoSearchTool())
-                    print("✅ Using DuckDuckGoSearchTool as final fallback")
-                except ImportError:
-                    print("❌ No web search tools available")
+            print("❌ No web search tools available - web researcher will have limited capabilities")
+            # Create a minimal placeholder tool or use base tools only
         
-        # Create web researcher with descriptions
-        web_researcher_description = "Advanced web researcher with multiple search capabilities:\n"
-        if any("serper" in str(tool).lower() for tool in web_tools):
-            web_researcher_description += "- Serper API for current news and real-time information\n"
-        if any("wikipedia" in str(tool).lower() for tool in web_tools):
-            web_researcher_description += "- Wikipedia for factual and historical information\n"
-        if any("arxiv" in str(tool).lower() for tool in web_tools):
-            web_researcher_description += "- ArXiv for scientific papers and research\n"
-        if any("visit" in str(tool).lower() for tool in web_tools):
-            web_researcher_description += "- Webpage content extraction and analysis\n"
+        # Create dynamic description based on available tools
+        tool_names = []
+        tool_capabilities = []
         
+        for tool in web_tools:
+            tool_name = getattr(tool, 'name', tool.__class__.__name__)
+            tool_names.append(tool_name)
+            
+            # Add capability descriptions
+            if 'serper' in tool_name.lower() or 'search_web' in tool_name.lower():
+                tool_capabilities.append("Real-time web search with structured results")
+            elif 'wikipedia' in tool_name.lower():
+                tool_capabilities.append("Wikipedia knowledge base access")
+            elif 'arxiv' in tool_name.lower():
+                tool_capabilities.append("Scientific paper research")
+            elif 'visit' in tool_name.lower():
+                tool_capabilities.append("Full webpage content extraction")
+            elif 'duckduckgo' in tool_name.lower():
+                tool_capabilities.append("General web search (rate limited)")
+        
+        # Remove duplicates while preserving order
+        unique_capabilities = []
+        for cap in tool_capabilities:
+            if cap not in unique_capabilities:
+                unique_capabilities.append(cap)
+        
+        web_researcher_description = f"""Advanced web researcher with {len(web_tools)} research tools:
+
+            AVAILABLE TOOLS: {', '.join(tool_names)}
+
+            CAPABILITIES:
+            {chr(10).join(f"- {cap}" for cap in unique_capabilities)}"""
+
         web_researcher = ToolCallingAgent(
             name="web_researcher",
-            description=web_researcher_description.strip(),
+            description=web_researcher_description,
             tools=web_tools,
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
@@ -779,22 +767,63 @@ class GAIAAgent:
         )
     
         # 3. Document Processor - ToolCallingAgent for file processing
-        doc_tools = []
+        doc_tools = []    
+        # Add ContentRetrieverTool if available
+        if CUSTOM_TOOLS_AVAILABLE:
+            try:
+                content_retriever = ContentRetrieverTool()
+                doc_tools.append(content_retriever)
+                print("✅ Added ContentRetrieverTool to document processor")
+            except Exception as e:
+                print(f"⚠️  Error adding ContentRetrieverTool: {e}")
+        else:
+            print("⚠️  ContentRetrieverTool not available")
+        
+        # Add SpeechToTextTool if available        
         try:
-            doc_tools.append(SpeechToTextTool())
+            speech_tool = SpeechToTextTool()
+            doc_tools.append(speech_tool)
+            print("✅ Added SpeechToTextTool to document processor")
         except ImportError:
             print("⚠️  SpeechToTextTool requires transformers - skipping")
+        except Exception as e:
+            print(f"⚠️  Error adding SpeechToTextTool: {e}")
+        
+        # Create description based on available tools
+        doc_tool_names = [getattr(tool, 'name', tool.__class__.__name__) for tool in doc_tools]
+        doc_capabilities = []
+        
+        for tool in doc_tools:
+            tool_name = getattr(tool, 'name', tool.__class__.__name__)
+            if 'content' in tool_name.lower() or 'retriever' in tool_name.lower():
+                doc_capabilities.append("Document content extraction (PDF, DOCX, TXT, etc.)")
+            elif 'speech' in tool_name.lower() or 'audio' in tool_name.lower():
+                doc_capabilities.append("Audio transcription and processing")
+        
+        # Remove duplicates
+        unique_doc_capabilities = []
+        for cap in doc_capabilities:
+            if cap not in unique_doc_capabilities:
+                unique_doc_capabilities.append(cap)
+        
+        document_processor_description = f"""Document and media processing specialist with {len(doc_tools)} tools:
+
+            AVAILABLE TOOLS: {', '.join(doc_tool_names)}
+
+            CAPABILITIES:
+            {chr(10).join(f"- {cap}" for cap in unique_doc_capabilities)}
+            
+            FILE ACCESS: Uses additional_args for file paths"""
         
         document_processor = ToolCallingAgent(
             name="document_processor",
-            description="Document extraction and audio transcription specialist",
+            description=document_processor_description,
             tools=doc_tools,
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
             add_base_tools=True,
             logger=logger
-        )
-        
+        )        
         # Return dict
         specialist_agents = {
             "data_analyst": data_analyst,
@@ -835,7 +864,9 @@ class GAIAAgent:
             tools=[],  # No direct tools - delegates to managed agents
             managed_agents=list(specialist_agents.values()),
             additional_authorized_imports=[
-                "pathlib", "mimetypes", "requests", "json", "os", "io", "zipfile"
+                "open", "codecs", "chardet",
+                "os", "sys", "io", "pathlib",
+                "mimetypes", "requests", "json", "zipfile"
             ],
             model=self.specialist_model,
             planning_interval=7,
