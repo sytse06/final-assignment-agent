@@ -158,18 +158,6 @@ def search_arxiv(query: str, max_papers: int = 2) -> str:
     except Exception as e:
         return f"ArXiv tool error: {str(e)}"
 
-@tool
-def final_answer(answer: str) -> str:
-    """Provide the final answer to the GAIA question.
-    
-    Use this tool when you have gathered all necessary information and are ready 
-    to provide the definitive answer to the question.
-    
-    Args:
-        answer: The final answer to the GAIA question
-    """
-    return f"FINAL ANSWER: {answer}"
-
 # ============================================================================
 # TOOL COLLECTION AND AVAILABILITY CHECKING
 # ============================================================================
