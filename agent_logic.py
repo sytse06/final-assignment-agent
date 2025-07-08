@@ -1710,7 +1710,7 @@ class GAIAAgent:
         - Dict: Structured results with metadata
         - List: Multiple answers or steps
         """
-        # PRESERVE EXISTING LOGGING PATTERN - This helped us find the bug!
+        # Logging
         if hasattr(self, 'logging_setup') and self.logging_setup:
             self.logging_setup.log_step(
                 action='format_start',
@@ -1719,111 +1719,64 @@ class GAIAAgent:
             )
         
         try:
-            # Get the result from state with fallback
-            raw_result = state.get('result') or state.get('coordinator_result') or state.get('answer')
+            raw_answer = state.get("raw_answer", "")
+            task_id = state.get("task_id", "")
+            question = state.get("question", "")
             
-            # Handle None or missing result
-            if raw_result is None:
-                return {
-                    **state,
-                    'final_answer': 'Processing failed: No result found',
-                    'raw_answer': '',
-                    'steps': state.get('steps', []),
-                    'execution_successful': False
-                }
+            # Store question for formatting context
+            self._current_question = question
             
-            # Initialize default structured result
-            structured_result = {
-                'final_answer': '',
-                'raw_answer': '',
-                'steps': state.get('steps', []),
-                'execution_successful': True
-            }
-            
-            # TYPE CHECKING AND CONVERSION
-            if isinstance(raw_result, (int, float)):
-                # Handle numerical results (the bug was here!)
-                structured_result.update({
-                    'final_answer': str(raw_result),
-                    'raw_answer': str(raw_result),
-                })
-                
-            elif isinstance(raw_result, str):
-                # Handle string results
-                structured_result.update({
-                    'final_answer': raw_result,
-                    'raw_answer': raw_result,
-                })
-                
-            elif isinstance(raw_result, dict):
-                # Handle dictionary results (expected format)
-                structured_result.update({
-                    'final_answer': raw_result.get('final_answer', str(raw_result.get('answer', ''))),
-                    'raw_answer': raw_result.get('raw_answer', raw_result.get('final_answer', str(raw_result))),
-                    'steps': raw_result.get('steps', state.get('steps', [])),
-                    'execution_successful': raw_result.get('execution_successful', True)
-                })
-                
-            elif isinstance(raw_result, list):
-                # Handle list results (multiple answers or steps)
-                if len(raw_result) > 0:
-                    # Take first item as answer, treat rest as steps
-                    first_item = raw_result[0]
-                    structured_result.update({
-                        'final_answer': str(first_item),
-                        'raw_answer': str(first_item),
-                        'steps': raw_result[1:] if len(raw_result) > 1 else state.get('steps', [])
-                    })
-                else:
-                    structured_result.update({
-                        'final_answer': 'Processing failed: Empty result list',
-                        'raw_answer': '',
-                        'execution_successful': False
-                    })
-                    
-            else:
-                # Handle any other type (bool, custom objects, etc.)
-                structured_result.update({
-                    'final_answer': str(raw_result),
-                    'raw_answer': str(raw_result),
-                })
-            
-            # GAIA FORMATTING APPLICATION
-            # Apply GAIA format compliance to final_answer
-            gaia_formatted_answer = self._apply_gaia_formatting(structured_result['final_answer'])
-            
-            # LOG SUCCESSFUL FORMATTING - preserve logging that helped us debug
             if hasattr(self, 'logging_setup') and self.logging_setup:
                 self.logging_setup.log_step(
-                    action='apply_gaia_format',
-                    details=f"Formatted: {gaia_formatted_answer}",
+                    action='extract_answer',
+                    details=f'Extracting final answer from raw response: {str(raw_answer)[:50]}...',
                     node_name='format_answer'
                 )
             
-            # Update state with formatted results
+            # Call the final answer method to extract info
+            formatted_answer = self._extract_final_answer(raw_answer)
+            
+            if hasattr(self, 'logging_setup') and self.logging_setup:
+                self.logging_setup.log_step(
+                    action='apply_gaia_format',
+                    details=f'Applying GAIA formatting to: {formatted_answer}',
+                    node_name='format_answer'
+                )
+            
+            # Apply GAIA formatting
+            formatted_answer = self._apply_gaia_formatting(formatted_answer)
+            
+            if hasattr(self, 'logging_setup') and self.logging_setup:
+                self.logging_setup.log_step(
+                    action='format_complete',
+                    details=f'Final formatted answer: {formatted_answer}',
+                    node_name='format_answer'
+                )
+            
+            # Write new info to state
             final_state = {
                 **state,
-                'final_answer': gaia_formatted_answer,
-                'raw_answer': structured_result['raw_answer'],
-                'steps': structured_result['steps'],
-                'execution_successful': structured_result['execution_successful']
+                "final_answer": formatted_answer,
+                "raw_answer": str(raw_answer),
+                "steps": state.get("steps", []) + ["Final answer formatting applied"],
+                "execution_successful": True
             }
             
-            # LOG COMPLETION - this is where the original bug was caught
+            # LOG COMPLETION
             if hasattr(self, 'logging_setup') and self.logging_setup:
                 self.logging_setup.log_step(
                     action='question_complete',
-                    details=f"Final answer: {gaia_formatted_answer}",
+                    details=f'Final answer: {formatted_answer}',
                     node_name='format_answer'
                 )
             
             return final_state
             
         except Exception as e:
-            # Robust error handling with ENHANCED LOGGING
+            # Enhanced error handling
             error_msg = f"Processing failed: {str(e)}"
             
-            # PRESERVE AND ENHANCE ERROR LOGGING - this caught our bug!
+            # PRESERVE ERROR LOGGING
             if hasattr(self, 'logging_setup') and self.logging_setup:
                 self.logging_setup.log_step(
                     action='question_complete',
@@ -1831,85 +1784,199 @@ class GAIAAgent:
                     node_name='format_answer'
                 )
             
-            # Additional debug logging for development
-            if hasattr(self, 'logging_setup') and self.logging_setup and self.logging_setup.debug_mode:
-                self.logging_setup.logger.error(f"Format answer node error: {e}", extra={
-                    'task_id': state.get('task_id'),
-                    'raw_result_type': type(raw_result).__name__ if 'raw_result' in locals() else 'Unknown',
-                    'raw_result_value': str(raw_result)[:100] if 'raw_result' in locals() else 'Unknown',
-                    'state_keys': list(state.keys()),
-                    'error_location': 'format_answer_node'
-                })
+            # Fallback to raw answer
+            fallback_answer = state.get("raw_answer", "No answer")
             
             return {
                 **state,
-                'final_answer': error_msg,
-                'raw_answer': '',
-                'steps': state.get('steps', []),
-                'execution_successful': False
+                "final_answer": str(fallback_answer).strip() if fallback_answer else "No answer",
+                "raw_answer": str(fallback_answer),
+                "steps": state.get("steps", []) + [error_msg],
+                "execution_successful": False
             }
+
+    def _extract_final_answer(self, raw_answer: str) -> str:
+        """
+        Extract final answer from agent response with pattern matching
+        """  
+        if raw_answer is None:
+            if hasattr(self, 'logging_setup') and self.logging_setup:
+                self.logging_setup.log_step(
+                    action='extract_empty',
+                    details='Raw answer is None',
+                    node_name='format_answer'
+                )
+            return "No answer"
+        
+        # Convert list to string if needed
+        if isinstance(raw_answer, list):
+            if hasattr(self, 'logging_setup') and self.logging_setup:
+                self.logging_setup.log_step(
+                    action='extract_list_input',
+                    details=f'Converting list to string: {raw_answer}',
+                    node_name='format_answer'
+                )
+            raw_answer = str(raw_answer[0]) if raw_answer else "No answer"
+        
+        # Convert int/float to string
+        if isinstance(raw_answer, (int, float)):
+            if hasattr(self, 'logging_setup') and self.logging_setup:
+                self.logging_setup.log_step(
+                    action='extract_number_input',
+                    details=f'Converting {type(raw_answer).__name__} to string: {raw_answer}',
+                    node_name='format_answer'
+                )
+            raw_answer = str(raw_answer)
+        
+        # Ensure it's a string
+        raw_answer = str(raw_answer) if raw_answer else ""
+        
+        # More comprehensive patterns to catch various formats
+        patterns = [
+            r"FINAL ANSWER:\s*(.+?)(?:\n|$)",  # Standard GAIA format
+            r"Final Answer:\s*(.+?)(?:\n|$)",  # Title case
+            r"final answer:\s*(.+?)(?:\n|$)",  # Lower case
+            r"Answer:\s*(.+?)(?:\n|$)",       # Simple answer
+            r"ANSWER:\s*(.+?)(?:\n|$)",       # Caps answer
+            r"The answer is:\s*(.+?)(?:\n|$)", # Descriptive
+            r"Result:\s*(.+?)(?:\n|$)",       # Result format
+        ]
+        
+        import re
+        
+        for i, pattern in enumerate(patterns):
+            matches = re.findall(pattern, raw_answer, re.IGNORECASE | re.DOTALL)
+            if matches:
+                # Take the last match (most likely to be the final answer)
+                extracted = matches[-1].strip()
+                if extracted and extracted.lower() not in ["", "no answer", "none"]:
+                    if hasattr(self, 'logging_setup') and self.logging_setup:
+                        self.logging_setup.log_step(
+                            action='extract_success',
+                            details=f'Pattern {i+1} matched: {extracted}',
+                            node_name='format_answer'
+                        )
+                    return extracted
+        
+        # Fallback: Look for the last substantial line
+        lines = [line.strip() for line in raw_answer.strip().split('\n') if line.strip()]
+        
+        # Try to find a line that looks like an answer
+        for line in reversed(lines):
+            if len(line) > 0 and not line.lower().startswith(('i ', 'the ', 'let ', 'to ', 'in ', 'based ')):
+                if hasattr(self, 'logging_setup') and self.logging_setup:
+                    self.logging_setup.log_step(
+                        action='extract_fallback',
+                        details=f'Using last substantial line: {line}',
+                        node_name='format_answer'
+                    )
+                return line
+        
+        # Final fallback
+        fallback = lines[-1] if lines else "No answer"
+        
+        if hasattr(self, 'logging_setup') and self.logging_setup:
+            self.logging_setup.log_step(
+                action='extract_final_fallback',
+                details=f'Final fallback: {fallback}',
+                node_name='format_answer'
+            )
+        
+        return fallback
 
     def _apply_gaia_formatting(self, answer: str) -> str:
         """
-        Apply GAIA answer formatting requirements.
-        
-        Requirements:
-        - Numbers: no commas, no units unless specified
-        - Strings: no articles (the, a, an), no abbreviations
-        - Lists: comma separated, apply rules to each element
+        🔧 ENHANCED: GAIA formatting with safe regex operations and type safety
         """
-        if not answer or not isinstance(answer, str):
-            return str(answer) if answer is not None else ""
+        if not answer:
+            return "No answer"
         
-        # Clean whitespace
+        # 🔧 TYPE SAFETY: Handle non-string inputs
+        if isinstance(answer, (int, float)):
+            answer = str(answer)
+        elif isinstance(answer, list):
+            answer = str(answer[0]) if answer else "No answer"
+        else:
+            answer = str(answer)
+        
+        original_answer = answer
         answer = answer.strip()
         
-        # Handle empty or very short answers
-        if len(answer) <= 1:
-            return answer
-            
-        try:
-            # Check if it's a pure number
-            if answer.replace('.', '').replace('-', '').isdigit():
-                # Remove any commas from numbers
-                return answer.replace(',', '')
-            
-            # Check if it's a number with units/symbols that should be removed
+        if hasattr(self, 'logging_setup') and self.logging_setup:
+            self.logging_setup.log_step(
+                action='gaia_format_start',
+                details=f'Original answer: \'{answer}\'',
+                node_name='format_answer'
+            )
+        
+        # Helper function for safe regex
+        def safe_regex_search(pattern, text, flags=0):
+            try:
+                import re
+                return re.search(pattern, text, flags)
+            except Exception:
+                return None
+        
+        # SAFE: Extract from FINAL ANSWER patterns
+        final_answer_patterns = [
+            r'(?i)^.*?final\s*answer\s*:\s*(.*)$',
+            r'(?i)final\s*answer\s*:\s*(.+?)(?:\n|$)',
+            r'(?i).*final\s*answer\s*:\s*(.+)',
+        ]
+        
+        for pattern in final_answer_patterns:
+            match = safe_regex_search(pattern, answer, re.DOTALL)
+            if match:
+                extracted = match.group(1).strip()
+                if extracted:
+                    answer = extracted
+                    if hasattr(self, 'logging_setup') and self.logging_setup:
+                        self.logging_setup.log_step(
+                            action='gaia_format_extract',
+                            details=f'Extracted: \'{answer}\'',
+                            node_name='format_answer'
+                        )
+                    break
+        
+        # SAFE: Remove prefixes
+        prefixes_to_remove = [
+            "final answer:", "the answer is:", "answer:", "result:",
+            "solution:", "the result is:", "therefore", "so", "thus"
+        ]
+        
+        answer_lower = answer.lower()
+        for prefix in prefixes_to_remove:
+            if answer_lower.startswith(prefix):
+                answer = answer[len(prefix):].strip()
+                break
+        
+        # Clean quotes and punctuation
+        answer = answer.strip('.,!?:;"\'')
+        
+        # Question-specific formatting
+        question = getattr(self, '_current_question', '').lower()
+        
+        # SAFE: Standard GAIA formatting
+        if not any(special in question for special in ["comma", "list", "countries"]):
+            # Remove articles (a, an, the) from the beginning
             import re
-            
-            # Remove common units unless specifically mentioned in question
-            # (This is conservative - only removes obvious formatting)
-            number_pattern = r'^[\d,.-]+\s*[%$€£¥]?\s*$'
-            if re.match(number_pattern, answer):
-                # Remove commas from numbers, keep essential symbols
-                cleaned = re.sub(r'(\d),(\d)', r'\1\2', answer)  # Remove commas in numbers
-                return cleaned.strip()
-            
-            # For text answers, remove common articles if they appear at start
-            # (Conservative approach - only clear cases)
-            text_cleaned = answer
-            
-            # Remove leading articles (case insensitive)
-            article_pattern = r'^(the\s+|a\s+|an\s+)'
-            text_cleaned = re.sub(article_pattern, '', text_cleaned, flags=re.IGNORECASE)
-            
-            # Handle comma-separated lists
-            if ',' in text_cleaned and len(text_cleaned.split(',')) <= 5:  # Reasonable list size
-                items = [item.strip() for item in text_cleaned.split(',')]
-                # Apply formatting to each item
-                formatted_items = []
-                for item in items:
-                    # Remove articles from each item
-                    item_cleaned = re.sub(article_pattern, '', item, flags=re.IGNORECASE).strip()
-                    formatted_items.append(item_cleaned)
-                return ', '.join(formatted_items)
-            
-            return text_cleaned.strip()
-            
-        except Exception as e:
-            # If formatting fails, return original answer
-            # Better to have unformatted correct answer than formatted wrong answer
-            return answer
+            answer = re.sub(r'^(a|an|the)\s+', '', answer, flags=re.IGNORECASE)
+        
+        # Number formatting - remove commas from numbers
+        if answer.replace(',', '').replace('.', '').replace('-', '').isdigit():
+            answer = answer.replace(',', '')
+        
+        # Final cleanup
+        answer = answer.strip()
+        
+        if hasattr(self, 'logging_setup') and self.logging_setup:
+            self.logging_setup.log_step(
+                action='gaia_format_final',
+                details=f'Final formatted: \'{answer}\'',
+                node_name='format_answer'
+            )
+        
+        return answer if answer else "No answer"
 
     def process_question(self, question: str, task_id: str = None) -> Dict:
         """
