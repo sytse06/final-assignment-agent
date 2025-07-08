@@ -2452,6 +2452,20 @@ files = [
 ]
 
 [[package]]
+name = "helium"
+version = "5.1.1"
+description = "Lighter browser automation based on Selenium."
+optional = false
+python-versions = ">=3"
+groups = ["main"]
+files = [
+    {file = "helium-5.1.1.tar.gz", hash = "sha256:8232b6597d24b435cda4e18a95ae883ff0bdcdbff70f98a6cb41133864d2d493"},
+]
+
+[package.dependencies]
+selenium = ">=4.16.0"
+
+[[package]]
 name = "hf-xet"
 version = "1.1.4"
 description = "Fast transfer of large files with the Hugging Face Hub."
@@ -5548,10 +5562,9 @@ files = [
 name = "outcome"
 version = "1.3.0.post0"
 description = "Capture the outcome of Python function calls."
-optional = true
+optional = false
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "extra == \"selenium\" or extra == \"all\""
 files = [
     {file = "outcome-1.3.0.post0-py2.py3-none-any.whl", hash = "sha256:e771c5ce06d1415e356078d3bdd68523f284b4ce5419828922b6871e65eda82b"},
     {file = "outcome-1.3.0.post0.tar.gz", hash = "sha256:9dcf02e65f2971b80047b377468e72a268e15c0af3cf1238e6ff14f7f91143b8"},
@@ -6653,10 +6666,9 @@ files = [
 name = "pysocks"
 version = "1.7.1"
 description = "A Python SOCKS client module. See https://github.com/Anorov/PySocks for more information."
-optional = true
+optional = false
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
 groups = ["main"]
-markers = "extra == \"selenium\" or extra == \"all\""
 files = [
     {file = "PySocks-1.7.1-py27-none-any.whl", hash = "sha256:08e69f092cc6dbe92a0fdd16eeb9b9ffbc13cadfe5ca4c7bd92ffb078b293299"},
     {file = "PySocks-1.7.1-py3-none-any.whl", hash = "sha256:2725bd0a9925919b9b51739eea5f9e2bae91e83288108a9ad338b2e3a4435ee5"},
@@ -7823,10 +7835,9 @@ stats = ["scipy (>=1.7)", "statsmodels (>=0.12)"]
 name = "selenium"
 version = "4.33.0"
 description = "Official Python bindings for Selenium WebDriver"
-optional = true
+optional = false
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"selenium\" or extra == \"all\""
 files = [
     {file = "selenium-4.33.0-py3-none-any.whl", hash = "sha256:af9ea757813918bddfe05cc677bf63c8a0cd277ebf8474b3dd79caa5727fca85"},
     {file = "selenium-4.33.0.tar.gz", hash = "sha256:d90974db95d2cdeb34d2fb1b13f03dc904f53e6c5d228745b0635ada10cd625d"},
@@ -8200,10 +8211,9 @@ files = [
 name = "sortedcontainers"
 version = "2.4.0"
 description = "Sorted Containers -- Sorted List, Sorted Dict, Sorted Set"
-optional = true
+optional = false
 python-versions = "*"
 groups = ["main"]
-markers = "extra == \"selenium\" or extra == \"all\""
 files = [
     {file = "sortedcontainers-2.4.0-py2.py3-none-any.whl", hash = "sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0"},
     {file = "sortedcontainers-2.4.0.tar.gz", hash = "sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88"},
@@ -8944,10 +8954,9 @@ vision = ["Pillow (>=10.0.1,<=15.0)"]
 name = "trio"
 version = "0.30.0"
 description = "A friendly Python library for async concurrency and I/O"
-optional = true
+optional = false
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"selenium\" or extra == \"all\""
 files = [
     {file = "trio-0.30.0-py3-none-any.whl", hash = "sha256:3bf4f06b8decf8d3cf00af85f40a89824669e2d033bb32469d34840edcfc22a5"},
     {file = "trio-0.30.0.tar.gz", hash = "sha256:0781c857c0c81f8f51e0089929a26b5bb63d57f927728a5586f7e36171f064df"},
@@ -8966,10 +8975,9 @@ sortedcontainers = "*"
 name = "trio-websocket"
 version = "0.12.2"
 description = "WebSocket library for Trio"
-optional = true
+optional = false
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"selenium\" or extra == \"all\""
 files = [
     {file = "trio_websocket-0.12.2-py3-none-any.whl", hash = "sha256:df605665f1db533f4a386c94525870851096a223adcb97f72a07e8b4beba45b6"},
     {file = "trio_websocket-0.12.2.tar.gz", hash = "sha256:22c72c436f3d1e264d0910a3951934798dcc5b00ae56fc4ee079d46c7cf20fae"},
@@ -9316,7 +9324,6 @@ files = [
     {file = "websocket_client-1.8.0-py3-none-any.whl", hash = "sha256:17b44cc997f5c498e809b22cdf2d9c7a9e71c02c8cc2b6c56e7c2d1239bfa526"},
     {file = "websocket_client-1.8.0.tar.gz", hash = "sha256:3239df9f44da632f96012472805d40a23281a991027ce11d2f45a6f24ac4c3da"},
 ]
-markers = {main = "extra == \"selenium\" or extra == \"all\""}
 
 [package.extras]
 docs = ["Sphinx (>=6.0)", "myst-parser (>=2.0.0)", "sphinx-rtd-theme (>=1.1.0)"]
@@ -9447,10 +9454,9 @@ requests = "*"
 name = "wsproto"
 version = "1.2.0"
 description = "WebSockets state-machine based protocol implementation"
-optional = true
+optional = false
 python-versions = ">=3.7.0"
 groups = ["main"]
-markers = "extra == \"selenium\" or extra == \"all\""
 files = [
     {file = "wsproto-1.2.0-py3-none-any.whl", hash = "sha256:b9acddd652b585d75b20477888c56642fdade28bdfd3579aa24a4d2c037dd736"},
     {file = "wsproto-1.2.0.tar.gz", hash = "sha256:ad565f26ecb92588a3e43bc3d96164de84cd9902482b130d0ddbaa9664a85065"},
@@ -9904,4 +9910,4 @@ selenium = ["selenium"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "68b8b1ad892a6818f5e90dae7202dc8491a523680638f47de21aa021f4389e85"
+content-hash = "6ab5d34d2df3abd0f58bf1ccfb58882eef9eabd707276cf731911e9011169403"

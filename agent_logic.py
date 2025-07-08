@@ -344,13 +344,16 @@ def validate_gaia_format(answer: str) -> bool:
 # MAIN GAIA AGENT
 # ============================================================================
 class GAIAAgent:
-    """Initializing GAIA Agent with SmolagAgents coordinator pattern embedded in LangGraph workflow"""
+    """GAIA Agent with vision capabilities implemented in a SmolagAgents 
+    coordinator pattern embedded in LangGraph workflow"""
     
     def __init__(self, config: Optional[GAIAConfig] = None) -> None:
         if config is None:
             config = GAIAConfig()
         
         self.config: GAIAConfig = config
+        self.capabilities: Dict[str, Any] = {}  # Store capability assessment
+        
         print("🔄 Initializing core components...")
         self.retriever: Any = self._initialize_retriever()
         self.orchestration_model: Any = self._initialize_orchestration_model()  # LangChain for workflow
@@ -366,7 +369,7 @@ class GAIAAgent:
         else:
             self.logging: Optional[AgentLoggingSetup] = None
         
-        # 🔥 CRITICAL: IMMEDIATE SMOLAGENT VALIDATION
+        # Validating vision capabilities
         print("🔍 Validating SmolagAgent components...")
         
         try:
@@ -376,15 +379,28 @@ class GAIAAgent:
             print(f"  ✅ Created {len(test_specialists)} specialists successfully")
             print(f"     Specialists: {list(test_specialists.keys())}")
             
-            # Test coordinator creation immediately - this will reveal managed_agents issues
+            # Validate content processor capabilities including model vision support
+            print("  → Validating content processor capabilities...")
+            if 'content_processor' in test_specialists:
+                content_tools = getattr(test_specialists['content_processor'], 'tools', [])
+                self.capabilities = self._validate_content_processor_tools(content_tools)
+            else:
+                print("⚠️ No content processor found in specialists")
+                self.capabilities = {"effective_vision_capability": False}
+            
+            # Test coordinator creation
             print("  → Testing coordinator creation...")
             test_coordinator = self._create_coordinator()
             print("  ✅ Coordinator created successfully")
             print(f"     Managed agents: {len(test_coordinator.managed_agents) if hasattr(test_coordinator, 'managed_agents') else 'Unknown'}")
             
-            # Test a simple coordinator task to validate full pipeline
+            # Test coordinator task execution
             print("  → Testing coordinator execution...")
-            simple_test_result = test_coordinator.run("What is 2+2? Answer with just the number.")
+            if self.capabilities.get("model_supports_vision", False):
+                simple_test_result = test_coordinator.run("What is 2+2? Answer with just the number.")
+            else:
+                print("    (Using text-only test - model has no vision capabilities)")
+                simple_test_result = test_coordinator.run("What is 2+2? Answer with just the number.")
             print(f"  ✅ Coordinator execution test successful")
             print(f"     Result preview: {str(simple_test_result)[:50]}...")
             
@@ -415,6 +431,10 @@ class GAIAAgent:
         
         print("✅ All SmolagAgent components validated successfully!")
         
+        # Report final capability summary
+        vision_status = "✅ Full Vision" if self.capabilities.get("effective_vision_capability") else "⚠️ OCR Fallback Only"
+        print(f"🎯 GAIA Agent Ready - Vision Capability: {vision_status}")
+        
         # Initialize coordinator as None (will be created fresh for each task)
         self.coordinator: Optional[CodeAgent] = None
         
@@ -424,6 +444,7 @@ class GAIAAgent:
         
         print("🚀 GAIA Agent initialization complete!")
         print("   → SmolagAgent validation: ✅ PASSED")
+        print("   → Vision capabilities: " + vision_status)
         print("   → LangGraph workflow: ✅ BUILT") 
         print("   → Ready for question processing")
             
@@ -526,15 +547,150 @@ class GAIAAgent:
             raise
         
     # ============================================================================
-    # FILE HANDLING WITH SMOLAGENTS INSIGHTS
+    # FILE HANDLING AND VISION CAPABILITIES USING SMOLAGENTS
     # ============================================================================
 
-    def _download_file_once(self, task_id: str, file_name: str) -> Optional[str]:
-        """
-        Download attached file with comprehensive error handling
-        """
+    def _check_model_vision_capabilities(self) -> Dict[str, bool]:
+        """Check if the current model supports vision capabilities"""
+        model_info = {
+            "has_vision": False,
+            "supports_images": False,
+            "model_type": "unknown",
+            "confidence": "low"
+        }
+        
         try:
-            # Use config field (make sure it's defined in GAIAConfig)
+            # Get model identifier from specialist model
+            model_id = getattr(self.specialist_model, 'model_id', '').lower()
+            
+            # Known vision-capable model patterns
+            vision_model_patterns = {
+                # OpenAI models
+                'gpt-4-vision': True,
+                'gpt-4o': True,
+                'gpt-4-turbo': True,
+                
+                # Anthropic models  
+                'claude-3': True,
+                'claude-3.5': True,
+                
+                # Google models
+                'gemini-pro-vision': True,
+                'gemini-1.5': True,
+                'gemini-2': True,
+                'gemini-2.5': True,
+                
+                # Open source models
+                'llava': True,
+                'qwen-vl': True,
+                'instructblip': True,
+                'blip': True,
+                
+                # Known text-only models
+                'gpt-3.5': False,
+                'text-davinci': False,
+                'qwen-qwq': False,  # Current model in config
+                'llama': False,
+                'mistral': False,
+                'mixtral': False
+            }
+            
+            # Check against known patterns
+            for pattern, has_vision in vision_model_patterns.items():
+                if pattern in model_id:
+                    model_info.update({
+                        "has_vision": has_vision,
+                        "supports_images": has_vision,
+                        "model_type": model_id,
+                        "confidence": "high"
+                    })
+                    break
+            else:
+                # Unknown model - make conservative assumption
+                model_info.update({
+                    "has_vision": False,
+                    "supports_images": False,
+                    "model_type": model_id,
+                    "confidence": "low"
+                })
+                
+            # Additional checks for provider-specific patterns
+            if 'openrouter/' in model_id:
+                # OpenRouter - check the actual model name after the slash
+                actual_model = model_id.split('/')[-1]
+                for pattern, has_vision in vision_model_patterns.items():
+                    if pattern in actual_model:
+                        model_info["has_vision"] = has_vision
+                        model_info["supports_images"] = has_vision
+                        model_info["confidence"] = "high"
+                        break
+            
+        except Exception as e:
+            print(f"⚠️ Could not determine model vision capabilities: {e}")
+            model_info.update({
+                "has_vision": False,
+                "supports_images": False,
+                "model_type": "error_detecting",
+                "confidence": "error"
+            })
+        
+        return model_info
+
+    def _validate_content_processor_tools(self, content_tools):
+        """Enhanced validation for vision and content tools + model capabilities"""
+        tool_names = [getattr(tool, 'name', tool.__class__.__name__) for tool in content_tools]
+        
+        # Tool capability validation
+        has_vision_browser = any('Vision' in name or 'Browser' in name for name in tool_names)
+        has_content_retriever = any('Content' in name or 'Retriever' in name for name in tool_names)
+        has_speech_tool = any('Speech' in name or 'Text' in name for name in tool_names)
+        
+        # Model capability validation
+        model_capabilities = self._check_model_vision_capabilities()
+        
+        # Comprehensive capabilities assessment
+        capabilities = {
+            "vision_navigation": has_vision_browser,
+            "content_extraction": has_content_retriever, 
+            "audio_processing": has_speech_tool,
+            "total_tools": len(content_tools),
+            
+            # Model capabilities
+            "model_supports_vision": model_capabilities["has_vision"],
+            "model_supports_images": model_capabilities["supports_images"],
+            "model_type": model_capabilities["model_type"],
+            "model_confidence": model_capabilities["confidence"],
+            
+            # Combined capability assessment
+            "effective_vision_capability": has_vision_browser and model_capabilities["has_vision"],
+            "fallback_strategy": "ocr_text_extraction" if not model_capabilities["has_vision"] else "full_vision"
+        }
+        
+        # Status reporting with actionable information
+        print(f"📊 Content Processor Capabilities Assessment:")
+        print(f"   🔧 Tools: {len(content_tools)} total")
+        print(f"   🌐 Vision Browser: {'✅' if has_vision_browser else '❌'}")
+        print(f"   📄 Content Retriever: {'✅' if has_content_retriever else '❌'}")
+        print(f"   🎵 Speech Processing: {'✅' if has_speech_tool else '❌'}")
+        print(f"   👁️  Model Vision Support: {'✅' if model_capabilities['has_vision'] else '❌'} ({model_capabilities['model_type']})")
+        print(f"   🎯 Effective Vision Capability: {'✅ Full Vision' if capabilities['effective_vision_capability'] else '⚠️ OCR Fallback Only'}")
+        
+        # Warnings and recommendations
+        if not has_vision_browser:
+            print("⚠️  No vision browser tools - install vision_browser_tool for web content acquisition")
+        if not has_content_retriever:
+            print("⚠️  No content retrieval tools - limited document processing capabilities")
+        if not model_capabilities["has_vision"]:
+            print("ℹ️  Text-only model detected - vision questions will use OCR text extraction fallback")
+            print("💡 For full vision capabilities, consider using: GPT-4V, Claude-3, Gemini-Pro-Vision, or LLaVA")
+        if has_vision_browser and not model_capabilities["has_vision"]:
+            print("⚠️  Vision tools available but model can't process images - will use OCR extraction")
+        
+        return capabilities
+
+    def _download_file_once(self, task_id: str, file_name: str) -> Optional[str]:
+        """Download attached file with comprehensive error handling"""
+        try:
             agent_evaluation_api = self.config.agent_evaluation_api
             file_url = f"{agent_evaluation_api}files/{task_id}"
             
@@ -570,10 +726,46 @@ class GAIAAgent:
             print(f"❌ Download error: {e}")
             return None
 
+    def _analyze_image_metadata(self, file_path: str) -> Dict[str, Any]:
+        """Analyze image file for enhanced vision processing"""
+        if not file_path or not os.path.exists(file_path):
+            return {"error": "Image file not found"}
+        
+        try:
+            from PIL import Image
+            import mimetypes
+            
+            with Image.open(file_path) as img:
+                image_info = {
+                    "dimensions": img.size,
+                    "format": img.format,
+                    "mode": img.mode,
+                    "has_transparency": img.mode in ("RGBA", "LA") or "transparency" in img.info,
+                    "file_size": os.path.getsize(file_path),
+                    "mime_type": mimetypes.guess_type(file_path)[0],
+                    "estimated_complexity": "high" if max(img.size) > 2000 else "medium"
+                }
+                
+                # Detect potential content types
+                width, height = img.size
+                aspect_ratio = width / height
+                
+                if aspect_ratio > 2.0:
+                    image_info["likely_content"] = "panoramic_or_document"
+                elif 0.8 <= aspect_ratio <= 1.2:
+                    image_info["likely_content"] = "square_diagram_or_chart"
+                elif width > 1000 and height > 800:
+                    image_info["likely_content"] = "detailed_image_or_screenshot"
+                else:
+                    image_info["likely_content"] = "standard_image"
+                
+                return image_info
+                
+        except Exception as e:
+            return {"error": f"Image analysis failed: {str(e)}"}
+
     def _analyze_file_metadata(self, file_name: str, file_path: str) -> Dict[str, Any]:
-        """
-        Python-native file analysis needs no tool and gives coordinator Python capabilities
-        """
+        """Enhanced file analysis with vision-aware metadata"""
         if not file_name:
             return {"no_file": True}
         
@@ -585,7 +777,7 @@ class GAIAAgent:
             import mimetypes
             mime_type, _ = mimetypes.guess_type(file_name)
             
-            # Categorize file type
+            # Categorize file type with enhanced image handling
             if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
                 category = "data"
                 processing_approach = "direct_pandas"
@@ -598,7 +790,7 @@ class GAIAAgent:
             elif extension in ['.pdf', '.docx', '.doc', '.txt']:
                 category = "document"
                 processing_approach = "content_extraction"
-                recommended_specialist = "document_processor"
+                recommended_specialist = "content_processor"
                 specialist_guidance = {
                     "tool_command": "Use ContentRetrieverTool with file_path from additional_args",
                     "imports_needed": [],
@@ -607,7 +799,7 @@ class GAIAAgent:
             elif extension in ['.mp3', '.mp4', '.wav', '.m4a', '.mov']:
                 category = "media"
                 processing_approach = "transcription"
-                recommended_specialist = "document_processor"
+                recommended_specialist = "content_processor"
                 specialist_guidance = {
                     "tool_command": "Use SpeechToTextTool with file_path from additional_args",
                     "imports_needed": [],
@@ -616,16 +808,30 @@ class GAIAAgent:
             elif extension in ['.png', '.jpg', '.jpeg', '.gif', '.bmp']:
                 category = "image"
                 processing_approach = "vision_analysis"
-                recommended_specialist = "document_processor"
+                recommended_specialist = "content_processor"
+                
+                # 🔥 NEW: Enhanced image analysis
+                image_metadata = self._analyze_image_metadata(file_path)
+                
+                # Adjust processing strategy based on model capabilities
+                if self.capabilities.get("model_supports_vision", False):
+                    processing_strategy = "Load image → analyze visual content → extract information"
+                    tool_command = "Use vision tools with file_path and images from additional_args"
+                else:
+                    processing_strategy = "Load image → OCR text extraction → analyze text"
+                    tool_command = "Use ContentRetrieverTool for OCR text extraction"
+                
                 specialist_guidance = {
-                    "tool_command": "Use vision tools with file_path from additional_args",
-                    "imports_needed": [],
-                    "processing_strategy": "Analyze image → extract visual information → answer question"
+                    "tool_command": tool_command,
+                    "imports_needed": ["PIL"],
+                    "processing_strategy": processing_strategy,
+                    "image_info": image_metadata,
+                    "vision_capable": self.capabilities.get("model_supports_vision", False)
                 }
             else:
                 category = "unknown"
                 processing_approach = "content_extraction"
-                recommended_specialist = "document_processor"
+                recommended_specialist = "content_processor"
                 specialist_guidance = {
                     "tool_command": "Use ContentRetrieverTool with file_path from additional_args",
                     "imports_needed": [],
@@ -651,7 +857,7 @@ class GAIAAgent:
                 "file_path": file_path,
                 "category": "unknown",
                 "processing_approach": "content_extraction",
-                "recommended_specialist": "document_processor",
+                "recommended_specialist": "content_processor",
                 "error": str(e)
             }
 
@@ -790,75 +996,80 @@ class GAIAAgent:
         else:
             print(f"⚠️  Created web_researcher with no tools: Limited capabilities")
         
-        # 3. Document Processor - ToolCallingAgent for file processing
-        doc_tools = []    
+        # 3. Content Processor - Multi-modal content acquisition and processing
+        content_tools = []
+
+        # Add VisionWebBrowserTool if available
+        try:
+            from vision_browser_tool import VisionWebBrowserTool  # Corrected path
+            vision_browser = VisionWebBrowserTool()
+            if hasattr(vision_browser, 'setup'):
+                vision_browser.setup()
+            content_tools.append(vision_browser)
+            print("✅ Added VisionWebBrowserTool to content processor")
+        except ImportError as e:
+            print(f"⚠️  VisionWebBrowserTool requires helium selenium: {e}")
+        except Exception as e:
+            print(f"⚠️  Error adding VisionWebBrowserTool: {e}")
+
         # Add ContentRetrieverTool if available
         if CUSTOM_TOOLS_AVAILABLE:
             try:
                 content_retriever = ContentRetrieverTool()
-                doc_tools.append(content_retriever)
-                print("✅ Added ContentRetrieverTool to document processor")
+                content_tools.append(content_retriever)
+                print("✅ Added ContentRetrieverTool to content processor")
             except Exception as e:
                 print(f"⚠️  Error adding ContentRetrieverTool: {e}")
-        else:
-            print("⚠️  ContentRetrieverTool not available")
-        
+
         # Add SpeechToTextTool if available        
         try:
             speech_tool = SpeechToTextTool()
-            doc_tools.append(speech_tool)
-            print("✅ Added SpeechToTextTool to document processor")
+            content_tools.append(speech_tool)
+            print("✅ Added SpeechToTextTool to content processor")
         except ImportError:
             print("⚠️  SpeechToTextTool requires transformers - skipping")
         except Exception as e:
             print(f"⚠️  Error adding SpeechToTextTool: {e}")
-        
-        # Create description based on available tools
-        doc_tool_names = [getattr(tool, 'name', tool.__class__.__name__) for tool in doc_tools]
-        doc_capabilities = []
-        
-        for tool in doc_tools:
-            tool_name = getattr(tool, 'name', tool.__class__.__name__)
-            if 'content' in tool_name.lower() or 'retriever' in tool_name.lower():
-                doc_capabilities.append("Document content extraction (PDF, DOCX, TXT, etc.)")
-            elif 'speech' in tool_name.lower() or 'audio' in tool_name.lower():
-                doc_capabilities.append("Audio transcription and processing")
-        
-        # Remove duplicates
-        unique_doc_capabilities = []
-        for cap in doc_capabilities:
-            if cap not in unique_doc_capabilities:
-                unique_doc_capabilities.append(cap)
-        
-        document_processor_description = f"""Document and media processing specialist with {len(doc_tools)} tools:
 
-            AVAILABLE TOOLS: {', '.join(doc_tool_names)}
+        # Create content processor description
+        content_tool_names = [getattr(tool, 'name', tool.__class__.__name__) for tool in content_tools]
 
-            CAPABILITIES:
-            {chr(10).join(f"- {cap}" for cap in unique_doc_capabilities)}
-            
-            FILE ACCESS: Uses additional_args for file paths"""
-        
-        document_processor = ToolCallingAgent(
-            name="document_processor",
-            description=document_processor_description,
-            tools=doc_tools,
+        content_processor_description = f"""Multi-modal content acquisition and processing specialist.
+
+        WORKFLOW: Navigate pages → Acquire content → Process content
+
+        AVAILABLE TOOLS: {', '.join(content_tool_names)}
+
+        CAPABILITIES:
+        - Web navigation and content discovery
+        - PDF, document, and media file acquisition  
+        - Text extraction and content analysis
+        - Audio transcription and processing
+
+        STRATEGY: Use vision_web_browser for content acquisition, then appropriate processing tool"""
+
+        content_processor = ToolCallingAgent(
+            name="content_processor", 
+            description=content_processor_description,
+            tools=content_tools,
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
             add_base_tools=True,
             logger=logger
-        )        
+        )
+
+    # Create coordinator description
         # Return dict
         specialist_agents = {
             "data_analyst": data_analyst,
             "web_researcher": web_researcher,
-            "document_processor": document_processor
+            "content_processor": content_processor
         }
         
         print(f"🎯 Created {len(specialist_agents)} specialist agents:")
         print(f"   data_analyst: CodeAgent with direct Python file access")
         print(f"   web_researcher: ToolCallingAgent with web search tools")
-        print(f"   document_processor: ToolCallingAgent with document/audio tools")
+        print(f"   content_processor: ToolCallingAgent with multi-modal content tools")
         
         return specialist_agents
 
@@ -877,7 +1088,7 @@ class GAIAAgent:
             MANAGED AGENTS:
             - data_analyst: For Excel/CSV analysis and calculations  
             - web_researcher: For web searches and information gathering
-            - document_processor: For document extraction and audio transcription
+            - content_processor: For multi-modal content acquisition and processing
 
             WORKFLOW:
             1. Analyze the question and identify required capabilities
@@ -920,127 +1131,165 @@ class GAIAAgent:
         
         # Task for coordinator with managed specialists
         task = f"""
-    You are the GAIA coordinator with three managed specialist agents. Analyze this question and execute using your specialists.
+        You are the GAIA coordinator with three managed specialist agents. Analyze this question and execute using your specialists.
 
-    QUESTION: {question}
-    COMPLEXITY: {complexity}
-    FILE INFO: {file_name} (path: {file_path}, has_file: {has_file})
-    {examples_context}
+        QUESTION: {question}
+        COMPLEXITY: {complexity}
+        FILE INFO: {file_name} (path: {file_path}, has_file: {has_file})
+        {examples_context}
 
-    YOUR MANAGED SPECIALISTS:
-    - analyze_data: CodeAgent for Excel/CSV analysis and calculations (direct file access)
-    - search_web: ToolCallingAgent for web searches and current information  
-    - process_document: ToolCallingAgent for document/audio processing (file via additional_args)
+        YOUR MANAGED SPECIALISTS:
+        - data_analyst: CodeAgent for Excel/CSV analysis and calculations (direct file access)
+        - web_researcher: ToolCallingAgent for web searches and current information  
+        - content_processor: ToolCallingAgent for multi-modal content acquisition and processing
 
-    ANALYSIS AND EXECUTION:
+        ANALYSIS AND EXECUTION:
 
-    1. PROBLEM ANALYSIS:
-    Analyze the fundamental problem in this question:
-    - Is this primarily a mathematical calculation?
-    - Does it require current/recent information from the web?
-    - Does it involve file processing or data extraction?
-    - What type of reasoning is needed?
+        1. PROBLEM ANALYSIS:
+        Analyze the fundamental problem in this question:
+        - Is this primarily a mathematical calculation?
+        - Does it require current/recent information from the web?
+        - Does it involve file processing or content acquisition?
+        - What type of reasoning is needed?
 
-    Consider the question: "{question}"
+        Consider the question: "{question}"
 
-    2. FILE ANALYSIS (if present):
-    ```python
-    # Analyze file type and processing approach
-    if "{file_name}":
-        from pathlib import Path
-        import mimetypes
-        
-        file_path = Path("{file_name}")
-        extension = file_path.suffix.lower()
-        
-        if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
-            file_type = "data"
-            best_specialist = "analyze_data"
-            access_method = "direct_path"  # CodeAgent gets file paths directly
-            print(f"Data file detected → use analyze_data specialist")
-        elif extension in ['.pdf', '.docx', '.doc', '.txt', '.mp3', '.mp4', '.wav']:
-            file_type = "document_or_media" 
-            best_specialist = "process_document"
-            access_method = "additional_args"  # ToolCallingAgent needs additional_args
-            print(f"Document/media file detected → use process_document specialist")
-        else:
-            file_type = "unknown"
-            best_specialist = "process_document"
-            access_method = "additional_args"
-            print(f"Unknown file type → use process_document specialist")
+        2. PROCESSING APPROACH:
+        Determine the appropriate processing approach:
+
+        ```python
+        # Analyze processing approach
+        question_text = "{question}"
+        has_attached_file = "{has_file}" == "True"
+
+        if has_attached_file:
+            # FILE-BASED ANALYSIS (served via URL in deployment)
+            from pathlib import Path
             
-        print(f"File analysis: {{extension}} → {{file_type}} → {{best_specialist}}")
-    ```
+            file_path = Path("{file_name}")
+            extension = file_path.suffix.lower()
+            
+            if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
+                processing_approach = "data_analysis"
+                best_specialist = "data_analyst"
+                print(f"Data file detected → use data_analyst specialist")
+            elif extension in ['.pdf', '.docx', '.doc', '.txt', '.mp3', '.mp4', '.wav']:
+                processing_approach = "content_processing"
+                best_specialist = "content_processor"
+                print(f"Document/media file detected → use content_processor specialist")
+            else:
+                processing_approach = "content_processing"
+                best_specialist = "content_processor"
+                print(f"Unknown file type → use content_processor specialist")
 
-    3. SPECIALIST SELECTION AND EXECUTION:
-    Based on your analysis, select the most appropriate specialist:
-
-    ```python
-    # Select specialist based on question requirements
-    question_lower = "{question}".lower()
-
-    # Determine best specialist based on question content and file type
-    if "calculate" in question_lower or "data" in question_lower or "number" in question_lower:
-        if "{file_name}" and file_type == "data":
-            selected_specialist = "analyze_data"
-            reasoning = "Data file + calculation requirements → analyze_data specialist"
+        elif any(discovery_signal in question_text.lower() for discovery_signal in ["chapter", "section", "find", "locate", "download"]):
+            # WEB CONTENT ANALYSIS
+            # Consider if you need to visually explore this webpage to find the right content
+            # Establish:
+            # - Does this seem like a direct link to a document/file/image?
+            # - Does the question suggest to navigate or discover content on the page?
+            # - Is looking at the page the fastest path to problem solving?
+            
+            if any(indicator in question_text.lower() for indicator in [
+                "chapter", "section", "part", "find", "locate", "mentioned", "discussed"
+            ]) or not question_text.strip().endswith(('.pdf', '.doc', '.docx', '.txt')):
+                processing_approach = "multimodal_web_content"
+                best_specialist = "content_processor"
+                strategy_hint = "Use vision browser to explore and acquire content, then process"
+                print(f"Web exploration needed → use content_processor with vision browser")
+            else:
+                processing_approach = "direct_web_content"
+                best_specialist = "content_processor"
+                strategy_hint = "Try direct content processing first"
+                print(f"Direct web content → use content_processor")
+            
         else:
-            selected_specialist = "analyze_data"  
-            reasoning = "Calculation requirements → analyze_data specialist"
-    elif "current" in question_lower or "latest" in question_lower or "recent" in question_lower:
-        selected_specialist = "search_web"
-        reasoning = "Current information needed → search_web specialist"
-    elif "{file_name}" and file_type in ["document_or_media", "unknown"]:
-        selected_specialist = "process_document"
-        reasoning = "File processing required → process_document specialist"
-    else:
-        # Default logic based on question keywords
-        if any(keyword in question_lower for keyword in ["search", "find", "who", "when", "where", "what is"]):
-            selected_specialist = "search_web"
-            reasoning = "Information retrieval → search_web specialist"
-        elif "{file_name}":
+            # GENERAL INFORMATION QUERY
+            processing_approach = "web_search"
+            best_specialist = "web_researcher"
+            print(f"General information query → use web_researcher specialist")
+
+        print(f"Processing approach: {processing_approach} → {best_specialist}")
+        ```
+
+        3. SPECIALIST SELECTION AND EXECUTION:
+        Based on your analysis, select the most appropriate specialist:
+
+        ```python
+        # Final specialist selection based on question requirements and processing approach
+        question_lower = "{question}".lower()
+
+        # Override specialist selection based on question type
+        if "calculate" in question_lower or "data" in question_lower or "number" in question_lower:
+            if processing_approach == "data_analysis":
+                selected_specialist = "data_analyst"
+                reasoning = "Data file + calculation requirements → data_analyst specialist"
+            else:
+                selected_specialist = "data_analyst"  
+                reasoning = "Calculation requirements → data_analyst specialist"
+        elif "current" in question_lower or "latest" in question_lower or "recent" in question_lower:
+            selected_specialist = "web_researcher"
+            reasoning = "Current information needed → web_researcher specialist"
+        elif processing_approach in ["multimodal_web_content", "content_processing", "direct_web_content"]:
+            selected_specialist = "content_processor"
+            reasoning = f"Content processing needed → content_processor specialist"
+        else:
+            # Default to best specialist from processing analysis
             selected_specialist = best_specialist
-            reasoning = "File-based selection → {{best_specialist}} specialist"
+            reasoning = f"Processing analysis → {best_specialist} specialist"
+
+        print(f"SELECTED SPECIALIST: {{selected_specialist}}")
+        print(f"REASONING: {{reasoning}}")
+        ```
+
+        4. EXECUTE WITH SELECTED SPECIALIST:
+        Now execute the task using your selected specialist with appropriate strategy:
+
+        SPECIALIST EXECUTION GUIDELINES:
+
+        If using **data_analyst**:
+        - You can directly access files using pandas: `pd.read_excel("{file_path}")` or `pd.read_csv("{file_path}")`
+        - Use numerical computation libraries: numpy, scipy, statistics, math
+        - Perform calculations and data analysis directly in Python
+
+        If using **web_researcher**:
+        - Search for current information using GoogleSearchTool
+        - Use VisitWebpageTool to extract content from specific URLs
+        - Use WikipediaSearchTool for factual information
+
+        If using **content_processor**:
+        - For attached files: Use ContentRetrieverTool for document extraction (files via additional_args)
+        - For web content acquisition: Strategic guidance based on processing approach:
+        * Multimodal web content: "Use vision browser to explore page and acquire content, then process with content retriever"
+        * Direct web content: "Use content retriever directly if URL points to document"
+        - Use SpeechToTextTool for audio transcription (files via additional_args)
+
+        STRATEGIC GUIDANCE FOR CONTENT PROCESSOR:
+        ```python
+        if processing_approach == "multimodal_web_content":
+            strategy_guidance = f"""
+            CONTENT ACQUISITION STRATEGY:
+            - Available tools: {', '.join(content_tool_names)}
+            - Use vision_browser_tool for navigation and content discovery
+            - Use vision_browser_tool to navigate and discover content
+            - Look for download links, embedded content, or navigation requirements
+            - Acquire content files or direct URLs
+            - Use content_retriever_tool to process acquired content
+            - Search for: {question}
+            """
+            print(f"Providing vision browser strategy to content_processor")
         else:
-            selected_specialist = "search_web"
-            reasoning = "General information query → search_web specialist"
+            strategy_guidance = "Use appropriate content processing tools based on content type"
+        ```
 
-    print(f"SELECTED SPECIALIST: {{selected_specialist}}")
-    print(f"REASONING: {{reasoning}}")
-    ```
+        EXECUTE NOW: Use your selected specialist to answer the question: "{question}"
 
-    4. EXECUTE WITH SELECTED SPECIALIST:
-    Now execute the task using your selected specialist. Remember:
-
-    - **analyze_data**: For Excel/CSV files and calculations. File paths can be used directly in your code.
-    - **search_web**: For current information and web searches. No file processing.
-    - **process_document**: For document/audio/video processing. Files available via additional_args.
-
-    SPECIALIST EXECUTION GUIDELINES:
-
-    If using **analyze_data**:
-    - You can directly access files using pandas: `pd.read_excel("{file_path}")` or `pd.read_csv("{file_path}")`
-    - Use numerical computation libraries: numpy, scipy, statistics, math
-    - Perform calculations and data analysis directly in Python
-
-    If using **search_web**:
-    - Search for current information using GoogleSearchTool
-    - Use VisitWebpageTool to extract content from specific URLs
-    - Use WikipediaSearchTool for factual information
-
-    If using **process_document**:
-    - Use ContentRetrieverTool for document extraction (files via additional_args)
-    - Use SpeechToTextTool for audio transcription (files via additional_args)
-    - Handle PDFs, Word docs, audio, video, and other media files
-
-    EXECUTE NOW: Use your selected specialist to answer the question: "{question}"
-
-    CRITICAL OUTPUT REQUIREMENTS:
-    - End your final response with 'FINAL ANSWER: [specific answer]'
-    - Follow GAIA format: numbers (no commas), strings (no articles), lists (comma separated)
-    - Provide actual answers, never use placeholder text like "[your answer]"
-    - Be specific and factual in your response
-    """
+        CRITICAL OUTPUT REQUIREMENTS:
+        - End your final response with 'FINAL ANSWER: [specific answer]'
+        - Follow GAIA format: numbers (no commas), strings (no articles), lists (comma separated)
+        - Provide actual answers, never use placeholder text like "[your answer]"
+        - Be specific and factual in your response
+        """
         
         return task
                    
