@@ -96,6 +96,8 @@ class GAIAConfig:
     model_name: str = "qwen-qwq-32b"
     temperature: float = 0.3
     agent_evaluation_api: str = "https://agents-course-unit4-scoring.hf.space/"
+    enable_url_downloading: bool = True
+    download_timeout: int = 30
     
     # For testing with Ollama
     api_base: Optional[str] = None
@@ -237,59 +239,48 @@ def llm_invoke_with_retry(llm, messages):
     return llm.invoke(messages)
 
 # ============================================================================
-# OTHER UTILITY FUNCTIONS
+# FILE HANDLING UTILITY FUNCTIONS
 # ============================================================================
 
-def is_simple_math(question: str) -> bool:
-    """Check if question is simple arithmetic"""
-    question_lower = question.lower()
-    
-    # Math operation keywords
-    math_keywords = ['calculate', 'what is', '%', 'percent', 'multiply', 'divide', 'add', 'subtract']
-    has_math_keyword = any(keyword in question_lower for keyword in math_keywords)
-    
-    # Simple patterns
-    simple_patterns = [
-        r'\d+\s*%\s*of\s*\d+',  # "15% of 200"
-        r'what\s+is\s+\d+.*\d+',  # "what is 15 * 23"
-        r'calculate\s+\d+.*\d+',   # "calculate 15 + 23"
-    ]
-    
-    has_simple_pattern = any(re.search(pattern, question_lower) for pattern in simple_patterns)
-    
-    return has_math_keyword and has_simple_pattern and len(question.split()) < 10
+def is_url(path: str) -> bool:
+    """Detect URL vs local path"""
+    try:
+        parsed = urlparse(path)
+        return bool(parsed.scheme and parsed.netloc)
+    except Exception:
+        return False
 
-def is_simple_fact(question: str) -> bool:
-    """Check if question is a simple factual query"""
-    question_lower = question.lower()
+def smart_file_handler(file_path: str, config: GAIAConfig) -> str:
+    """Handle URLs and local paths transparently"""
+    if not file_path:
+        raise ValueError("No file path provided")
     
-    simple_fact_patterns = [
-        r'what\s+are?\s+the\s+primary\s+colors?',
-        r'what\s+is\s+the\s+capital\s+of',
-        r'when\s+was.*born',
-        r'how\s+many.*in',
-    ]
+    if is_url(file_path):
+        if not config.enable_url_downloading:
+            raise ValueError("URL downloading disabled")
+        
+        # Download to temp file with proper extension
+        parsed_url = urlparse(file_path)
+        filename = parsed_url.path.split('/')[-1] if parsed_url.path else 'file'
+        extension = '.' + filename.split('.')[-1] if '.' in filename else ''
+        
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=extension)
+        
+        try:
+            response = requests.get(file_path, timeout=config.download_timeout)
+            response.raise_for_status()
+            temp_file.write(response.content)
+            temp_file.close()
+            return temp_file.name
+        except Exception as e:
+            temp_file.close()
+            raise Exception(f"Download failed: {str(e)}")
+    else:
+        # Local path - return as-is
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"File not found: {file_path}")
+        return file_path
     
-    return any(re.search(pattern, question_lower) for pattern in simple_fact_patterns)
-
-def has_attachments(task_id: str) -> bool:
-    """Check if task has file attachments (placeholder)"""
-    # This would check for actual attachments in a real implementation
-    # For now, return False as we don't have attachment detection
-    return False
-
-def needs_web_search(question: str) -> bool:
-    """Check if question needs current information"""
-    question_lower = question.lower()
-    
-    web_keywords = [
-        'current', 'latest', 'recent', 'today', 'now', 'this year',
-        'population of', 'price of', 'stock price', 'weather',
-        'who won', 'election results'
-    ]
-    
-    return any(keyword in question_lower for keyword in web_keywords)
-
 def extract_file_info_from_task_id(task_id: str) -> Dict[str, str]:
     """
     Extract file information from task_id using GAIA dataset.
@@ -352,6 +343,60 @@ def validate_gaia_format(answer: str) -> bool:
     return True
 
 # ============================================================================
+# OTHER UTILITY FUNCTIONS
+# ============================================================================
+
+def is_simple_math(question: str) -> bool:
+    """Check if question is simple arithmetic"""
+    question_lower = question.lower()
+    
+    # Math operation keywords
+    math_keywords = ['calculate', 'what is', '%', 'percent', 'multiply', 'divide', 'add', 'subtract']
+    has_math_keyword = any(keyword in question_lower for keyword in math_keywords)
+    
+    # Simple patterns
+    simple_patterns = [
+        r'\d+\s*%\s*of\s*\d+',  # "15% of 200"
+        r'what\s+is\s+\d+.*\d+',  # "what is 15 * 23"
+        r'calculate\s+\d+.*\d+',   # "calculate 15 + 23"
+    ]
+    
+    has_simple_pattern = any(re.search(pattern, question_lower) for pattern in simple_patterns)
+    
+    return has_math_keyword and has_simple_pattern and len(question.split()) < 10
+
+def is_simple_fact(question: str) -> bool:
+    """Check if question is a simple factual query"""
+    question_lower = question.lower()
+    
+    simple_fact_patterns = [
+        r'what\s+are?\s+the\s+primary\s+colors?',
+        r'what\s+is\s+the\s+capital\s+of',
+        r'when\s+was.*born',
+        r'how\s+many.*in',
+    ]
+    
+    return any(re.search(pattern, question_lower) for pattern in simple_fact_patterns)
+
+def has_attachments(task_id: str) -> bool:
+    """Check if task has file attachments (placeholder)"""
+    # This would check for actual attachments in a real implementation
+    # For now, return False as we don't have attachment detection
+    return False
+
+def needs_web_search(question: str) -> bool:
+    """Check if question needs current information"""
+    question_lower = question.lower()
+    
+    web_keywords = [
+        'current', 'latest', 'recent', 'today', 'now', 'this year',
+        'population of', 'price of', 'stock price', 'weather',
+        'who won', 'election results'
+    ]
+    
+    return any(keyword in question_lower for keyword in web_keywords)
+
+# ============================================================================
 # MAIN GAIA AGENT
 # ============================================================================
 class GAIAAgent:
@@ -364,6 +409,12 @@ class GAIAAgent:
         
         self.config: GAIAConfig = config
         self.capabilities: Dict[str, Any] = {}  # Store capability assessment
+        
+        import sys
+        current_module = sys.modules[__name__]
+        current_module.smart_file_handler = smart_file_handler
+        current_module.is_url = is_url
+        current_module.config = self.config
         
         print("🔄 Initializing core components...")
         self.retriever: Any = self._initialize_retriever()
@@ -384,7 +435,7 @@ class GAIAAgent:
         print("🔍 Validating SmolagAgent components...")
         
         try:
-            # Test specialist creation immediately - this will reveal parameter issues
+            # Test specialist creation
             print("  → Testing specialist agents creation...")
             test_specialists = self._create_specialist_agents()
             print(f"  ✅ Created {len(test_specialists)} specialists successfully")
@@ -648,68 +699,30 @@ class GAIAAgent:
         return model_info
 
     def _validate_content_processor_tools(self, content_tools):
-        """Enhanced validation with specific vision tool diagnosis"""
-        tool_names = [getattr(tool, 'name', tool.__class__.__name__) for tool in content_tools]
+        """Streamlined validation - check global flags instead of tool inspection"""
         
-        # More specific tool capability validation
-        has_vision_browser = any('Vision' in name or 'Browser' in name for name in tool_names)
-        has_content_retriever = any('Content' in name or 'Retriever' in name for name in tool_names)
-        has_speech_tool = any('Speech' in name or 'Text' in name for name in tool_names)
+        # Skip tool inspection, use global availability flags
+        has_vision_browser = VISION_BROWSER_AVAILABLE
+        has_content_retriever = CUSTOM_TOOLS_AVAILABLE  
+        has_speech_tool = True  # SpeechToText usually works
         
-        # Check if we have the global availability flags
-        vision_tool_should_be_available = globals().get('VISION_BROWSER_AVAILABLE', False)
-        
-        # Model capability validation
+        # Model capabilities
         model_capabilities = self._check_model_vision_capabilities()
         
-        # Comprehensive capabilities assessment
+        # Simple capabilities assessment
         capabilities = {
             "vision_navigation": has_vision_browser,
             "content_extraction": has_content_retriever, 
             "audio_processing": has_speech_tool,
             "total_tools": len(content_tools),
-            
-            # Model capabilities
             "model_supports_vision": model_capabilities["has_vision"],
-            "model_supports_images": model_capabilities["supports_images"],
-            "model_type": model_capabilities["model_type"],
-            "model_confidence": model_capabilities["confidence"],
-            
-            # Combined capability assessment
             "effective_vision_capability": has_vision_browser and model_capabilities["has_vision"],
-            "fallback_strategy": "ocr_text_extraction" if not model_capabilities["has_vision"] else "full_vision",
-            
-            # Diagnostic info
-            "vision_tool_expected": vision_tool_should_be_available,
-            "vision_tool_loaded": has_vision_browser
         }
         
-        # Enhanced status reporting
-        print(f"📊 Content Processor Capabilities Assessment:")
-        print(f"   🔧 Tools: {len(content_tools)} total")
-        print(f"   🌐 Vision Browser: {'✅' if has_vision_browser else '❌'} (expected: {'✅' if vision_tool_should_be_available else '❌'})")
-        print(f"   📄 Content Retriever: {'✅' if has_content_retriever else '❌'}")
-        print(f"   🎵 Speech Processing: {'✅' if has_speech_tool else '❌'}")
-        print(f"   👁️ Model Vision Support: {'✅' if model_capabilities['has_vision'] else '❌'} ({model_capabilities['model_type']})")
-        print(f"   🎯 Effective Vision Capability: {'✅ Full Vision' if capabilities['effective_vision_capability'] else '⚠️ OCR Fallback Only'}")
-        
-        # More specific warnings
-        if vision_tool_should_be_available and not has_vision_browser:
-            print("⚠️ VisionWebBrowserTool expected but not loaded - check tools/vision_browser_tool.py")
-            # Run diagnosis
-            try:
-                from tools import diagnose_vision_tool
-                diagnose_vision_tool()
-            except:
-                print("💡 Run diagnose_vision_tool() for detailed analysis")
-        elif not vision_tool_should_be_available:
-            print("ℹ️ VisionWebBrowserTool not available - create tools/vision_browser_tool.py")
-        
-        if not has_content_retriever:
-            print("⚠️ No content retrieval tools - limited document processing")
-        
-        if not model_capabilities["has_vision"]:
-            print("ℹ️ Text-only model - vision questions will use OCR fallback")
+        # Clean status report
+        print(f"📊 Content Processor: {len(content_tools)} tools")
+        print(f"   Vision: {'✅' if capabilities['effective_vision_capability'] else '⚠️ OCR Only'}")
+        print(f"   Model: {model_capabilities['model_type']}")
         
         return capabilities
 
@@ -1085,9 +1098,18 @@ class GAIAAgent:
             tools=[],  # No direct tools - delegates to managed agents
             managed_agents=list(specialist_agents.values()),
             additional_authorized_imports=[
-                "open", "codecs", "chardet",
-                "os", "sys", "io", "pathlib",
-                "mimetypes", "requests", "json", "zipfile"
+            # File handling
+            "open", "codecs", "chardet", "os", "sys", "io", "pathlib",
+            "mimetypes", "requests", "json", "zipfile", "tempfile",
+            
+            # Data processing
+            "pandas", "numpy", "csv", "re",
+            
+            # Smart file handling functions
+            "smart_file_handler", "is_url",
+            
+            # Web requests
+            "urllib", "time"
             ],
             model=self.specialist_model,
             planning_interval=7,
@@ -1106,16 +1128,13 @@ class GAIAAgent:
         similar_examples = state.get("similar_examples", [])
         complexity = state.get("complexity", "unknown")
         
-        # 🔥 FIX: Extract file_info and vision_status from state and capabilities
-        file_metadata = state.get("file_metadata", {})
-        
-        # Build file info string
+        # File info
         if has_file:
             file_info = f"File: {file_name} (Path: {file_path})"
+            file_metadata = state.get("file_metadata", {})
             if file_metadata:
                 file_category = file_metadata.get("category", "unknown")
-                recommended_specialist = file_metadata.get("recommended_specialist", "unknown")
-                file_info += f" | Category: {file_category} | Recommended: {recommended_specialist}"
+                file_info += f" | Category: {file_category}"
         else:
             file_info = "No file attached"
         
@@ -1132,16 +1151,65 @@ class GAIAAgent:
                 examples_context += f"{i}. Q: {example.get('question', '')[:100]}...\n"
                 examples_context += f"   A: {example.get('answer', '')}\n"
         
-        # Build the coordinator task with CLEAR prioritization
+        # File handling instructions
+        file_handling_section = ""
+        if has_file and file_path:
+            file_handling_section = f"""
+
+    DIRECT FILE HANDLING (Available to you):
+    ```python
+    # Smart file handler available for both URLs and local paths
+    file_path = "{file_path}"
+    filename = "{file_name}"
+
+    # Get local file path (handles URLs by downloading to temp)
+    local_path = smart_file_handler(file_path, config)
+
+    # File processing based on extension:
+    if filename.endswith('.json') or filename.endswith('.jsonld'):
+        import json
+        with open(local_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        # Process JSON data directly
+
+    elif filename.endswith('.txt'):
+        with open(local_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        # Process text content directly
+
+    elif filename.endswith('.csv'):
+        import pandas as pd
+        df = pd.read_csv(local_path)
+        # Process CSV data directly
+
+    elif filename.endswith('.xlsx'):
+        import pandas as pd
+        df = pd.read_excel(local_path)
+        # Process Excel data directly
+
+    # For complex processing, delegate to specialists
+    ```
+
+    DELEGATION STRATEGY:
+    - Handle simple file reading and data extraction yourself
+    - Delegate to data_analyst for complex calculations
+    - Delegate to web_researcher for external information gathering
+    - Delegate to content_processor only for specialized tools (vision, audio, large documents)
+    """
+
         task = f"""
     You are the GAIA coordinator with three managed specialist agents.
     Analyze this question and execute using your specialists.
 
     QUESTION: {question}
     COMPLEXITY: {complexity}
-    FILE INFO: {file_info}
+    FILE INFO: {file_info}{file_handling_section}
     VISION CAPABILITY: {vision_status}
     {examples_context}
+    
+    YOUR CAPABILITIES:
+    1. DIRECT FILE PROCESSING: You can read and process JSON, JSONLD, TXT, CSV, Excel files
+    2. MANAGED SPECIALISTS: Delegate specialized tasks to your managed agents
 
     YOUR MANAGED SPECIALISTS:
     - data_analyst: CodeAgent for Excel/CSV analysis and calculations (direct file access)
@@ -1632,193 +1700,216 @@ class GAIAAgent:
                 "steps": state["steps"] + [f"Hierarchical coordinator failed: {error_msg}"]
             }
 
-    def _format_answer_node(self, state: GAIAState):
-        """Enhanced answer formatting with question context"""
-        raw_answer = state.get("raw_answer", "")
-        task_id = state.get("task_id", "")
-        question = state.get("question", "")
+    def _format_answer_node(self, state: GAIAState) -> GAIAState:
+        """
+        Format the final answer with robust type checking and GAIA compliance.
         
-        # Store question for formatting context
-        self._current_question = question
-        
-        track("Formatting final answer", self.config)
-        
-        if self.config.enable_context_bridge:
-            ContextBridge.track_operation("Formatting final answer")
-        
-        if self.logging:
-            self.logging.log_step("format_start", f"Formatting answer: {raw_answer[:50]}...")
+        Handles multiple result formats from coordinator:
+        - Integer/float: Direct numerical answers
+        - String: Text answers 
+        - Dict: Structured results with metadata
+        - List: Multiple answers or steps
+        """
+        # PRESERVE EXISTING LOGGING PATTERN - This helped us find the bug!
+        if hasattr(self, 'logging_setup') and self.logging_setup:
+            self.logging_setup.log_step(
+                action='format_start',
+                details='Starting answer formatting',
+                node_name='format_answer'
+            )
         
         try:
-            if self.logging:
-                self.logging.log_step("extract_answer", "Extracting final answer from raw response")
+            # Get the result from state with fallback
+            raw_result = state.get('result') or state.get('coordinator_result') or state.get('answer')
             
-            formatted_answer = self._extract_final_answer(raw_answer)
+            # Handle None or missing result
+            if raw_result is None:
+                return {
+                    **state,
+                    'final_answer': 'Processing failed: No result found',
+                    'raw_answer': '',
+                    'steps': state.get('steps', []),
+                    'execution_successful': False
+                }
             
-            if self.logging:
-                self.logging.log_step("apply_gaia_format", f"Applying GAIA formatting to: {formatted_answer}")
-            
-            formatted_answer = self._apply_gaia_formatting(formatted_answer)
-            
-            if self.logging:
-                self.logging.log_step("format_complete", f"Final formatted answer: {formatted_answer}")
-            
-            # Get execution metrics from context bridge
-            execution_metrics = {}
-            if self.config.enable_context_bridge:
-                execution_metrics = ContextBridge.get_execution_metrics()
-                track(f"Final answer: {formatted_answer}", self.config)
-            
-            return {
-                "final_answer": formatted_answer,
-                "execution_metrics": execution_metrics,
-                "steps": state["steps"] + ["Final answer formatting applied"]
+            # Initialize default structured result
+            structured_result = {
+                'final_answer': '',
+                'raw_answer': '',
+                'steps': state.get('steps', []),
+                'execution_successful': True
             }
+            
+            # TYPE CHECKING AND CONVERSION
+            if isinstance(raw_result, (int, float)):
+                # Handle numerical results (the bug was here!)
+                structured_result.update({
+                    'final_answer': str(raw_result),
+                    'raw_answer': str(raw_result),
+                })
+                
+            elif isinstance(raw_result, str):
+                # Handle string results
+                structured_result.update({
+                    'final_answer': raw_result,
+                    'raw_answer': raw_result,
+                })
+                
+            elif isinstance(raw_result, dict):
+                # Handle dictionary results (expected format)
+                structured_result.update({
+                    'final_answer': raw_result.get('final_answer', str(raw_result.get('answer', ''))),
+                    'raw_answer': raw_result.get('raw_answer', raw_result.get('final_answer', str(raw_result))),
+                    'steps': raw_result.get('steps', state.get('steps', [])),
+                    'execution_successful': raw_result.get('execution_successful', True)
+                })
+                
+            elif isinstance(raw_result, list):
+                # Handle list results (multiple answers or steps)
+                if len(raw_result) > 0:
+                    # Take first item as answer, treat rest as steps
+                    first_item = raw_result[0]
+                    structured_result.update({
+                        'final_answer': str(first_item),
+                        'raw_answer': str(first_item),
+                        'steps': raw_result[1:] if len(raw_result) > 1 else state.get('steps', [])
+                    })
+                else:
+                    structured_result.update({
+                        'final_answer': 'Processing failed: Empty result list',
+                        'raw_answer': '',
+                        'execution_successful': False
+                    })
+                    
+            else:
+                # Handle any other type (bool, custom objects, etc.)
+                structured_result.update({
+                    'final_answer': str(raw_result),
+                    'raw_answer': str(raw_result),
+                })
+            
+            # GAIA FORMATTING APPLICATION
+            # Apply GAIA format compliance to final_answer
+            gaia_formatted_answer = self._apply_gaia_formatting(structured_result['final_answer'])
+            
+            # LOG SUCCESSFUL FORMATTING - preserve logging that helped us debug
+            if hasattr(self, 'logging_setup') and self.logging_setup:
+                self.logging_setup.log_step(
+                    action='apply_gaia_format',
+                    details=f"Formatted: {gaia_formatted_answer}",
+                    node_name='format_answer'
+                )
+            
+            # Update state with formatted results
+            final_state = {
+                **state,
+                'final_answer': gaia_formatted_answer,
+                'raw_answer': structured_result['raw_answer'],
+                'steps': structured_result['steps'],
+                'execution_successful': structured_result['execution_successful']
+            }
+            
+            # LOG COMPLETION - this is where the original bug was caught
+            if hasattr(self, 'logging_setup') and self.logging_setup:
+                self.logging_setup.log_step(
+                    action='question_complete',
+                    details=f"Final answer: {gaia_formatted_answer}",
+                    node_name='format_answer'
+                )
+            
+            return final_state
             
         except Exception as e:
-            error_msg = f"Answer formatting error: {str(e)}"
+            # Robust error handling with ENHANCED LOGGING
+            error_msg = f"Processing failed: {str(e)}"
             
-            track(f"Format error: {error_msg}", self.config)
-            execution_metrics = ContextBridge.get_execution_metrics() if self.config.enable_context_bridge else {}
+            # PRESERVE AND ENHANCE ERROR LOGGING - this caught our bug!
+            if hasattr(self, 'logging_setup') and self.logging_setup:
+                self.logging_setup.log_step(
+                    action='question_complete',
+                    details=error_msg,
+                    node_name='format_answer'
+                )
             
-            if self.logging:
-                self.logging.log_step("format_error", error_msg)
+            # Additional debug logging for development
+            if hasattr(self, 'logging_setup') and self.logging_setup and self.logging_setup.debug_mode:
+                self.logging_setup.logger.error(f"Format answer node error: {e}", extra={
+                    'task_id': state.get('task_id'),
+                    'raw_result_type': type(raw_result).__name__ if 'raw_result' in locals() else 'Unknown',
+                    'raw_result_value': str(raw_result)[:100] if 'raw_result' in locals() else 'Unknown',
+                    'state_keys': list(state.keys()),
+                    'error_location': 'format_answer_node'
+                })
             
             return {
-                "final_answer": raw_answer.strip() if raw_answer else "No answer",
-                "execution_metrics": execution_metrics,
-                "steps": state["steps"] + [error_msg]
+                **state,
+                'final_answer': error_msg,
+                'raw_answer': '',
+                'steps': state.get('steps', []),
+                'execution_successful': False
             }
-        finally:
-            # Context cleanup
-            if self.config.enable_context_bridge:
-                ContextBridge.clear_tracking()
-                        
-    def _extract_final_answer(self, raw_answer: str) -> str:
-        """
-        Extract final answer from agent response with pattern matching
-        """  
-        if raw_answer is None:
-            if self.logging:
-                self.logging.log_step("extract_empty", "Raw answer is None")
-            return "No answer"
-        
-        # Convert list to string if needed (fixes the error you saw)
-        if isinstance(raw_answer, list):
-            if self.logging:
-                self.logging.log_step("extract_list_input", f"Converting list to string: {raw_answer}")
-            raw_answer = str(raw_answer[0]) if raw_answer else "No answer"
-        
-        # Ensure it's a string
-        raw_answer = str(raw_answer) if raw_answer else ""
-        
-        # More comprehensive patterns to catch various formats
-        patterns = [
-            r"FINAL ANSWER:\s*(.+?)(?:\n|$)",  # Standard GAIA format
-            r"Final Answer:\s*(.+?)(?:\n|$)",  # Title case
-            r"final answer:\s*(.+?)(?:\n|$)",  # Lower case
-            r"Answer:\s*(.+?)(?:\n|$)",       # Simple answer
-            r"ANSWER:\s*(.+?)(?:\n|$)",       # Caps answer
-            r"The answer is:\s*(.+?)(?:\n|$)", # Descriptive
-            r"Result:\s*(.+?)(?:\n|$)",       # Result format
-        ]
-        
-        for i, pattern in enumerate(patterns):
-            matches = re.findall(pattern, raw_answer, re.IGNORECASE | re.DOTALL)
-            if matches:
-                # Take the last match (most likely to be the final answer)
-                extracted = matches[-1].strip()
-                if extracted and extracted.lower() not in ["", "no answer", "none"]:
-                    if self.logging:
-                        self.logging.log_step("extract_success", f"Pattern {i+1} matched: {extracted}")
-                    return extracted
-        
-        # Fallback: Look for the last substantial line
-        lines = [line.strip() for line in raw_answer.strip().split('\n') if line.strip()]
-        
-        # Try to find a line that looks like an answer
-        for line in reversed(lines):
-            if len(line) > 0 and not line.lower().startswith(('i ', 'the ', 'let ', 'to ', 'in ', 'based ')):
-                if self.logging:
-                    self.logging.log_step("extract_fallback", f"Using last substantial line: {line}")
-                return line
-        
-        # Final fallback
-        fallback = lines[-1] if lines else "No answer"
-        
-        if self.logging:
-            self.logging.log_step("extract_final_fallback", f"Final fallback: {fallback}")
-        
-        return fallback
 
     def _apply_gaia_formatting(self, answer: str) -> str:
-        """GAIA formatting with safe regex operations"""
-        if not answer:
-            return "No answer"
+        """
+        Apply GAIA answer formatting requirements.
         
-        original_answer = answer
-        answer = answer.strip()
-        
-        if self.logging:
-            self.logging.log_step("gaia_format_start", f"Original answer: '{answer}'")
-        
-        # SAFE: Extract from FINAL ANSWER patterns
-        final_answer_patterns = [
-            r'(?i)^.*?final\s*answer\s*:\s*(.*)$',
-            r'(?i)final\s*answer\s*:\s*(.+?)(?:\n|$)',
-            r'(?i).*final\s*answer\s*:\s*(.+)',
-        ]
-        
-        for pattern in final_answer_patterns:
-            match = safe_regex_search(pattern, answer, re.DOTALL)
-            if match:
-                extracted = match.group(1).strip()
-                if extracted:
-                    answer = extracted
-                    if self.logging:
-                        self.logging.log_step("gaia_format_extract", f"Extracted: '{answer}'")
-                    break
-        
-        # SAFE: Remove prefixes
-        prefixes_to_remove = [
-            "final answer:", "the answer is:", "answer:", "result:",
-            "solution:", "the result is:", "therefore", "so", "thus"
-        ]
-        
-        answer_lower = answer.lower()
-        for prefix in prefixes_to_remove:
-            if answer_lower.startswith(prefix):
-                answer = answer[len(prefix):].strip()
-                break
-        
-        # Clean quotes and punctuation
-        answer = answer.strip('.,!?:;"\'')
-        
-        # Question-specific formatting
-        question = getattr(self, '_current_question', '').lower()
-        
-        # SAFE: Standard GAIA formatting
-        if not any(special in question for special in ["comma", "list", "countries"]):
-            # SAFE: Remove articles
-            answer = safe_regex_sub(r'\b(the|a|an)\s+', '', answer, re.IGNORECASE)
-            
-            # SAFE: Remove units (carefully)
-            if not any(keep_unit in question for keep_unit in ["$", "%", "units", "meters"]):
-                answer = safe_regex_sub(r'[^\w\s,.-]', '', answer)
-        
-        # SAFE: Extract numbers for specific question types
-        if "how many" in question:
-            numbers = safe_regex_findall(r'\b\d+\b', answer)
-            if numbers:
-                answer = numbers[0]
+        Requirements:
+        - Numbers: no commas, no units unless specified
+        - Strings: no articles (the, a, an), no abbreviations
+        - Lists: comma separated, apply rules to each element
+        """
+        if not answer or not isinstance(answer, str):
+            return str(answer) if answer is not None else ""
         
         # Clean whitespace
-        answer = ' '.join(answer.split())
+        answer = answer.strip()
         
-        if self.logging:
-            self.logging.log_step("gaia_format_final", f"Final: '{answer}'")
-        
-        return answer
+        # Handle empty or very short answers
+        if len(answer) <= 1:
+            return answer
+            
+        try:
+            # Check if it's a pure number
+            if answer.replace('.', '').replace('-', '').isdigit():
+                # Remove any commas from numbers
+                return answer.replace(',', '')
+            
+            # Check if it's a number with units/symbols that should be removed
+            import re
+            
+            # Remove common units unless specifically mentioned in question
+            # (This is conservative - only removes obvious formatting)
+            number_pattern = r'^[\d,.-]+\s*[%$€£¥]?\s*$'
+            if re.match(number_pattern, answer):
+                # Remove commas from numbers, keep essential symbols
+                cleaned = re.sub(r'(\d),(\d)', r'\1\2', answer)  # Remove commas in numbers
+                return cleaned.strip()
+            
+            # For text answers, remove common articles if they appear at start
+            # (Conservative approach - only clear cases)
+            text_cleaned = answer
+            
+            # Remove leading articles (case insensitive)
+            article_pattern = r'^(the\s+|a\s+|an\s+)'
+            text_cleaned = re.sub(article_pattern, '', text_cleaned, flags=re.IGNORECASE)
+            
+            # Handle comma-separated lists
+            if ',' in text_cleaned and len(text_cleaned.split(',')) <= 5:  # Reasonable list size
+                items = [item.strip() for item in text_cleaned.split(',')]
+                # Apply formatting to each item
+                formatted_items = []
+                for item in items:
+                    # Remove articles from each item
+                    item_cleaned = re.sub(article_pattern, '', item, flags=re.IGNORECASE).strip()
+                    formatted_items.append(item_cleaned)
+                return ', '.join(formatted_items)
+            
+            return text_cleaned.strip()
+            
+        except Exception as e:
+            # If formatting fails, return original answer
+            # Better to have unformatted correct answer than formatted wrong answer
+            return answer
 
     def process_question(self, question: str, task_id: str = None) -> Dict:
         """
