@@ -3,7 +3,7 @@ import time
 import tempfile
 import shutil
 import json
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from dataclasses import dataclass
 from PIL import Image
 from io import BytesIO
@@ -35,6 +35,7 @@ class ContentResult:
     handoff_instructions: str = ""
     success: bool = True
     error_message: str = ""
+    screenshot_path: Optional[str] = None
 
 class BrowserSession:
     def __init__(self, download_dir: Optional[str] = None):
@@ -42,17 +43,21 @@ class BrowserSession:
         self.is_active = False
         self.download_dir = download_dir or tempfile.mkdtemp(prefix="browser_")
         self.downloaded_files = []
+        self.screenshots = []
         
     def initialize(self, headless: bool = False):
         if self.is_active:
             return "Session already active"
             
         try:
+            # 🔥 IMPROVED: Better Chrome options based on HF tutorial
             chrome_options = webdriver.ChromeOptions()
             chrome_options.add_argument("--force-device-scale-factor=1")
             chrome_options.add_argument("--window-size=1000,1350")
+            chrome_options.add_argument("--window-position=0,0")  # NEW: Position control
             chrome_options.add_argument("--disable-pdf-viewer")
             chrome_options.add_argument("--disable-web-security")
+            chrome_options.add_argument("--disable-popup-blocking")  # NEW: Better popup handling
             
             prefs = {
                 "download.default_directory": self.download_dir,
@@ -66,13 +71,43 @@ class BrowserSession:
             if headless:
                 chrome_options.add_argument("--headless")
             
+            # 🔥 IMPROVED: Use helium's start_chrome directly
             self.driver = helium.start_chrome(headless=headless, options=chrome_options)
             self.is_active = True
             os.makedirs(self.download_dir, exist_ok=True)
+            
+            print(f"✅ Browser session initialized: {self.driver.current_url}")
             return "Session initialized"
             
         except Exception as e:
             return f"Initialization failed: {str(e)}"
+    
+    def take_screenshot(self, description: str = "screenshot") -> str:
+        """🔥 NEW: Take screenshot with consistent naming"""
+        try:
+            if not self.is_active:
+                return None
+                
+            # Let animations complete
+            time.sleep(1.0)
+            
+            driver = helium.get_driver()
+            png_bytes = driver.get_screenshot_as_png()
+            
+            timestamp = int(time.time())
+            screenshot_path = os.path.join(self.download_dir, f"{description}_{timestamp}.png")
+            
+            with open(screenshot_path, 'wb') as f:
+                f.write(png_bytes)
+            
+            self.screenshots.append(screenshot_path)
+            print(f"📸 Screenshot saved: {screenshot_path}")
+            
+            return screenshot_path
+            
+        except Exception as e:
+            print(f"⚠️ Screenshot failed: {e}")
+            return None
     
     def detect_content_type(self) -> str:
         try:
@@ -95,6 +130,83 @@ class BrowserSession:
             
         except Exception:
             return "unknown"
+    
+    def smart_click(self, element_text: str) -> bool:
+        """🔥 NEW: Smart clicking with fallbacks based on HF tutorial"""
+        try:
+            # Try direct helium click first
+            helium.click(element_text)
+            return True
+        except:
+            try:
+                # Try as link
+                helium.click(helium.Link(element_text))
+                return True
+            except:
+                try:
+                    # Try as button
+                    helium.click(helium.Button(element_text))
+                    return True
+                except:
+                    return False
+    
+    def close_popups(self) -> str:
+        """🔥 NEW: Close popups using HF tutorial method"""
+        try:
+            driver = helium.get_driver()
+            webdriver.ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+            time.sleep(0.5)
+            return "Popups closed with ESC key"
+        except Exception as e:
+            return f"Popup close failed: {str(e)}"
+    
+    def search_text_on_page(self, text: str, nth_result: int = 1) -> str:
+        """🔥 NEW: Search text on page based on HF tutorial"""
+        try:
+            driver = helium.get_driver()
+            elements = driver.find_elements(By.XPATH, f"//*[contains(text(), '{text}')]")
+            
+            if not elements:
+                return f"No matches found for '{text}'"
+            
+            if nth_result > len(elements):
+                return f"Match n°{nth_result} not found (only {len(elements)} matches found)"
+            
+            elem = elements[nth_result - 1]
+            driver.execute_script("arguments[0].scrollIntoView(true);", elem)
+            
+            return f"Found {len(elements)} matches for '{text}'. Focused on element {nth_result} of {len(elements)}"
+            
+        except Exception as e:
+            return f"Search failed: {str(e)}"
+    
+    def scroll_page(self, direction: str = "down", pixels: int = 1200) -> str:
+        """🔥 NEW: Scroll functionality based on HF tutorial"""
+        try:
+            if direction.lower() == "down":
+                helium.scroll_down(pixels)
+                return f"Scrolled down {pixels} pixels"
+            elif direction.lower() == "up":
+                helium.scroll_up(pixels)
+                return f"Scrolled up {pixels} pixels"
+            else:
+                return "Invalid direction. Use 'up' or 'down'"
+        except Exception as e:
+            return f"Scroll failed: {str(e)}"
+    
+    def get_page_info(self) -> Dict:
+        """🔥 NEW: Get comprehensive page information"""
+        try:
+            driver = helium.get_driver()
+            return {
+                "url": driver.current_url,
+                "title": driver.title,
+                "page_source_length": len(driver.page_source),
+                "content_type": self.detect_content_type(),
+                "timestamp": time.time()
+            }
+        except Exception as e:
+            return {"error": str(e)}
     
     def wait_for_download(self, timeout: int = 30) -> Optional[str]:
         initial_files = set(os.listdir(self.download_dir))
@@ -174,41 +286,65 @@ class BrowserSession:
             if os.path.exists(self.download_dir):
                 shutil.rmtree(self.download_dir)
             self.downloaded_files = []
+            self.screenshots = []
         except Exception:
             pass
 
+# Global session
 _browser_session = BrowserSession()
 
 class VisionWebBrowserTool(Tool):
-    name = "vision_web_browser"
-    description = """Navigate web pages, detect content types, download files, and extract content URLs. Handles PDFs, images, tables, and interactive content through browser automation."""
+    name = "vision_browser_tool"
+    description = """🔥 IMPROVED: Navigate web pages with advanced interaction capabilities. 
+    
+    Based on SmolagAgents best practices for browser automation:
+    - Navigate to web pages with automatic screenshots
+    - Smart element clicking with multiple fallback strategies
+    - Text search and scrolling capabilities
+    - Popup handling and content extraction
+    - File download management
+    - Visual analysis with screenshots
+    
+    Actions: navigate, click_element, search_text, scroll_page, close_popups, take_screenshot, extract_content"""
+    
     inputs = {
-        "task_description": {
+        "action": {
             "type": "string",
-            "description": "Description of what content to acquire from the webpage.",
+            "description": "Action to perform: 'navigate', 'click_element', 'search_text', 'scroll_page', 'close_popups', 'take_screenshot', 'extract_content', 'close_browser'",
         },
         "url": {
             "type": "string", 
-            "description": "Target URL to navigate to.",
-            "nullable": True,
-        },
-        "action_type": {
-            "type": "string",
-            "description": "Action to perform: 'discover_content', 'acquire_pdf', 'click_download', 'extract_url', 'see_image', 'close_browser'",
-        },
-        "target_content": {
-            "type": "string",
-            "description": "Specific content to look for on the page.",
+            "description": "Target URL for navigation action.",
             "nullable": True,
         },
         "element_text": {
             "type": "string", 
-            "description": "Text of element to click for click_download action.",
+            "description": "Text of element to click (for click_element action).",
             "nullable": True,
         },
-        "download_timeout": {
+        "search_text": {
+            "type": "string",
+            "description": "Text to search for on page (for search_text action).",
+            "nullable": True,
+        },
+        "scroll_direction": {
+            "type": "string",
+            "description": "Direction to scroll: 'up' or 'down' (for scroll_page action).",
+            "nullable": True,
+        },
+        "scroll_pixels": {
             "type": "integer",
-            "description": "Seconds to wait for downloads. Default 30.",
+            "description": "Number of pixels to scroll (default: 1200).",
+            "nullable": True,
+        },
+        "nth_result": {
+            "type": "integer",
+            "description": "Which search result to focus on (default: 1).",
+            "nullable": True,
+        },
+        "wait_seconds": {
+            "type": "integer",
+            "description": "Seconds to wait after action (default: 2).",
             "nullable": True,
         },
     }
@@ -220,46 +356,55 @@ class VisionWebBrowserTool(Tool):
         self._initialized = False
     
     def setup(self):
-        self._session = BrowserSession()
+        """Initialize the browser session"""
+        self._session = _browser_session
         self._initialized = True
     
     def forward(
         self, 
-        task_description: str,
-        action_type: str,
+        action: str,
         url: Optional[str] = None,
-        target_content: Optional[str] = None,
         element_text: Optional[str] = None,
-        download_timeout: Optional[int] = None
+        search_text: Optional[str] = None,
+        scroll_direction: Optional[str] = "down",
+        scroll_pixels: Optional[int] = 1200,
+        nth_result: Optional[int] = 1,
+        wait_seconds: Optional[int] = 2
     ) -> str:
         
         if not DEPENDENCIES_AVAILABLE:
             return "Dependencies not available. Install: pip install helium selenium"
         
-        timeout = download_timeout or 30
-        
         try:
+            # Initialize browser if needed
             if not _browser_session.is_active:
                 init_result = _browser_session.initialize()
                 if "failed" in init_result:
                     return init_result
             
-            if action_type == "discover_content":
-                result = self._discover_content(url, task_description, target_content)
+            # Execute action
+            if action == "navigate":
+                result = self._navigate(url, wait_seconds)
                 
-            elif action_type == "acquire_pdf":
-                result = self._acquire_pdf(url, target_content)
+            elif action == "click_element":
+                result = self._click_element(element_text, wait_seconds)
                 
-            elif action_type == "click_download":
-                result = self._click_download(element_text, timeout)
+            elif action == "search_text":
+                result = self._search_text(search_text, nth_result)
                 
-            elif action_type == "see_image":
-                result = self._see_image(url, target_content)
+            elif action == "scroll_page":
+                result = self._scroll_page(scroll_direction, scroll_pixels)
                 
-            elif action_type == "extract_url":
-                result = self._extract_url(url, target_content)
+            elif action == "close_popups":
+                result = self._close_popups()
                 
-            elif action_type == "close_browser":
+            elif action == "take_screenshot":
+                result = self._take_screenshot()
+                
+            elif action == "extract_content":
+                result = self._extract_content()
+                
+            elif action == "close_browser":
                 result = ContentResult(
                     content_type="session",
                     handoff_instructions=_browser_session.close(),
@@ -270,7 +415,7 @@ class VisionWebBrowserTool(Tool):
                 result = ContentResult(
                     content_type="error",
                     success=False,
-                    error_message=f"Unknown action_type: {action_type}"
+                    error_message=f"Unknown action: {action}"
                 )
             
             return self._format_result(result)
@@ -278,71 +423,76 @@ class VisionWebBrowserTool(Tool):
         except Exception as e:
             return f"Browser error: {str(e)}"
     
-    def _discover_content(self, url: str, task_description: str, target_content: Optional[str]) -> ContentResult:
+    def _navigate(self, url: str, wait_seconds: int) -> ContentResult:
+        """🔥 IMPROVED: Navigation with automatic screenshot"""
         if not url:
             return ContentResult(
                 content_type="error",
                 success=False,
-                error_message="URL required"
+                error_message="URL required for navigation"
             )
         
-        helium.go_to(url)
-        time.sleep(3)
-        
-        content_type = _browser_session.detect_content_type()
-        
-        if content_type == "direct_pdf":
-            return self._handle_direct_pdf(url, target_content)
-        elif content_type == "embedded_pdf":
-            return self._handle_embedded_pdf(target_content)
-        else:
-            return self._handle_web_content(url, target_content)
-    
-    def _acquire_pdf(self, url: str, target_content: Optional[str]) -> ContentResult:
-        if not url:
+        try:
+            helium.go_to(url)
+            time.sleep(wait_seconds)
+            
+            # Take automatic screenshot
+            screenshot_path = _browser_session.take_screenshot("navigation")
+            
+            # Get page info
+            page_info = _browser_session.get_page_info()
+            
+            return ContentResult(
+                content_type="navigation",
+                url=page_info.get("url"),
+                screenshot_path=screenshot_path,
+                content_text=f"Navigation complete. Title: {page_info.get('title', 'Unknown')}",
+                metadata=page_info,
+                handoff_instructions=f"Successfully navigated to {url}. Screenshot available for visual analysis.",
+                success=True
+            )
+            
+        except Exception as e:
             return ContentResult(
                 content_type="error",
                 success=False,
-                error_message="URL required"
+                error_message=f"Navigation failed: {str(e)}"
             )
-        
-        helium.go_to(url)
-        time.sleep(3)
-        
-        content_type = _browser_session.detect_content_type()
-        
-        if content_type == "direct_pdf":
-            return self._handle_direct_pdf(url, target_content)
-        else:
-            return self._handle_embedded_pdf(target_content)
     
-    def _click_download(self, element_text: str, timeout: int) -> ContentResult:
+    def _click_element(self, element_text: str, wait_seconds: int) -> ContentResult:
+        """🔥 IMPROVED: Smart clicking with fallbacks"""
         if not element_text:
             return ContentResult(
                 content_type="error",
                 success=False,
-                error_message="element_text required"
+                error_message="element_text required for clicking"
             )
         
         try:
-            helium.click(element_text)
-            downloaded_file = _browser_session.wait_for_download(timeout)
+            # Smart click with fallbacks
+            click_success = _browser_session.smart_click(element_text)
             
-            if downloaded_file:
-                file_ext = Path(downloaded_file).suffix.lower()
-                content_type = "pdf" if file_ext == ".pdf" else "file"
+            if click_success:
+                time.sleep(wait_seconds)
+                
+                # Take screenshot after click
+                screenshot_path = _browser_session.take_screenshot("after_click")
+                page_info = _browser_session.get_page_info()
                 
                 return ContentResult(
-                    content_type=content_type,
-                    file_path=downloaded_file,
-                    handoff_instructions=f"File downloaded to {downloaded_file}. Use content_retriever_tool to process.",
+                    content_type="click_result",
+                    url=page_info.get("url"),
+                    screenshot_path=screenshot_path,
+                    content_text=f"Successfully clicked '{element_text}'",
+                    metadata=page_info,
+                    handoff_instructions=f"Clicked '{element_text}'. Check screenshot for result. Current URL: {page_info.get('url')}",
                     success=True
                 )
             else:
                 return ContentResult(
                     content_type="error",
                     success=False,
-                    error_message=f"Download timeout after {timeout} seconds"
+                    error_message=f"Could not find clickable element: '{element_text}'"
                 )
                 
         except Exception as e:
@@ -352,45 +502,24 @@ class VisionWebBrowserTool(Tool):
                 error_message=f"Click failed: {str(e)}"
             )
     
-    def _see_image(self, url: str, target_content: Optional[str]) -> ContentResult:
-        if not url:
+    def _search_text(self, search_text: str, nth_result: int) -> ContentResult:
+        """🔥 NEW: Text search based on HF tutorial"""
+        if not search_text:
             return ContentResult(
                 content_type="error",
                 success=False,
-                error_message="URL required"
+                error_message="search_text required"
             )
         
         try:
-            helium.go_to(url)
-            time.sleep(3)
-            
-            # Take screenshot for visual analysis
-            driver = helium.get_driver()
-            png_bytes = driver.get_screenshot_as_png()
-            
-            # Save screenshot to temporary file
-            screenshot_path = os.path.join(_browser_session.download_dir, "screenshot.png")
-            with open(screenshot_path, 'wb') as f:
-                f.write(png_bytes)
-            
-            # Look for images on the page
-            images = driver.find_elements(By.TAG_NAME, "img")
-            image_info = []
-            
-            for img in images[:5]:  # Limit to first 5 images
-                src = img.get_attribute('src')
-                alt = img.get_attribute('alt') or ""
-                if src:
-                    image_info.append(f"Image: {src} (alt: {alt})")
-            
-            image_list = "\n".join(image_info) if image_info else "No images found"
+            search_result = _browser_session.search_text_on_page(search_text, nth_result)
+            screenshot_path = _browser_session.take_screenshot("search_result")
             
             return ContentResult(
-                content_type="image",
-                file_path=screenshot_path,
-                url=url,
-                content_text=image_list,
-                handoff_instructions=f"Screenshot saved to {screenshot_path}. Images on page: {len(images)}. Use image analysis tools for visual content about: {target_content or 'visual elements'}",
+                content_type="search_result",
+                screenshot_path=screenshot_path,
+                content_text=search_result,
+                handoff_instructions=f"Search completed for '{search_text}'. Result: {search_result}",
                 success=True
             )
             
@@ -398,139 +527,94 @@ class VisionWebBrowserTool(Tool):
             return ContentResult(
                 content_type="error",
                 success=False,
-                error_message=f"Image capture failed: {str(e)}"
+                error_message=f"Search failed: {str(e)}"
             )
     
-    def _extract_url(self, url: str, target_content: Optional[str]) -> ContentResult:
-        if not url:
+    def _scroll_page(self, direction: str, pixels: int) -> ContentResult:
+        """🔥 NEW: Page scrolling based on HF tutorial"""
+        try:
+            scroll_result = _browser_session.scroll_page(direction, pixels)
+            screenshot_path = _browser_session.take_screenshot("after_scroll")
+            
             return ContentResult(
-                content_type="error",
-                success=False,
-                error_message="URL required"
-            )
-        
-        helium.go_to(url)
-        time.sleep(2)
-        
-        pdf_url = _browser_session.extract_pdf_url()
-        
-        if pdf_url:
-            return ContentResult(
-                content_type="pdf",
-                url=pdf_url,
-                handoff_instructions=f"PDF URL found: {pdf_url}. Use content_retriever_tool to process.",
+                content_type="scroll_result",
+                screenshot_path=screenshot_path,
+                content_text=scroll_result,
+                handoff_instructions=f"Scroll completed: {scroll_result}",
                 success=True
             )
-        else:
-            return ContentResult(
-                content_type="web_content",
-                url=url,
-                success=False,
-                error_message="No PDF URLs found"
-            )
-    
-    def _handle_direct_pdf(self, url: str, target_content: Optional[str]) -> ContentResult:
-        try:
-            current_url = helium.get_driver().current_url
-            downloaded_file = _browser_session.download_url_directly(current_url)
             
-            if downloaded_file:
-                return ContentResult(
-                    content_type="pdf",
-                    file_path=downloaded_file,
-                    url=current_url,
-                    handoff_instructions=f"PDF downloaded to {downloaded_file}. Use content_retriever_tool to extract text and search for: {target_content or 'relevant content'}",
-                    success=True
-                )
-            else:
-                return ContentResult(
-                    content_type="pdf",
-                    url=current_url,
-                    handoff_instructions=f"PDF URL: {current_url}. Use content_retriever_tool to process this URL and search for: {target_content or 'relevant content'}",
-                    success=True
-                )
-                
         except Exception as e:
             return ContentResult(
                 content_type="error",
                 success=False,
-                error_message=f"Direct PDF handling failed: {str(e)}"
+                error_message=f"Scroll failed: {str(e)}"
             )
     
-    def _handle_embedded_pdf(self, target_content: Optional[str]) -> ContentResult:
+    def _close_popups(self) -> ContentResult:
+        """🔥 NEW: Close popups based on HF tutorial"""
         try:
-            driver = helium.get_driver()
-            pdf_elements = driver.find_elements(By.XPATH, "//a[contains(@href, '.pdf') or contains(text(), 'PDF') or contains(text(), 'Download')]")
-            
-            if pdf_elements:
-                pdf_elements[0].click()
-                time.sleep(2)
-                
-                current_url = driver.current_url
-                if current_url.endswith('.pdf'):
-                    downloaded_file = _browser_session.download_url_directly(current_url)
-                    
-                    if downloaded_file:
-                        return ContentResult(
-                            content_type="pdf",
-                            file_path=downloaded_file,
-                            url=current_url,
-                            handoff_instructions=f"PDF downloaded to {downloaded_file}. Use content_retriever_tool to extract text and search for: {target_content or 'relevant content'}",
-                            success=True
-                        )
-                    else:
-                        return ContentResult(
-                            content_type="pdf",
-                            url=current_url,
-                            handoff_instructions=f"PDF URL: {current_url}. Use content_retriever_tool to process this URL and search for: {target_content or 'relevant content'}",
-                            success=True
-                        )
-                else:
-                    downloaded_file = _browser_session.wait_for_download(30)
-                    
-                    if downloaded_file:
-                        return ContentResult(
-                            content_type="pdf",
-                            file_path=downloaded_file,
-                            handoff_instructions=f"PDF downloaded to {downloaded_file}. Use content_retriever_tool to extract text and search for: {target_content or 'relevant content'}",
-                            success=True
-                        )
-            
-            pdf_url = _browser_session.extract_pdf_url()
-            if pdf_url:
-                return ContentResult(
-                    content_type="pdf",
-                    url=pdf_url,
-                    handoff_instructions=f"PDF URL found: {pdf_url}. Use content_retriever_tool to process this URL and search for: {target_content or 'relevant content'}",
-                    success=True
-                )
+            close_result = _browser_session.close_popups()
+            screenshot_path = _browser_session.take_screenshot("after_popup_close")
             
             return ContentResult(
-                content_type="web_content",
-                success=False,
-                error_message="No PDF content found"
+                content_type="popup_close",
+                screenshot_path=screenshot_path,
+                content_text=close_result,
+                handoff_instructions=f"Popup close attempted: {close_result}",
+                success=True
             )
             
         except Exception as e:
             return ContentResult(
                 content_type="error",
                 success=False,
-                error_message=f"Embedded PDF handling failed: {str(e)}"
+                error_message=f"Popup close failed: {str(e)}"
             )
     
-    def _handle_web_content(self, url: str, target_content: Optional[str]) -> ContentResult:
+    def _take_screenshot(self) -> ContentResult:
+        """🔥 NEW: Manual screenshot capture"""
+        try:
+            screenshot_path = _browser_session.take_screenshot("manual")
+            page_info = _browser_session.get_page_info()
+            
+            return ContentResult(
+                content_type="screenshot",
+                screenshot_path=screenshot_path,
+                url=page_info.get("url"),
+                content_text=f"Screenshot captured of {page_info.get('title', 'current page')}",
+                metadata=page_info,
+                handoff_instructions=f"Manual screenshot captured. Available for visual analysis.",
+                success=True
+            )
+            
+        except Exception as e:
+            return ContentResult(
+                content_type="error",
+                success=False,
+                error_message=f"Screenshot failed: {str(e)}"
+            )
+    
+    def _extract_content(self) -> ContentResult:
+        """🔥 IMPROVED: Extract page content with metadata"""
         try:
             driver = helium.get_driver()
             page_text = driver.find_element(By.TAG_NAME, "body").text
+            page_info = _browser_session.get_page_info()
             
+            # Truncate if too long
             if len(page_text) > 5000:
-                page_text = page_text[:5000] + "..."
+                page_text = page_text[:5000] + "... [truncated]"
+            
+            screenshot_path = _browser_session.take_screenshot("content_extract")
             
             return ContentResult(
                 content_type="web_content",
                 content_text=page_text,
-                url=url,
-                handoff_instructions=f"Web page content extracted. Search for: {target_content or 'relevant content'}",
+                url=page_info.get("url"),
+                screenshot_path=screenshot_path,
+                metadata=page_info,
+                handoff_instructions=f"Page content extracted from {page_info.get('title', 'current page')}. {len(page_text)} characters available.",
                 success=True
             )
             
@@ -538,10 +622,11 @@ class VisionWebBrowserTool(Tool):
             return ContentResult(
                 content_type="error",
                 success=False,
-                error_message=f"Web content handling failed: {str(e)}"
+                error_message=f"Content extraction failed: {str(e)}"
             )
     
     def _format_result(self, result: ContentResult) -> str:
+        """🔥 IMPROVED: Enhanced result formatting"""
         result_dict = {
             "success": result.success,
             "content_type": result.content_type,
@@ -553,6 +638,9 @@ class VisionWebBrowserTool(Tool):
         
         if result.url:
             result_dict["url"] = result.url
+            
+        if result.screenshot_path:
+            result_dict["screenshot_path"] = result.screenshot_path
         
         if result.content_text:
             text = result.content_text[:500] + "..." if len(result.content_text) > 500 else result.content_text
@@ -564,12 +652,44 @@ class VisionWebBrowserTool(Tool):
         if result.error_message:
             result_dict["error_message"] = result.error_message
         
-        result_dict["files_downloaded"] = len(_browser_session.downloaded_files)
+        # Enhanced session info
+        result_dict["session_info"] = {
+            "files_downloaded": len(_browser_session.downloaded_files),
+            "screenshots_taken": len(_browser_session.screenshots),
+            "browser_active": _browser_session.is_active
+        }
         
         return json.dumps(result_dict, indent=2)
 
 def cleanup_browser_session():
+    """Clean up browser session and files"""
     global _browser_session
     _browser_session.close()
     _browser_session.cleanup()
     return "Browser session cleaned up"
+
+# 🔥 NEW: Additional utility functions for SmolagAgent integration
+def get_browser_instructions() -> str:
+    """Get Helium usage instructions for SmolagAgent integration"""
+    return """
+BROWSER AUTOMATION INSTRUCTIONS:
+
+The vision_browser tool provides these actions:
+- navigate: Go to a URL (automatically takes screenshot)
+- click_element: Click on page elements by text
+- search_text: Find and focus on text within the page  
+- scroll_page: Scroll up or down by pixels
+- close_popups: Close modal dialogs and popups
+- take_screenshot: Capture current page state
+- extract_content: Get page text content
+- close_browser: Clean up session
+
+USAGE PATTERNS:
+1. Navigate first: {"action": "navigate", "url": "https://example.com"}
+2. Interact: {"action": "click_element", "element_text": "Login"}  
+3. Search: {"action": "search_text", "search_text": "Chicago", "nth_result": 1}
+4. Extract: {"action": "extract_content"}
+
+All actions automatically take screenshots for visual confirmation.
+Use the screenshots and handoff_instructions to chain actions effectively.
+"""

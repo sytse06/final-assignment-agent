@@ -43,6 +43,17 @@ from dev_retriever import load_gaia_retriever
 # Import logging
 from agent_logging import AgentLoggingSetup
 
+# Tools import statements
+try:
+    from tools.vision_browser_tool import VisionWebBrowserTool
+    VISION_BROWSER_AVAILABLE = True
+    print("✅ VisionWebBrowserTool imported")
+except ImportError as e:
+    print(f"⚠️ VisionWebBrowserTool not available: {e}")
+    print("💡 Install dependencies: pip install helium selenium")
+    VisionWebBrowserTool = None
+    VISION_BROWSER_AVAILABLE = False
+
 try:
     from tools.content_retriever_tool import (ContentRetrieverTool)
     CUSTOM_TOOLS_AVAILABLE = True
@@ -637,13 +648,16 @@ class GAIAAgent:
         return model_info
 
     def _validate_content_processor_tools(self, content_tools):
-        """Enhanced validation for vision and content tools + model capabilities"""
+        """Enhanced validation with specific vision tool diagnosis"""
         tool_names = [getattr(tool, 'name', tool.__class__.__name__) for tool in content_tools]
         
-        # Tool capability validation
+        # More specific tool capability validation
         has_vision_browser = any('Vision' in name or 'Browser' in name for name in tool_names)
         has_content_retriever = any('Content' in name or 'Retriever' in name for name in tool_names)
         has_speech_tool = any('Speech' in name or 'Text' in name for name in tool_names)
+        
+        # Check if we have the global availability flags
+        vision_tool_should_be_available = globals().get('VISION_BROWSER_AVAILABLE', False)
         
         # Model capability validation
         model_capabilities = self._check_model_vision_capabilities()
@@ -663,68 +677,41 @@ class GAIAAgent:
             
             # Combined capability assessment
             "effective_vision_capability": has_vision_browser and model_capabilities["has_vision"],
-            "fallback_strategy": "ocr_text_extraction" if not model_capabilities["has_vision"] else "full_vision"
+            "fallback_strategy": "ocr_text_extraction" if not model_capabilities["has_vision"] else "full_vision",
+            
+            # Diagnostic info
+            "vision_tool_expected": vision_tool_should_be_available,
+            "vision_tool_loaded": has_vision_browser
         }
         
-        # Status reporting with actionable information
+        # Enhanced status reporting
         print(f"📊 Content Processor Capabilities Assessment:")
         print(f"   🔧 Tools: {len(content_tools)} total")
-        print(f"   🌐 Vision Browser: {'✅' if has_vision_browser else '❌'}")
+        print(f"   🌐 Vision Browser: {'✅' if has_vision_browser else '❌'} (expected: {'✅' if vision_tool_should_be_available else '❌'})")
         print(f"   📄 Content Retriever: {'✅' if has_content_retriever else '❌'}")
         print(f"   🎵 Speech Processing: {'✅' if has_speech_tool else '❌'}")
-        print(f"   👁️  Model Vision Support: {'✅' if model_capabilities['has_vision'] else '❌'} ({model_capabilities['model_type']})")
+        print(f"   👁️ Model Vision Support: {'✅' if model_capabilities['has_vision'] else '❌'} ({model_capabilities['model_type']})")
         print(f"   🎯 Effective Vision Capability: {'✅ Full Vision' if capabilities['effective_vision_capability'] else '⚠️ OCR Fallback Only'}")
         
-        # Warnings and recommendations
-        if not has_vision_browser:
-            print("⚠️  No vision browser tools - install vision_browser_tool for web content acquisition")
+        # More specific warnings
+        if vision_tool_should_be_available and not has_vision_browser:
+            print("⚠️ VisionWebBrowserTool expected but not loaded - check tools/vision_browser_tool.py")
+            # Run diagnosis
+            try:
+                from tools import diagnose_vision_tool
+                diagnose_vision_tool()
+            except:
+                print("💡 Run diagnose_vision_tool() for detailed analysis")
+        elif not vision_tool_should_be_available:
+            print("ℹ️ VisionWebBrowserTool not available - create tools/vision_browser_tool.py")
+        
         if not has_content_retriever:
-            print("⚠️  No content retrieval tools - limited document processing capabilities")
+            print("⚠️ No content retrieval tools - limited document processing")
+        
         if not model_capabilities["has_vision"]:
-            print("ℹ️  Text-only model detected - vision questions will use OCR text extraction fallback")
-            print("💡 For full vision capabilities, consider using: GPT-4V, Claude-3, Gemini-Pro-Vision, or LLaVA")
-        if has_vision_browser and not model_capabilities["has_vision"]:
-            print("⚠️  Vision tools available but model can't process images - will use OCR extraction")
+            print("ℹ️ Text-only model - vision questions will use OCR fallback")
         
         return capabilities
-
-    def _download_file_once(self, task_id: str, file_name: str) -> Optional[str]:
-        """Download attached file with comprehensive error handling"""
-        try:
-            agent_evaluation_api = self.config.agent_evaluation_api
-            file_url = f"{agent_evaluation_api}files/{task_id}"
-            
-            print(f"📡 Downloading: {file_url}")
-            
-            response = requests.get(
-                file_url,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                timeout=30,
-                stream=True
-            )
-            
-            if response.status_code == 200:
-                # Create temp file with correct extension
-                file_extension = os.path.splitext(file_name)[1]
-                with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        tmp_file.write(chunk)
-                    local_path = tmp_file.name
-                
-                file_size = os.path.getsize(local_path)
-                print(f"✅ Downloaded: {local_path} ({file_size} bytes)")
-                return local_path
-                
-            else:
-                print(f"❌ Download failed: HTTP {response.status_code}")
-                return None
-                
-        except requests.RequestException as e:
-            print(f"❌ Network error downloading file: {e}")
-            return None
-        except Exception as e:
-            print(f"❌ Download error: {e}")
-            return None
 
     def _analyze_image_metadata(self, file_path: str) -> Dict[str, Any]:
         """Analyze image file for enhanced vision processing"""
@@ -902,7 +889,7 @@ class GAIAAgent:
         
         # 2. Web Researcher - ToolCallingAgent for search with robust fallback system
         web_tools = []
-        web_tool_source = "none"  # Track what tools we're using
+        web_tool_source = "none"
         
         # Try LangChain tools first (superior quality)
         if LANGCHAIN_TOOLS_AVAILABLE:
@@ -984,7 +971,7 @@ class GAIAAgent:
             tools=web_tools,
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
-            add_base_tools=use_base_tools,
+            add_base_tools=False,
             logger=logger
         )
         
@@ -996,21 +983,19 @@ class GAIAAgent:
         else:
             print(f"⚠️  Created web_researcher with no tools: Limited capabilities")
         
-        # 3. Content Processor - Multi-modal content acquisition and processing
+        # 3. Content Processor - specialized agent for content acquisition and processing
         content_tools = []
 
         # Add VisionWebBrowserTool if available
-        try:
-            from vision_browser_tool import VisionWebBrowserTool  # Corrected path
-            vision_browser = VisionWebBrowserTool()
-            if hasattr(vision_browser, 'setup'):
-                vision_browser.setup()
-            content_tools.append(vision_browser)
-            print("✅ Added VisionWebBrowserTool to content processor")
-        except ImportError as e:
-            print(f"⚠️  VisionWebBrowserTool requires helium selenium: {e}")
-        except Exception as e:
-            print(f"⚠️  Error adding VisionWebBrowserTool: {e}")
+        if VISION_BROWSER_AVAILABLE:
+            try:
+                vision_browser = VisionWebBrowserTool()
+                if hasattr(vision_browser, 'setup'):
+                    vision_browser.setup()
+                content_tools.append(vision_browser)
+                print("✅ Added VisionWebBrowserTool to content processor")
+            except Exception as e:
+                print(f"⚠️ VisionWebBrowserTool initialization failed: {e}")
 
         # Add ContentRetrieverTool if available
         if CUSTOM_TOOLS_AVAILABLE:
@@ -1019,7 +1004,7 @@ class GAIAAgent:
                 content_tools.append(content_retriever)
                 print("✅ Added ContentRetrieverTool to content processor")
             except Exception as e:
-                print(f"⚠️  Error adding ContentRetrieverTool: {e}")
+                print(f"⚠️ Error adding ContentRetrieverTool: {e}")
 
         # Add SpeechToTextTool if available        
         try:
@@ -1027,9 +1012,9 @@ class GAIAAgent:
             content_tools.append(speech_tool)
             print("✅ Added SpeechToTextTool to content processor")
         except ImportError:
-            print("⚠️  SpeechToTextTool requires transformers - skipping")
+            print("⚠️ SpeechToTextTool requires transformers - skipping")
         except Exception as e:
-            print(f"⚠️  Error adding SpeechToTextTool: {e}")
+            print(f"⚠️ Error adding SpeechToTextTool: {e}")
 
         # Create content processor description
         content_tool_names = [getattr(tool, 'name', tool.__class__.__name__) for tool in content_tools]
@@ -1038,16 +1023,16 @@ class GAIAAgent:
 
         WORKFLOW: Navigate pages → Acquire content → Process content
 
-        AVAILABLE TOOLS: {', '.join(content_tool_names)}
+        AVAILABLE TOOLS: {', '.join(content_tool_names) if content_tool_names else 'Basic content processing only'}
 
         CAPABILITIES:
-        - Web navigation and content discovery
-        - PDF, document, and media file acquisition  
-        - Text extraction and content analysis
-        - Audio transcription and processing
+        - Complex webpage navigation and content discovery {'(available)' if VISION_BROWSER_AVAILABLE else '(limited)'}
+        - Document extraction and processing  
+        - Audio transcription and analysis
+        - Image and multimedia content processing
 
-        STRATEGY: Use vision_web_browser for content acquisition, then appropriate processing tool"""
-
+        STRATEGY: When web_researcher can't find content through web search"""
+        
         content_processor = ToolCallingAgent(
             name="content_processor", 
             description=content_processor_description,
@@ -1069,10 +1054,11 @@ class GAIAAgent:
         print(f"🎯 Created {len(specialist_agents)} specialist agents:")
         print(f"   data_analyst: CodeAgent with direct Python file access")
         print(f"   web_researcher: ToolCallingAgent with web search tools")
-        print(f"   content_processor: ToolCallingAgent with multi-modal content tools")
+        print(f"   content_processor: ToolCallingAgent for processing multi-modal content tools")
         
         return specialist_agents
-
+    
+    
     def _create_coordinator(self) -> CodeAgent:
         """Create coordinator using smolagents hierarchical pattern"""
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
@@ -1112,14 +1098,31 @@ class GAIAAgent:
         return coordinator
 
     def _build_coordinator_task(self, state: GAIAState) -> str:
-        """Build coordination task for hierarchical coordinator with managed specialists"""
-        
+        """Build coordination task with proper tool prioritization"""
         question = state["question"]
         file_name = state.get("file_name", "")
         file_path = state.get("file_path", "")
         has_file = state.get("has_file", False)
         similar_examples = state.get("similar_examples", [])
         complexity = state.get("complexity", "unknown")
+        
+        # 🔥 FIX: Extract file_info and vision_status from state and capabilities
+        file_metadata = state.get("file_metadata", {})
+        
+        # Build file info string
+        if has_file:
+            file_info = f"File: {file_name} (Path: {file_path})"
+            if file_metadata:
+                file_category = file_metadata.get("category", "unknown")
+                recommended_specialist = file_metadata.get("recommended_specialist", "unknown")
+                file_info += f" | Category: {file_category} | Recommended: {recommended_specialist}"
+        else:
+            file_info = "No file attached"
+        
+        # Build vision status string
+        effective_vision = self.capabilities.get("effective_vision_capability", False)
+        model_vision = self.capabilities.get("model_supports_vision", False)
+        vision_status = f"Vision: {'✅ Full' if effective_vision else '⚠️ OCR Only'} (Model: {'✅' if model_vision else '❌'})"
         
         # Build similar examples context
         examples_context = ""
@@ -1129,167 +1132,110 @@ class GAIAAgent:
                 examples_context += f"{i}. Q: {example.get('question', '')[:100]}...\n"
                 examples_context += f"   A: {example.get('answer', '')}\n"
         
-        # Task for coordinator with managed specialists
+        # Build the coordinator task with CLEAR prioritization
         task = f"""
-        You are the GAIA coordinator with three managed specialist agents. Analyze this question and execute using your specialists.
+    You are the GAIA coordinator with three managed specialist agents.
+    Analyze this question and execute using your specialists.
 
-        QUESTION: {question}
-        COMPLEXITY: {complexity}
-        FILE INFO: {file_name} (path: {file_path}, has_file: {has_file})
-        {examples_context}
+    QUESTION: {question}
+    COMPLEXITY: {complexity}
+    FILE INFO: {file_info}
+    VISION CAPABILITY: {vision_status}
+    {examples_context}
 
-        YOUR MANAGED SPECIALISTS:
-        - data_analyst: CodeAgent for Excel/CSV analysis and calculations (direct file access)
-        - web_researcher: ToolCallingAgent for web searches and current information  
-        - content_processor: ToolCallingAgent for multi-modal content acquisition and processing
+    YOUR MANAGED SPECIALISTS:
+    - data_analyst: CodeAgent for Excel/CSV analysis and calculations (direct file access)
+    - web_researcher: ToolCallingAgent - PRIMARY for web searches and information gathering
+    - content_processor: ToolCallingAgent - SPECIALIZED for complex content acquisition and processing
 
-        ANALYSIS AND EXECUTION:
+    SPECIALIST SELECTION PRIORITY:
 
-        1. PROBLEM ANALYSIS:
-        Analyze the fundamental problem in this question:
-        - Is this primarily a mathematical calculation?
-        - Does it require current/recent information from the web?
-        - Does it involve file processing or content acquisition?
-        - What type of reasoning is needed?
+    1. **data_analyst** for:
+    - Mathematical calculations and data analysis
+    - Excel/CSV file processing
+    - Numerical computations
 
-        Consider the question: "{question}"
+    2. **web_researcher** for:
+    - General web searches and information gathering
+    - Current events and factual information
+    - Wikipedia searches and web research
+    - Most web-based information needs
 
-        2. PROCESSING APPROACH:
-        Determine the appropriate processing approach:
+    3. **content_processor** for:
+    - Complex webpage navigation (when simple search isn't enough)
+    - Document extraction and processing (PDF, Word, etc.)
+    - Audio/video transcription and analysis
+    - Image processing and vision tasks
+    - When web_researcher cannot find the needed content
 
-        ```python
-        # Analyze processing approach
-        question_text = "{question}"
-        has_attached_file = "{has_file}" == "True"
+    PROCESSING APPROACH:
 
-        if has_attached_file:
-            # FILE-BASED ANALYSIS (served via URL in deployment)
-            from pathlib import Path
-            
-            file_path = Path("{file_name}")
-            extension = file_path.suffix.lower()
-            
-            if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
-                processing_approach = "data_analysis"
-                best_specialist = "data_analyst"
-                print(f"Data file detected → use data_analyst specialist")
-            elif extension in ['.pdf', '.docx', '.doc', '.txt', '.mp3', '.mp4', '.wav']:
-                processing_approach = "content_processing"
-                best_specialist = "content_processor"
-                print(f"Document/media file detected → use content_processor specialist")
-            else:
-                processing_approach = "content_processing"
-                best_specialist = "content_processor"
-                print(f"Unknown file type → use content_processor specialist")
+    ```python
+    # Analyze question requirements
+    question_text = "{question}"
+    has_attached_file = "{has_file}" == "True"
 
-        elif any(discovery_signal in question_text.lower() for discovery_signal in ["chapter", "section", "find", "locate", "download"]):
-            # WEB CONTENT ANALYSIS
-            # Consider if you need to visually explore this webpage to find the right content
-            # Establish:
-            # - Does this seem like a direct link to a document/file/image?
-            # - Does the question suggest to navigate or discover content on the page?
-            # - Is looking at the page the fastest path to problem solving?
-            
-            if any(indicator in question_text.lower() for indicator in [
-                "chapter", "section", "part", "find", "locate", "mentioned", "discussed"
-            ]) or not question_text.strip().endswith(('.pdf', '.doc', '.docx', '.txt')):
-                processing_approach = "multimodal_web_content"
-                best_specialist = "content_processor"
-                strategy_hint = "Use vision browser to explore and acquire content, then process"
-                print(f"Web exploration needed → use content_processor with vision browser")
-            else:
-                processing_approach = "direct_web_content"
-                best_specialist = "content_processor"
-                strategy_hint = "Try direct content processing first"
-                print(f"Direct web content → use content_processor")
-            
+    if has_attached_file:
+        # FILE-BASED ANALYSIS
+        from pathlib import Path
+        file_path = Path("{file_name}")
+        extension = file_path.suffix.lower()
+        
+        if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
+            selected_specialist = "data_analyst"
+            reasoning = "Data file → data_analyst specialist"
         else:
-            # GENERAL INFORMATION QUERY
-            processing_approach = "web_search"
-            best_specialist = "web_researcher"
-            print(f"General information query → use web_researcher specialist")
-
-        print(f"Processing approach: {processing_approach} → {best_specialist}")
-        ```
-
-        3. SPECIALIST SELECTION AND EXECUTION:
-        Based on your analysis, select the most appropriate specialist:
-
-        ```python
-        # Final specialist selection based on question requirements and processing approach
-        question_lower = "{question}".lower()
-
-        # Override specialist selection based on question type
-        if "calculate" in question_lower or "data" in question_lower or "number" in question_lower:
-            if processing_approach == "data_analysis":
-                selected_specialist = "data_analyst"
-                reasoning = "Data file + calculation requirements → data_analyst specialist"
-            else:
-                selected_specialist = "data_analyst"  
-                reasoning = "Calculation requirements → data_analyst specialist"
-        elif "current" in question_lower or "latest" in question_lower or "recent" in question_lower:
-            selected_specialist = "web_researcher"
-            reasoning = "Current information needed → web_researcher specialist"
-        elif processing_approach in ["multimodal_web_content", "content_processing", "direct_web_content"]:
             selected_specialist = "content_processor"
-            reasoning = f"Content processing needed → content_processor specialist"
-        else:
-            # Default to best specialist from processing analysis
-            selected_specialist = best_specialist
-            reasoning = f"Processing analysis → {best_specialist} specialist"
+            reasoning = "Non-data file → content_processor specialist"
 
-        print(f"SELECTED SPECIALIST: {{selected_specialist}}")
-        print(f"REASONING: {{reasoning}}")
-        ```
+    elif any(term in question_text.lower() for term in ["calculate", "data", "number", "percentage"]):
+        selected_specialist = "data_analyst"
+        reasoning = "Calculation needed → data_analyst specialist"
 
-        4. EXECUTE WITH SELECTED SPECIALIST:
-        Now execute the task using your selected specialist with appropriate strategy:
+    elif any(term in question_text.lower() for term in ["current", "latest", "recent", "search", "find information"]):
+        selected_specialist = "web_researcher"
+        reasoning = "Information search needed → web_researcher specialist (PRIMARY for web research)"
 
-        SPECIALIST EXECUTION GUIDELINES:
+    elif any(term in question_text.lower() for term in ["chapter", "section", "navigate", "download", "extract from"]):
+        selected_specialist = "content_processor"
+        reasoning = "Complex content acquisition → content_processor specialist"
 
-        If using **data_analyst**:
-        - You can directly access files using pandas: `pd.read_excel("{file_path}")` or `pd.read_csv("{file_path}")`
-        - Use numerical computation libraries: numpy, scipy, statistics, math
-        - Perform calculations and data analysis directly in Python
+    else:
+        # Default to web_researcher for general information
+        selected_specialist = "web_researcher"
+        reasoning = "General information → web_researcher specialist (PRIMARY for web research)"
 
-        If using **web_researcher**:
-        - Search for current information using GoogleSearchTool
-        - Use VisitWebpageTool to extract content from specific URLs
-        - Use WikipediaSearchTool for factual information
+    print(f"SELECTED SPECIALIST: {{selected_specialist}}")
+    print(f"REASONING: {{reasoning}}")
+    ```
 
-        If using **content_processor**:
-        - For attached files: Use ContentRetrieverTool for document extraction (files via additional_args)
-        - For web content acquisition: Strategic guidance based on processing approach:
-        * Multimodal web content: "Use vision browser to explore page and acquire content, then process with content retriever"
-        * Direct web content: "Use content retriever directly if URL points to document"
-        - Use SpeechToTextTool for audio transcription (files via additional_args)
+    EXECUTION GUIDELINES:
 
-        STRATEGIC GUIDANCE FOR CONTENT PROCESSOR:
-        ```python
-        if processing_approach == "multimodal_web_content":
-            strategy_guidance = f"""
-            CONTENT ACQUISITION STRATEGY:
-            - Available tools: {', '.join(content_tool_names)}
-            - Use vision_browser_tool for navigation and content discovery
-            - Use vision_browser_tool to navigate and discover content
-            - Look for download links, embedded content, or navigation requirements
-            - Acquire content files or direct URLs
-            - Use content_retriever_tool to process acquired content
-            - Search for: {question}
-            """
-            print(f"Providing vision browser strategy to content_processor")
-        else:
-            strategy_guidance = "Use appropriate content processing tools based on content type"
-        ```
+    **web_researcher** (PRIMARY for web research):
+    - Use LangChain search tools for information gathering
+    - Use VisitWebpageTool for webpage content extraction
+    - Handle most web-based information needs
+    - First choice for "search for information" tasks
 
-        EXECUTE NOW: Use your selected specialist to answer the question: "{question}"
+    **content_processor** (SPECIALIZED for complex content):
+    - Use vision_web_browser ONLY when web_researcher cannot find content
+    - Use ContentRetrieverTool for document processing
+    - Handle complex navigation and content acquisition
+    - Use when simple search is insufficient
 
-        CRITICAL OUTPUT REQUIREMENTS:
-        - End your final response with 'FINAL ANSWER: [specific answer]'
-        - Follow GAIA format: numbers (no commas), strings (no articles), lists (comma separated)
-        - Provide actual answers, never use placeholder text like "[your answer]"
-        - Be specific and factual in your response
-        """
+    **data_analyst**:
+    - Direct file access with pandas
+    - Mathematical computations
+    - Data analysis and calculations
+
+    EXECUTE NOW: Use your selected specialist to answer: "{question}"
+
+    CRITICAL OUTPUT REQUIREMENTS:
+    - End your final response with 'FINAL ANSWER: [specific answer]'
+    - Follow GAIA format: numbers (no commas), strings (no articles), lists (comma separated)
+    - Provide actual answers, never use placeholder text
+    - Be specific and factual in your response
+    """.strip()
         
         return task
                    
