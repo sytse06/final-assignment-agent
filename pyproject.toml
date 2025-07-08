@@ -87,8 +87,9 @@ wikipedia-api = "^0.8.1"
 smolagents = {extras = ["transformers"], version = "^1.19.0"}
 webdriver-manager = "^4.0.2"
 yt-dlp = "^2025.6.25"
-duckduckgo-search = "^8.1.1"
 chardet = "^5.2.0"
+ddgs = "^9.0.0"
+duckduckgo-search = "^8.1.1"
 
 [tool.poetry.group.dev.dependencies]
 # Testing

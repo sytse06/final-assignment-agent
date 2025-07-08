@@ -694,78 +694,102 @@ class GAIAAgent:
             logger=logger
         )
         
-        # 2. Web Researcher - ToolCallingAgent for search with API key validation
+        # 2. Web Researcher - ToolCallingAgent for search with robust fallback system
         web_tools = []
+        web_tool_source = "none"  # Track what tools we're using
         
-        # Import your LangChain-based web search tools
+        # Try LangChain tools first (superior quality)
         if LANGCHAIN_TOOLS_AVAILABLE:
             try:
                 available_research_tools = get_langchain_tools()
                 tool_status = get_tool_status()
                 
-                print(f"🔍 LangChain research tools status: {tool_status}")
-                
                 if tool_status['research_tools_available']:
                     web_tools.extend(available_research_tools)
-                    print(f"✅ Added {len(available_research_tools)} LangChain research tools:")
-                    for tool in available_research_tools:
-                        print(f"   - {tool.name}: {tool.description[:60]}...")
-                else:
-                    print("⚠️  LangChain research tools not properly configured")
+                    web_tool_source = "langchain"
+                    print(f"✅ Added {len(available_research_tools)} LangChain research tools")
                     
+                    # Add complementary VisitWebpageTool (still useful with LangChain)
+                    try:
+                        from smolagents import VisitWebpageTool
+                        web_tools.append(VisitWebpageTool())
+                        print("✅ Added VisitWebpageTool for webpage content extraction")
+                    except Exception as e:
+                        print(f"⚠️  VisitWebpageTool failed: {e}")
+                        
             except Exception as e:
-                print(f"⚠️  Error loading LangChain tools: {e}")
-        else:
-            print("❌ LangChain tools not available, using native SmolagAgent tools")
-                
-        # Fallback to native SmolagAgent tools if LangChain tools fail
+                print(f"⚠️  LangChain tools error: {e}")
+        
+        # Fallback to native SmolagAgent tools ONLY if LangChain tools failed
         if not web_tools:
-            print("❌ No web search tools available - web researcher will have limited capabilities")
-            # Create a minimal placeholder tool or use base tools only
-        
-        # Create dynamic description based on available tools
-        tool_names = []
-        tool_capabilities = []
-        
-        for tool in web_tools:
-            tool_name = getattr(tool, 'name', tool.__class__.__name__)
-            tool_names.append(tool_name)
+            print("🔄 Using native SmolagAgent tools...")
+            web_tool_source = "native"
             
-            # Add capability descriptions
-            if 'serper' in tool_name.lower() or 'search_web' in tool_name.lower():
-                tool_capabilities.append("Real-time web search with structured results")
-            elif 'wikipedia' in tool_name.lower():
-                tool_capabilities.append("Wikipedia knowledge base access")
-            elif 'arxiv' in tool_name.lower():
-                tool_capabilities.append("Scientific paper research")
-            elif 'visit' in tool_name.lower():
-                tool_capabilities.append("Full webpage content extraction")
-            elif 'duckduckgo' in tool_name.lower():
-                tool_capabilities.append("General web search (rate limited)")
+            # Try GoogleSearchTool
+            if os.getenv("SERPER_API_KEY") or os.getenv("SERPAPI_API_KEY"):
+                try:
+                    from smolagents import GoogleSearchTool
+                    provider = "serper" if os.getenv("SERPER_API_KEY") else "serpapi"
+                    web_tools.append(GoogleSearchTool(provider=provider))
+                    print(f"✅ Added GoogleSearchTool ({provider})")
+                except Exception as e:
+                    print(f"⚠️  GoogleSearchTool failed: {e}")
+            
+            # Add other native tools
+            try:
+                from smolagents import VisitWebpageTool, WikipediaSearchTool
+                web_tools.extend([VisitWebpageTool(), WikipediaSearchTool()])
+                print("✅ Added VisitWebpageTool and WikipediaSearchTool")
+            except Exception as e:
+                print(f"⚠️  Native tools failed: {e}")
+            
+            # Final fallback to DuckDuckGo
+            if not web_tools:
+                try:
+                    import duckduckgo_search  # Check dependency
+                    from smolagents import DuckDuckGoSearchTool
+                    web_tools.append(DuckDuckGoSearchTool())
+                    print("✅ Added DuckDuckGoSearchTool")
+                except ImportError:
+                    print("⚠️  Install: pip install duckduckgo-search")
+                except Exception as e:
+                    print(f"⚠️  DuckDuckGoSearchTool failed: {e}")
         
-        # Remove duplicates while preserving order
-        unique_capabilities = []
-        for cap in tool_capabilities:
-            if cap not in unique_capabilities:
-                unique_capabilities.append(cap)
-        
-        web_researcher_description = f"""Advanced web researcher with {len(web_tools)} research tools:
+        # Create web researcher description
+        if web_tools:
+            tool_names = [getattr(t, 'name', t.__class__.__name__) for t in web_tools]
+            web_researcher_description = f"Web researcher with {len(web_tools)} tools: {', '.join(tool_names)}"
+        else:
+            web_researcher_description = "Basic web researcher (no tools available)"
+            print("❌ No web tools available")
 
-            AVAILABLE TOOLS: {', '.join(tool_names)}
+        # Check base tools dependency
+        use_base_tools = False
+        try:
+            import duckduckgo_search
+            use_base_tools = True
+        except ImportError:
+            print("⚠️  Base tools disabled (missing duckduckgo-search)")
 
-            CAPABILITIES:
-            {chr(10).join(f"- {cap}" for cap in unique_capabilities)}"""
-
+        # Create web researcher
         web_researcher = ToolCallingAgent(
             name="web_researcher",
             description=web_researcher_description,
             tools=web_tools,
             model=self.specialist_model,
             max_steps=self.config.max_agent_steps,
-            add_base_tools=True,
+            add_base_tools=use_base_tools,
             logger=logger
         )
-    
+        
+        # Status report
+        if web_tool_source == "langchain":
+            print(f"✅ Created web_researcher with LangChain tools: Enhanced capabilities")
+        elif web_tool_source == "native":
+            print(f"✅ Created web_researcher with native tools: Basic capabilities")
+        else:
+            print(f"⚠️  Created web_researcher with no tools: Limited capabilities")
+        
         # 3. Document Processor - ToolCallingAgent for file processing
         doc_tools = []    
         # Add ContentRetrieverTool if available
@@ -850,17 +874,17 @@ class GAIAAgent:
             name="gaia_coordinator",
             description="""Coordinator that manages three specialist agents for GAIA tasks.
 
-    MANAGED AGENTS:
-    - data_analyst: For Excel/CSV analysis and calculations  
-    - web_researcher: For web searches and information gathering
-    - document_processor: For document extraction and audio transcription
+            MANAGED AGENTS:
+            - data_analyst: For Excel/CSV analysis and calculations  
+            - web_researcher: For web searches and information gathering
+            - document_processor: For document extraction and audio transcription
 
-    WORKFLOW:
-    1. Analyze the question and identify required capabilities
-    2. Delegate to appropriate specialist agent(s) using their names
-    3. Coordinate multiple specialists if needed
-    4. Synthesize results into final answer
-    """,
+            WORKFLOW:
+            1. Analyze the question and identify required capabilities
+            2. Delegate to appropriate specialist agent(s) using their names
+            3. Coordinate multiple specialists if needed
+            4. Synthesize results into final answer
+            """,
             tools=[],  # No direct tools - delegates to managed agents
             managed_agents=list(specialist_agents.values()),
             additional_authorized_imports=[
