@@ -343,60 +343,6 @@ def validate_gaia_format(answer: str) -> bool:
     return True
 
 # ============================================================================
-# OTHER UTILITY FUNCTIONS
-# ============================================================================
-
-def is_simple_math(question: str) -> bool:
-    """Check if question is simple arithmetic"""
-    question_lower = question.lower()
-    
-    # Math operation keywords
-    math_keywords = ['calculate', 'what is', '%', 'percent', 'multiply', 'divide', 'add', 'subtract']
-    has_math_keyword = any(keyword in question_lower for keyword in math_keywords)
-    
-    # Simple patterns
-    simple_patterns = [
-        r'\d+\s*%\s*of\s*\d+',  # "15% of 200"
-        r'what\s+is\s+\d+.*\d+',  # "what is 15 * 23"
-        r'calculate\s+\d+.*\d+',   # "calculate 15 + 23"
-    ]
-    
-    has_simple_pattern = any(re.search(pattern, question_lower) for pattern in simple_patterns)
-    
-    return has_math_keyword and has_simple_pattern and len(question.split()) < 10
-
-def is_simple_fact(question: str) -> bool:
-    """Check if question is a simple factual query"""
-    question_lower = question.lower()
-    
-    simple_fact_patterns = [
-        r'what\s+are?\s+the\s+primary\s+colors?',
-        r'what\s+is\s+the\s+capital\s+of',
-        r'when\s+was.*born',
-        r'how\s+many.*in',
-    ]
-    
-    return any(re.search(pattern, question_lower) for pattern in simple_fact_patterns)
-
-def has_attachments(task_id: str) -> bool:
-    """Check if task has file attachments (placeholder)"""
-    # This would check for actual attachments in a real implementation
-    # For now, return False as we don't have attachment detection
-    return False
-
-def needs_web_search(question: str) -> bool:
-    """Check if question needs current information"""
-    question_lower = question.lower()
-    
-    web_keywords = [
-        'current', 'latest', 'recent', 'today', 'now', 'this year',
-        'population of', 'price of', 'stock price', 'weather',
-        'who won', 'election results'
-    ]
-    
-    return any(keyword in question_lower for keyword in web_keywords)
-
-# ============================================================================
 # MAIN GAIA AGENT
 # ============================================================================
 class GAIAAgent:
@@ -1448,52 +1394,32 @@ class GAIAAgent:
         }
 
     def _complexity_check_node(self, state: GAIAState):
-        """Enhanced complexity check with file awareness"""
+        """🎯 SIMPLIFIED: File check + LLM assessment only"""
         question = state["question"]
-        task_id = state.get("task_id", "")
         has_file = state.get("has_file", False)
         
-        track("Analyzing question complexity", self.config)
-        
         if self.logging:
-            self.logging.log_step("complexity_analysis", f"Analyzing complexity for: {question[:50]}...")
+            self.logging.log_step("complexity_analysis", f"Analyzing complexity: {question[:50]}...")
         
-        print(f"🧠 Analyzing complexity for: {question[:50]}...")
+        print(f"🧠 Analyzing complexity: {question[:50]}...")
         
-        # Enhanced complexity detection with file awareness
-        if is_simple_math(question):
-            complexity = "simple"
-            reason = "Simple arithmetic detected"
-        elif is_simple_fact(question):
-            complexity = "simple" 
-            reason = "Simple factual query detected"
-        elif has_file:  # NEW: Use state file info
+        # Only two rules:
+        if has_file:
             complexity = "complex"
-            reason = "File attachment detected in state"
-        elif needs_web_search(question):
-            complexity = "complex"
-            reason = "Current information needed"
+            reason = "File attachment detected"
         else:
-            # LLM decides for edge cases
             complexity = self._llm_complexity_check(question)
-            reason = "LLM complexity assessment"
+            reason = "LLM multi-step assessment"
         
         print(f"📊 Complexity: {complexity} ({reason})")
-        
-        track(f"Complexity: {complexity} - {reason}", self.config)
-        
-        # Update context bridge
-        if self.config.enable_context_bridge:
-            ContextBridge.track_operation(f"Complexity: {complexity} - {reason}")
         
         if self.logging:
             self.logging.set_complexity(complexity)
             self.logging.log_step("complexity_result", f"Final complexity: {complexity} - {reason}")
         
-        # Enhanced RAG for complex questions
-        if complexity == "complex" and self.config.skip_rag_for_simple and not state.get("similar_examples"):
-            print("📚 Retrieving RAG examples for complex question...")
-            
+        # RAG for complex questions if needed
+        similar_examples = state.get("similar_examples", [])
+        if complexity == "complex" and self.config.skip_rag_for_simple and not similar_examples:
             try:
                 similar_docs = self.retriever.search(question, k=self.config.rag_examples_count)
                 similar_examples = []
@@ -1510,15 +1436,11 @@ class GAIAAgent:
                                 "answer": a_part
                             })
                 
-                print(f"📚 Found {len(similar_examples)} similar examples")                            
                 if self.logging:
                     self.logging.set_similar_examples_count(len(similar_examples))
                     
             except Exception as e:
-                print(f"⚠️  RAG retrieval error: {e}")
-                similar_examples = state.get("similar_examples", [])
-        else:
-            similar_examples = state.get("similar_examples", [])
+                print(f"⚠️ RAG retrieval error: {e}")
         
         return {
             "complexity": complexity,
@@ -1527,28 +1449,31 @@ class GAIAAgent:
         }
 
     def _llm_complexity_check(self, question: str) -> str:
-        """Use LLM to determine complexity for edge cases"""
+        """
+        Does answering this question require external tools or just training knowledge?
+        """
         
-        prompt = f"""Analyze this question and determine if it needs specialist tools or can be answered directly.
+        prompt = f"""Question: {question}
 
-        Question: {question}
+    To answer this question, do I need to search the web, access files, or use external tools?
+    Or can I answer it directly from my training knowledge alone?
 
-        Consider:
-        - Simple math/facts = "simple" 
-        - Needs file analysis, web search, or complex reasoning = "complex"
+    SIMPLE = I can answer from my training knowledge alone
+    COMPLEX = I need to search the web, access files, or use tools to find current/specific information
 
-        Respond with just "simple" or "complex":"""
+    Answer just: SIMPLE or COMPLEX"""
         
         try:
             response = llm_invoke_with_retry(self.orchestration_model, [HumanMessage(content=prompt)])
-            result = response.content.strip().lower()
-            complexity = "simple" if "simple" in result else "complex"
+            result = response.content.strip().upper()
             
-            return complexity
-            
+            if "SIMPLE" in result:
+                return "simple"
+            else:
+                return "complex"
+                
         except Exception as e:
-            # Default to complex if LLM fails
-            print(f"⚠️  LLM complexity check failed: {str(e)}, defaulting to complex")
+            print(f"⚠️ LLM complexity check failed: {str(e)}, defaulting to complex")
             return "complex"
 
     def _route_by_complexity(self, state: GAIAState) -> str:
@@ -1798,7 +1723,8 @@ class GAIAAgent:
     def _extract_final_answer(self, raw_answer: str) -> str:
         """
         Extract final answer from agent response with pattern matching
-        """  
+        """
+        import re  
         if raw_answer is None:
             if hasattr(self, 'logging_setup') and self.logging_setup:
                 self.logging_setup.log_step(
@@ -1886,8 +1812,9 @@ class GAIAAgent:
 
     def _apply_gaia_formatting(self, answer: str) -> str:
         """
-        🔧 ENHANCED: GAIA formatting with safe regex operations and type safety
+        GAIA formatting with safe regex operations and type safety
         """
+        import re
         if not answer:
             return "No answer"
         
