@@ -19,7 +19,7 @@ langchain-community>=0.3.24
 langchain-huggingface>=0.2.0
 langgraph>=0.4.8
 langchain-groq>=0.3.2
-langchain-google-genai>=2.1.5
+langchain-google-genai>=2.1.7
 
 # Model Providers
 openai>=1.40.0
