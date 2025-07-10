@@ -901,61 +901,61 @@ class GAIAAgent:
             
             return specialist_agents
         
-def _create_coordinator(self) -> CodeAgent:
-        """Create coordinator using smolagents hierarchical pattern with file-first strategy"""
-        logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
-        
-        # Define specialists
-        specialist_agents = self._create_specialist_agents()
-        
-        # Enhanced coordinator with direct file access via CodeAgent imports
-        coordinator = CodeAgent(
-            name="gaia_coordinator",
-            description="""GAIA task coordinator managing three specialist agents.
+    def _create_coordinator(self) -> CodeAgent:
+            """Create coordinator using smolagents hierarchical pattern with file-first strategy"""
+            logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
+            
+            # Define specialists
+            specialist_agents = self._create_specialist_agents()
+            
+            # Enhanced coordinator with direct file access via CodeAgent imports
+            coordinator = CodeAgent(
+                name="gaia_coordinator",
+                description="""GAIA task coordinator managing three specialist agents.
 
-    WORKFLOW:
+        WORKFLOW:
 
-    1. ANALYZE TASK: Question analysis and file preprocessing (extract archives, inspect contents)
-    2. CHOOSE SPECIALIST: Based on question type and available files/data
-    3. DELEGATE: Assign complete task to appropriate specialist(s)
-    4. SYNTHESIZE: Combine results and format GAIA answer
+        1. ANALYZE TASK: Question analysis and file preprocessing (extract archives, inspect contents)
+        2. CHOOSE SPECIALIST: Based on question type and available files/data
+        3. DELEGATE: Assign complete task to appropriate specialist(s)
+        4. SYNTHESIZE: Combine results and format GAIA answer
 
-    SPECIALISTS AVAILABLE:
-    - data_analyst: Numerical analysis, calculations, data processing
-    - web_researcher: Search and discovery, online information gathering  
-    - content_processor: Document/media processing, content extraction
+        SPECIALISTS AVAILABLE:
+        - data_analyst: Numerical analysis, calculations, data processing
+        - web_researcher: Search and discovery, online information gathering  
+        - content_processor: Document/media processing, content extraction
 
-    The coordinator handles file preparation so specialists can focus on their core capabilities.""",
-            tools=[],  # No tools needed - direct file access via imports
-            managed_agents=list(specialist_agents.values()),
-            additional_authorized_imports=[
-                # File preprocessing (CORE RESPONSIBILITY)
-                "zipfile", "tarfile", "gzip", "bz2",  # Archive handling
-                "smart_file_handler", "is_url",       # Custom utilities
-                
-                # File operations and inspection
-                "open", "codecs", "chardet", "os", "sys", "io", "pathlib",
-                "mimetypes", "tempfile", "shutil",    # File management
-                
-                # Data preprocessing for specialist preparation
-                "pandas", "numpy", "csv", "json", "xml", "base64",
-                
-                # Binary and media file inspection
-                "PIL", "wave", "struct", "binascii",  # Basic media inspection
+        The coordinator handles file preparation so specialists can focus on their core capabilities.""",
+                tools=[],  # No tools needed - direct file access via imports
+                managed_agents=list(specialist_agents.values()),
+                additional_authorized_imports=[
+                    # File preprocessing (CORE RESPONSIBILITY)
+                    "zipfile", "tarfile", "gzip", "bz2",  # Archive handling
+                    "smart_file_handler", "is_url",       # Custom utilities
+                    
+                    # File operations and inspection
+                    "open", "codecs", "chardet", "os", "sys", "io", "pathlib",
+                    "mimetypes", "tempfile", "shutil",    # File management
+                    
+                    # Data preprocessing for specialist preparation
+                    "pandas", "numpy", "csv", "json", "xml", "base64",
+                    
+                    # Binary and media file inspection
+                    "PIL", "wave", "struct", "binascii",  # Basic media inspection
 
-                # Smart file handling functions
-                "smart_file_handler", "is_url",
-                
-                # Web and networking
-                "requests", "urllib", "time", "typing"
-            ],
-            model=self.specialist_model,
-            planning_interval=5,  # More frequent planning for file-first workflow
-            max_steps=15,  # Extra steps for file access + coordination
-            logger=logger
-        )
-        
-        return coordinator
+                    # Smart file handling functions
+                    "smart_file_handler", "is_url",
+                    
+                    # Web and networking
+                    "requests", "urllib", "time", "typing"
+                ],
+                model=self.specialist_model,
+                planning_interval=5,  # More frequent planning for file-first workflow
+                max_steps=15,  # Extra steps for file access + coordination
+                logger=logger
+            )
+            
+            return coordinator
 
     def _build_coordinator_task(self, state: GAIAState) -> str:
         """Build concise coordination task focused on execution"""
