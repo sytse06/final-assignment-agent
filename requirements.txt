@@ -13,7 +13,7 @@ torch>=2.1.0
 smolagents[transformers]>=1.19.0
 
 # LangChain Ecosystem (CRITICAL - WAS MISSING)
-langchain>=0.3.26
+langchain-core>=0.3.68,<0.4.0
 langchain-core>=0.3.26
 langchain-openai>=0.3.27
 langchain-community>=0.3.24
