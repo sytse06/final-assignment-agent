@@ -13,18 +13,19 @@ except ImportError:
 
 DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 
-class GAIAAgent:
+ class GAIAAgent:
     def __init__(self):
         self.agent = None
         
         if SYSTEM_AVAILABLE:
             try:
-                config = get_groq_config()
-                config.update({"enable_csv_logging": False, "debug_mode": False})
+                config = get_openrouter_config()
+                config.enable_csv_logging = FalseSpaces
+                config.debug_mode = False
                 self.agent = create_gaia_agent(config)
-                print("Agent initialized")
+                print("✅ Agent initialized")
             except Exception as e:
-                print(f"Agent initialization failed: {e}")
+                print(f"❌ Agent initialization failed: {e}")
     
     def __call__(self, task_id: str, question: str) -> str:
         if self.agent:
@@ -40,7 +41,7 @@ class GAIAAgent:
         elif "capital" in question.lower() and "france" in question.lower():
             return "Paris"
         else:
-            return "Question processed"
+            return "Unable to determine answer"
 
 def run_and_submit_all(profile: gr.OAuthProfile | None):
     space_id = os.getenv("SPACE_ID")
