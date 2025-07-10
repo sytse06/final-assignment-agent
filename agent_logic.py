@@ -958,192 +958,49 @@ def _create_coordinator(self) -> CodeAgent:
         return coordinator
 
     def _build_coordinator_task(self, state: GAIAState) -> str:
-        """Build coordination task with proper tool prioritization"""
+        """Build concise coordination task focused on execution"""
         question = state["question"]
         file_name = state.get("file_name", "")
-        file_path = state.get("file_path", "")
         has_file = state.get("has_file", False)
         similar_examples = state.get("similar_examples", [])
         complexity = state.get("complexity", "unknown")
         
-        # File info
-        if has_file:
-            file_info = f"File: {file_name} (Path: {file_path})"
-            file_metadata = state.get("file_metadata", {})
-            if file_metadata:
-                file_category = file_metadata.get("category", "unknown")
-                file_info += f" | Category: {file_category}"
-        else:
-            file_info = "No file attached"
+        # Build context sections
+        file_context = ""
+        if has_file and file_name:
+            file_context = f"\nFILE: {file_name}"
         
-        # Build vision status string
-        effective_vision = self.capabilities.get("effective_vision_capability", False)
-        model_vision = self.capabilities.get("model_supports_vision", False)
-        vision_status = f"Vision: {'✅ Full' if effective_vision else '⚠️ OCR Only'} (Model: {'✅' if model_vision else '❌'})"
-        
-        # Build similar examples context
         examples_context = ""
         if similar_examples:
-            examples_context = "\n\nSIMILAR GAIA EXAMPLES:\n"
-            for i, example in enumerate(similar_examples[:3], 1):
-                examples_context += f"{i}. Q: {example.get('question', '')[:100]}...\n"
-                examples_context += f"   A: {example.get('answer', '')}\n"
+            examples_context = "\nSIMILAR EXAMPLES:\n"
+            for i, example in enumerate(similar_examples[:2], 1):
+                examples_context += f"{i}. {example.get('question', '')[:80]}... → {example.get('answer', '')}\n"
         
-        # File handling instructions
-        file_handling_section = ""
-        if has_file and file_path:
-            file_handling_section = f"""
-
-    DIRECT FILE HANDLING (Available to you):
-    ```python
-    # Smart file handler available for both URLs and local paths
-    file_path = "{file_path}"
-    filename = "{file_name}"
-
-    # Get local file path (handles URLs by downloading to temp)
-    local_path = smart_file_handler(file_path, config)
-
-    # File processing based on extension:
-    if filename.endswith('.json') or filename.endswith('.jsonld'):
-        import json
-        with open(local_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        # Process JSON data directly
-
-    elif filename.endswith('.txt'):
-        with open(local_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-        # Process text content directly
-
-    elif filename.endswith('.csv'):
-        import pandas as pd
-        df = pd.read_csv(local_path)
-        # Process CSV data directly
-
-    elif filename.endswith('.xlsx'):
-        import pandas as pd
-        df = pd.read_excel(local_path)
-        # Process Excel data directly
-
-    # For complex processing, delegate to specialists
-    ```
-
-    DELEGATION STRATEGY:
-    - Handle simple file reading and data extraction yourself
-    - Delegate to data_analyst for complex calculations
-    - Delegate to web_researcher for external information gathering
-    - Delegate to content_processor only for specialized tools (vision, audio, large documents)
-    """
-
-        task = f"""
-    You are the GAIA coordinator with three managed specialist agents.
-    Analyze this question and execute using your specialists.
+        # Core task
+        task = f"""GAIA Coordinator Task
 
     QUESTION: {question}
-    COMPLEXITY: {complexity}
-    FILE INFO: {file_info}{file_handling_section}
-    VISION CAPABILITY: {vision_status}
-    {examples_context}
-    
-    YOUR CAPABILITIES:
-    1. DIRECT FILE PROCESSING: You can read and process JSON, JSONLD, TXT, CSV, Excel files
-    2. MANAGED SPECIALISTS: Delegate specialized tasks to your managed agents
+    COMPLEXITY: {complexity}{file_context}{examples_context}
 
-    YOUR MANAGED SPECIALISTS:
-    - data_analyst: CodeAgent for Excel/CSV analysis and calculations (direct file access)
-    - web_researcher: ToolCallingAgent - PRIMARY for web searches and information gathering
-    - content_processor: ToolCallingAgent - SPECIALIZED for complex content acquisition and processing
+    YOUR SPECIALISTS:
+    - data_analyst: Data analysis, calculations, file processing
+    - web_researcher: Web search, information gathering  
+    - content_processor: Document/media processing, complex content extraction
 
-    SPECIALIST SELECTION PRIORITY:
+    WORKFLOW:
+    1. Analyze question and files (if any)
+    2. Choose appropriate specialist(s) 
+    3. Delegate with clear instructions
+    4. Format final answer
 
-    1. **data_analyst** for:
-    - Mathematical calculations and data analysis
-    - Excel/CSV file processing
-    - Numerical computations
+    CRITICAL REQUIREMENTS:
+    - End with: FINAL ANSWER: [specific answer]
+    - Format: numbers (no commas), strings (no articles), lists (comma-separated)
+    - Be precise and factual
 
-    2. **web_researcher** for:
-    - General web searches and information gathering
-    - Current events and factual information
-    - Wikipedia searches and web research
-    - Most web-based information needs
+    Execute now."""
 
-    3. **content_processor** for:
-    - Complex webpage navigation (when simple search isn't enough)
-    - Document extraction and processing (PDF, Word, etc.)
-    - Audio/video transcription and analysis
-    - Image processing and vision tasks
-    - When web_researcher cannot find the needed content
-
-    PROCESSING APPROACH:
-
-    ```python
-    # Analyze question requirements
-    question_text = "{question}"
-    has_attached_file = "{has_file}" == "True"
-
-    if has_attached_file:
-        # FILE-BASED ANALYSIS
-        from pathlib import Path
-        file_path = Path("{file_name}")
-        extension = file_path.suffix.lower()
-        
-        if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
-            selected_specialist = "data_analyst"
-            reasoning = "Data file → data_analyst specialist"
-        else:
-            selected_specialist = "content_processor"
-            reasoning = "Non-data file → content_processor specialist"
-
-    elif any(term in question_text.lower() for term in ["calculate", "data", "number", "percentage"]):
-        selected_specialist = "data_analyst"
-        reasoning = "Calculation needed → data_analyst specialist"
-
-    elif any(term in question_text.lower() for term in ["current", "latest", "recent", "search", "find information"]):
-        selected_specialist = "web_researcher"
-        reasoning = "Information search needed → web_researcher specialist (PRIMARY for web research)"
-
-    elif any(term in question_text.lower() for term in ["chapter", "section", "navigate", "download", "extract from"]):
-        selected_specialist = "content_processor"
-        reasoning = "Complex content acquisition → content_processor specialist"
-
-    else:
-        # Default to web_researcher for general information
-        selected_specialist = "web_researcher"
-        reasoning = "General information → web_researcher specialist (PRIMARY for web research)"
-
-    print(f"SELECTED SPECIALIST: {{selected_specialist}}")
-    print(f"REASONING: {{reasoning}}")
-    ```
-
-    EXECUTION GUIDELINES:
-
-    **web_researcher** (PRIMARY for web research):
-    - Use LangChain search tools for information gathering
-    - Use VisitWebpageTool for webpage content extraction
-    - Handle most web-based information needs
-    - First choice for "search for information" tasks
-
-    **content_processor** (SPECIALIZED for complex content):
-    - Use vision_web_browser ONLY when web_researcher cannot find content
-    - Use ContentRetrieverTool for document processing
-    - Handle complex navigation and content acquisition
-    - Use when simple search is insufficient
-
-    **data_analyst**:
-    - Direct file access with pandas
-    - Mathematical computations
-    - Data analysis and calculations
-
-    EXECUTE NOW: Use your selected specialist to answer: "{question}"
-
-    CRITICAL OUTPUT REQUIREMENTS:
-    - End your final response with 'FINAL ANSWER: [specific answer]'
-    - Follow GAIA format: numbers (no commas), strings (no articles), lists (comma separated)
-    - Provide actual answers, never use placeholder text
-    - Be specific and factual in your response
-    """.strip()
-        
-        return task
+        return task.strip()
                    
     # ============================================================================
     # LANGGRAPH WORKFLOW 
