@@ -6,7 +6,7 @@ import pandas as pd
 
 # Import existing system
 try:
-    from agent_interface import create_gaia_agent, get_groq_config, get_openrouter_config
+    from agent_interface import create_gaia_agent, get_openrouter_config, get_google_config, 
     SYSTEM_AVAILABLE = True
 except ImportError as e:
     print(f"Agent system not available: {e}")
