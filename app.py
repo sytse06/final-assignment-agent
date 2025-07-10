@@ -13,7 +13,7 @@ except ImportError:
 
 DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 
- class GAIAAgent:
+class GAIAAgent:
     def __init__(self):
         self.agent = None
         
