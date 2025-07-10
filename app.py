@@ -25,7 +25,7 @@ class BasicAgent:
                 # Use GAIA agent with production config
                 config = get_openrouter_config()
                 config.update({
-                    "enable_csv_logging": False, Spaces
+                    "enable_csv_logging": False,
                     "debug_mode": False, 
                     "max_agent_steps": 15
                 })
