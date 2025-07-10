@@ -1,42 +1,40 @@
 ---
-title: GAIA Agent Final
+title: GAIA Agent
 emoji: 🧠
 colorFrom: blue
-colorTo: green
+colorTo: purple
 sdk: gradio
-sdk_version: 4.44.0
+sdk_version: 5.13.2
 app_file: app.py
 pinned: false
 license: mit
-hf_oauth: true
-hf_oauth_scopes:
-  - read-repos
-  - write-repos
 ---
 
-# 🧠 GAIA Agent - Final Assignment
+# 🧠 GAIA Agent
 
-Multi-agent system for GAIA benchmark evaluation with smart routing and RAG-enhanced decision making.
+**Multi-agent system for GAIA benchmark evaluation**
 
-## Features
+## 🌟 Features
 
-- **Smart Routing**: Complexity-based question routing (simple → one-shot, complex → multi-agent)
-- **RAG-Enhanced**: Uses 466 GAIA examples for intelligent agent selection
-- **Multi-Agent Architecture**: Specialized agents for different question types
-- **Production Ready**: Comprehensive logging, testing, and error handling
+- **🤖 Smart Routing**: Intelligent complexity detection routes simple questions to direct LLM processing and complex questions to specialized agents
+- **📁 Multi-Format File Processing**: Handles all 17 GAIA file types including Excel, PDFs, images, audio, and more  
+- **🔍 RAG-Enhanced Decision Making**: Uses 165 GAIA examples to guide agent selection and strategy
+- **🛡️ Production Error Handling**: Comprehensive fallback systems and retry logic
+- **📊 Advanced Analytics**: Detailed logging and performance tracking
 
-## Performance
+## 🏗️ Architecture
 
-- **Level 1 Questions**: 70-80% accuracy
-- **Level 2 Questions**: 40-50% accuracy  
-- **Overall Target**: 55-65% GAIA accuracy
+### Core Components
+- **GAIAAgent**: Main orchestrator with LangGraph workflow
+- **Smart Routing System**: Complexity-based strategy selection
+- **Specialized Agents**: Data analyst, web researcher, document processor, general assistant
+- **RAG System**: Example-driven decision making
 
-## Architecture
+### Performance
+- **Target Accuracy**: 50-60% on GAIA benchmark
+- **Smart Routing**: Optimizes cost and speed
+- **Multi-Provider Support**: Groq, Google, OpenRouter with automatic fallback
 
-Built with:
-- SmolagAgents for specialized task handling
-- LangGraph for workflow orchestration
-- Weaviate for vector storage and retrieval
-- OpenRouter/Google Gemini 2.5 Flash for processing
+## 🚀 Built for HF Agents Course Final Assignment
 
-Deployed for course final assignment submission.
+This implementation demonstrates advanced multi-agent architecture principles with production-ready features including comprehensive testing, intelligent routing, and robust error handling.

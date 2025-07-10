@@ -2,6 +2,7 @@
 *
 !.gitignore
 !agent_logic.py
+!agent_files.py
 !agent_interface.py
 !agent_logging.py
 !agent_testing.py
