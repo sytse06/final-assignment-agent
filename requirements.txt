@@ -14,7 +14,6 @@ smolagents[transformers]>=1.19.0
 
 # LangChain Ecosystem (CRITICAL - WAS MISSING)
 langchain-core>=0.3.68,<0.4.0
-langchain-core>=0.3.26
 langchain-openai>=0.3.27
 langchain-community>=0.3.24
 langchain-huggingface>=0.2.0
@@ -22,7 +21,7 @@ langgraph>=0.4.8
 langchain-groq>=0.3.2
 langchain-google-genai>=2.1.5
 
-# Model Providers (CRITICAL - WAS MISSING)
+# Model Providers
 openai>=1.40.0
 groq>=0.4.0
 litellm>=1.72.1
@@ -39,7 +38,7 @@ python-docx>=1.1.0
 numpy>=2.0.0,<3.0.0
 scipy>=1.11.0
 
-# Document Processing (Advanced)
+# Document Processing
 docling>=2.36.1
 pymupdf>=1.26.1
 
