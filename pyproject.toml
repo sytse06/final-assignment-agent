@@ -9,6 +9,7 @@ homepage = "https://huggingface.co/learn/agents-course"
 repository = "https://github.com/sytse06/agents/final-assignment-agent"
 documentation = "https://huggingface.co/learn/agents-course"
 keywords = ["ai", "agents", "gaia", "benchmark", "huggingface", "llm"]
+package-mode = false
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
