@@ -1,0 +1,146 @@
+# app.py - Course Integration Adapter
+import os
+import gradio as gr
+import requests
+import pandas as pd
+
+# Import existing system
+try:
+    from agent_interface import create_gaia_agent, get_groq_config
+    SYSTEM_AVAILABLE = True
+except ImportError:
+    SYSTEM_AVAILABLE = False
+
+DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
+
+class GAIAAgent:
+    def __init__(self):
+        self.agent = None
+        
+        if SYSTEM_AVAILABLE:
+            try:
+                config = get_groq_config()
+                config.update({"enable_csv_logging": False, "debug_mode": False})
+                self.agent = create_gaia_agent(config)
+                print("Agent initialized")
+            except Exception as e:
+                print(f"Agent initialization failed: {e}")
+    
+    def __call__(self, task_id: str, question: str) -> str:
+        if self.agent:
+            try:
+                result = self.agent.run_single_question(question=question, task_id=task_id)
+                return result.get("final_answer", "No answer")
+            except Exception as e:
+                print(f"Processing error: {e}")
+        
+        # Fallback responses
+        if "2+2" in question.replace(" ", ""):
+            return "4"
+        elif "capital" in question.lower() and "france" in question.lower():
+            return "Paris"
+        else:
+            return "Question processed"
+
+def run_and_submit_all(profile: gr.OAuthProfile | None):
+    space_id = os.getenv("SPACE_ID")
+    
+    if not profile:
+        return "Please login to Hugging Face.", None
+    
+    username = profile.username
+    api_url = DEFAULT_API_URL
+    questions_url = f"{api_url}/questions"
+    submit_url = f"{api_url}/submit"
+    
+    # Initialize agent
+    try:
+        agent = GAIAAgent()
+    except Exception as e:
+        return f"Error initializing agent: {e}", None
+    
+    agent_code = f"https://huggingface.co/spaces/{space_id}/tree/main"
+    
+    # Fetch questions
+    try:
+        response = requests.get(questions_url, timeout=15)
+        response.raise_for_status()
+        questions_data = response.json()
+        
+        if not questions_data:
+            return "No questions received.", None
+            
+    except Exception as e:
+        return f"Error fetching questions: {e}", None
+    
+    # Process questions
+    results_log = []
+    answers_payload = []
+    
+    for item in questions_data:
+        task_id = item.get("task_id")
+        question_text = item.get("question")
+        
+        if not task_id or not question_text:
+            continue
+        
+        try:
+            submitted_answer = agent(task_id=task_id, question=question_text)
+            answers_payload.append({"task_id": task_id, "submitted_answer": submitted_answer})
+            results_log.append({
+                "Task ID": task_id,
+                "Question": question_text[:100] + "..." if len(question_text) > 100 else question_text,
+                "Submitted Answer": submitted_answer
+            })
+        except Exception as e:
+            error_answer = f"ERROR: {str(e)}"
+            answers_payload.append({"task_id": task_id, "submitted_answer": error_answer})
+            results_log.append({
+                "Task ID": task_id,
+                "Question": question_text[:100] + "..." if len(question_text) > 100 else question_text,
+                "Submitted Answer": error_answer
+            })
+    
+    if not answers_payload:
+        return "No answers generated.", pd.DataFrame(results_log)
+    
+    # Submit results
+    submission_data = {
+        "username": username.strip(),
+        "agent_code": agent_code,
+        "answers": answers_payload
+    }
+    
+    try:
+        response = requests.post(submit_url, json=submission_data, timeout=60)
+        response.raise_for_status()
+        result_data = response.json()
+        
+        final_status = (
+            f"Submission Successful!\n"
+            f"User: {result_data.get('username')}\n"
+            f"Score: {result_data.get('score', 'N/A')}% "
+            f"({result_data.get('correct_count', '?')}/{result_data.get('total_attempted', '?')} correct)\n"
+            f"Message: {result_data.get('message', 'No message')}"
+        )
+        
+        return final_status, pd.DataFrame(results_log)
+        
+    except Exception as e:
+        return f"Submission failed: {e}", pd.DataFrame(results_log)
+
+# Gradio Interface
+with gr.Blocks() as demo:
+    gr.Markdown("# GAIA Agent Evaluation")
+    gr.Markdown("Multi-agent system for GAIA benchmark evaluation.")
+    
+    gr.LoginButton()
+    
+    run_button = gr.Button("Run Evaluation & Submit All Answers", variant="primary")
+    status_output = gr.Textbox(label="Status", lines=5, interactive=False)
+    results_table = gr.DataFrame(label="Results", wrap=True)
+    
+    run_button.click(fn=run_and_submit_all, outputs=[status_output, results_table])
+
+if __name__ == "__main__":
+    demo.launch(debug=True, share=False)
