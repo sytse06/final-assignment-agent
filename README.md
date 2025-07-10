@@ -6,7 +6,6 @@ colorTo: purple
 sdk: gradio
 sdk_version: 5.36.2
 app_file: app.py
-sdk_version: 4.0.0
 hf_oauth: true
 ---
 
