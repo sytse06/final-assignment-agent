@@ -1,173 +1,291 @@
-# app.py - Enhanced Course Integration Adapter with Quick Test
+# app.py - Enhanced HF Spaces Integration with Testing Framework
 import os
 import gradio as gr
 import requests
 import pandas as pd
+import json
+from datetime import datetime
 
-# Import existing system
+# Import existing system with better error handling
+SYSTEM_AVAILABLE = False
+TESTING_AVAILABLE = False
+agent_error = None
+
 try:
-    from agent_interface import create_gaia_agent, get_openrouter_config, get_google_config, 
+    from agent_interface import create_gaia_agent, get_openrouter_config, get_performance_config, get_google_config
     SYSTEM_AVAILABLE = True
+    print("✅ GAIA agent system loaded successfully")
 except ImportError as e:
-    print(f"Agent system not available: {e}")
-    SYSTEM_AVAILABLE = False
+    agent_error = f"Agent system not available: {e}"
+    print(f"⚠️  {agent_error}")
+except Exception as e:
+    agent_error = f"Agent initialization error: {e}"
+    print(f"❌ {agent_error}")
+
+try:
+    from agent_testing import (
+        run_quick_gaia_test, 
+        run_gaia_test, 
+        compare_agent_configs,
+        run_smart_routing_test,
+        analyze_failure_patterns
+    )
+    TESTING_AVAILABLE = True
+    print("✅ Testing framework loaded successfully")
+except ImportError as e:
+    print(f"⚠️  Testing framework not available: {e}")
+except Exception as e:
+    print(f"❌ Testing framework error: {e}")
 
 DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 
 class GAIAAgent:
-    def __init__(self):
+    def __init__(self, config_name="groq"):
         self.agent = None
+        self.system_available = SYSTEM_AVAILABLE
+        self.error_message = agent_error
+        self.config_name = config_name
         
         if SYSTEM_AVAILABLE:
             try:
-                # Try OpenRouter first (better for free tier), fallback to Groq
-                try:
-                    config = get_openrouter_config()
-                    provider_name = "OpenRouter + Gemini 2.5 Flash"
-                except:
+                # Get configuration based on selection
+                if config_name == "groq":
                     config = get_groq_config()
-                    provider_name = "Groq"
-                
-                # Handle both dataclass and dict config types
-                if hasattr(config, '__dataclass_fields__'):
-                    # It's a dataclass - set attributes directly
-                    config.enable_csv_logging = False
-                    config.debug_mode = False
-                    config.max_agent_steps = 10
+                elif config_name == "google":
+                    config = get_google_config()
+                elif config_name == "performance":
+                    config = get_performance_config()
                 else:
-                    # It's a dict - use update method
-                    config.update({
-                        "enable_csv_logging": False, 
-                        "debug_mode": False,
-                        "max_agent_steps": 10
-                    })
+                    config = get_groq_config()  # Default fallback
+                
+                # Production settings for HF Spaces
+                config.update({
+                    "enable_csv_logging": False,
+                    "debug_mode": False,
+                    "max_agent_steps": 12,
+                })
                 
                 self.agent = create_gaia_agent(config)
-                print(f"✅ GAIA Agent initialized successfully with {provider_name}")
+                print(f"✅ GAIA Agent initialized with {config_name} config")
             except Exception as e:
-                print(f"❌ Agent initialization failed: {e}")
-                self.agent = None
+                self.error_message = f"Agent creation failed: {e}"
+                print(f"❌ {self.error_message}")
         else:
-            print("⚠️ Using fallback mode - agent system not available")
+            print("⚠️  Using fallback BasicAgent due to missing dependencies")
     
     def __call__(self, task_id: str, question: str) -> str:
+        """Process question with GAIA agent or fallback"""
         if self.agent:
             try:
                 result = self.agent.run_single_question(question=question, task_id=task_id)
-                answer = result.get("final_answer", "No answer generated")
-                print(f"✅ Processed question {task_id}: {answer[:50]}...")
-                return answer
+                final_answer = result.get("final_answer", "No answer generated")
+                return final_answer
             except Exception as e:
-                error_msg = f"Processing error: {str(e)}"
-                print(f"❌ {error_msg}")
-                return error_msg
+                return f"Processing error: {e}"
         
-        # Fallback responses for testing
-        question_lower = question.lower()
+        return self._fallback_processing(question)
+    
+    def _fallback_processing(self, question: str) -> str:
+        """Simple fallback responses"""
+        q_lower = question.lower()
+        
         if "2+2" in question.replace(" ", ""):
             return "4"
-        elif "capital" in question_lower and "france" in question_lower:
-            return "Paris" 
-        elif "hello" in question_lower:
-            return "Hello! I'm a GAIA agent."
-        elif "square root" in question_lower and "144" in question:
-            return "12"
+        elif "capital" in q_lower and "france" in q_lower:
+            return "Paris"
+        elif "president" in q_lower and "united states" in q_lower:
+            return "Donald Trump"
+        elif "largest" in q_lower and "planet" in q_lower:
+            return "Jupiter"
         else:
-            return "Question processed by fallback system"
+            return "Unable to process question"
 
-# Quick test function for individual question testing
-def quick_test_question(question: str) -> str:
-    """Quick single question test function"""
-    if not question.strip():
-        return "❓ Please enter a question to test"
-    
-    if not SYSTEM_AVAILABLE:
-        return "❌ System not available - agent import failed"
+def run_quick_test(config_name, max_questions):
+    """Run quick test on agent"""
+    if not TESTING_AVAILABLE:
+        return "❌ Testing framework not available", None
     
     try:
-        # Create a test agent with minimal config
-        try:
-            config = get_openrouter_config()
-            provider = "OpenRouter"
-        except:
-            config = get_groq_config()
-            provider = "Groq"
+        print(f"🧪 Running quick test with {config_name} config, max {max_questions} questions")
         
-        # Disable logging for testing
-        if hasattr(config, '__dataclass_fields__'):
-            config.enable_csv_logging = False
-            config.debug_mode = False
-            config.max_agent_steps = 5
+        # Run the test
+        results = run_quick_gaia_test(config_name, max_questions=max_questions)
+        
+        # Format results for display
+        if results and 'results' in results:
+            test_data = []
+            for result in results['results'][:10]:  # Show first 10 results
+                test_data.append({
+                    "Task ID": result.get("task_id", "N/A"),
+                    "Question": result.get("question", "N/A")[:100] + "..." if len(result.get("question", "")) > 100 else result.get("question", "N/A"),
+                    "Agent Answer": result.get("final_answer", "N/A"),
+                    "Expected": result.get("ground_truth", "N/A"),
+                    "Correct": "✅" if result.get("is_correct", False) else "❌"
+                })
+            
+            summary = f"""🧪 Quick Test Results ({config_name} config)
+📊 Total Questions: {results.get('total_questions', 0)}
+✅ Correct Answers: {results.get('correct_answers', 0)}
+📈 Accuracy: {results.get('accuracy', 0):.1f}%
+⏱️ Average Time: {results.get('average_time', 0):.2f}s per question
+🔀 Routing Stats: {results.get('routing_stats', {})}
+"""
+            
+            return summary, pd.DataFrame(test_data)
         else:
-            config.update({
-                "enable_csv_logging": False, 
-                "debug_mode": False,
-                "max_agent_steps": 5
-            })
-        
-        agent = create_gaia_agent(config)
-        result = agent.run_single_question(question)
-        
-        # Format result
-        answer = result.get('final_answer', 'No answer')
-        complexity = result.get('complexity', 'unknown')
-        strategy = result.get('strategy_used', 'unknown')
-        steps = len(result.get('steps', []))
-        
-        return f"""✅ **Test Successful!**
-
-**Question:** {question}
-
-**Answer:** {answer}
-
-**Details:**
-- **Complexity:** {complexity}
-- **Strategy:** {strategy}
-- **Steps:** {steps}
-- **Provider:** {provider}
-
-**Status:** Agent working correctly! 🚀"""
-        
+            return "❌ Test completed but no results returned", None
+            
     except Exception as e:
-        return f"""❌ **Test Failed:**
+        return f"❌ Test failed: {e}", None
 
-**Question:** {question}
+def run_comprehensive_test(config_name, max_questions):
+    """Run comprehensive GAIA test"""
+    if not TESTING_AVAILABLE:
+        return "❌ Testing framework not available", None
+    
+    try:
+        print(f"🔬 Running comprehensive test with {config_name} config, max {max_questions} questions")
+        
+        # Run comprehensive test
+        results = run_gaia_test(config_name, max_questions=max_questions)
+        
+        # Format results
+        if results and 'results' in results:
+            # Detailed results table
+            test_data = []
+            for result in results['results'][:20]:  # Show first 20 results
+                test_data.append({
+                    "Task ID": result.get("task_id", "N/A"),
+                    "Level": result.get("level", "N/A"),
+                    "Question": result.get("question", "N/A")[:80] + "..." if len(result.get("question", "")) > 80 else result.get("question", "N/A"),
+                    "Agent Answer": result.get("final_answer", "N/A"),
+                    "Expected": result.get("ground_truth", "N/A"),
+                    "Correct": "✅" if result.get("is_correct", False) else "❌",
+                    "Steps": result.get("total_steps", 0),
+                    "Complexity": result.get("complexity", "N/A")
+                })
+            
+            # Comprehensive summary
+            level_stats = results.get('level_breakdown', {})
+            summary = f"""🔬 Comprehensive Test Results ({config_name} config)
 
-**Error:** {str(e)}
+📊 Overall Performance:
+• Total Questions: {results.get('total_questions', 0)}
+• Correct Answers: {results.get('correct_answers', 0)}
+• Overall Accuracy: {results.get('accuracy', 0):.1f}%
 
-**Status:** Check configuration and try again"""
+📈 Level Breakdown:
+• Level 1: {level_stats.get('level_1', {}).get('accuracy', 0):.1f}% ({level_stats.get('level_1', {}).get('correct', 0)}/{level_stats.get('level_1', {}).get('total', 0)})
+• Level 2: {level_stats.get('level_2', {}).get('accuracy', 0):.1f}% ({level_stats.get('level_2', {}).get('correct', 0)}/{level_stats.get('level_2', {}).get('total', 0)})
+• Level 3: {level_stats.get('level_3', {}).get('accuracy', 0):.1f}% ({level_stats.get('level_3', {}).get('correct', 0)}/{level_stats.get('level_3', {}).get('total', 0)})
 
-def run_and_submit_all(profile: gr.OAuthProfile | None):
-    """Main function to run evaluation and submit results"""
+🔀 Smart Routing Performance:
+• Simple Questions (one-shot): {results.get('routing_stats', {}).get('simple_accuracy', 0):.1f}%
+• Complex Questions (manager): {results.get('routing_stats', {}).get('complex_accuracy', 0):.1f}%
+
+⏱️ Performance Metrics:
+• Average Time: {results.get('average_time', 0):.2f}s per question
+• Total Time: {results.get('total_time', 0):.1f}s
+• Average Steps: {results.get('average_steps', 0):.1f} per question
+
+🎯 Target Achievement:
+• Target (50%): {"✅ ACHIEVED" if results.get('accuracy', 0) >= 50 else "❌ Below target"}
+• Stretch Goal (60%): {"✅ ACHIEVED" if results.get('accuracy', 0) >= 60 else "❌ Below stretch"}
+"""
+            
+            return summary, pd.DataFrame(test_data)
+        else:
+            return "❌ Test completed but no results returned", None
+            
+    except Exception as e:
+        return f"❌ Comprehensive test failed: {e}", None
+
+def compare_configs():
+    """Compare different agent configurations"""
+    if not TESTING_AVAILABLE:
+        return "❌ Testing framework not available", None
+    
+    try:
+        print("⚖️ Comparing agent configurations...")
+        
+        # Compare main configurations
+        comparison = compare_agent_configs(["groq", "google", "performance"])
+        
+        if comparison:
+            comp_data = []
+            for config_name, results in comparison.items():
+                comp_data.append({
+                    "Configuration": config_name,
+                    "Accuracy": f"{results.get('accuracy', 0):.1f}%",
+                    "Correct": f"{results.get('correct_answers', 0)}/{results.get('total_questions', 0)}",
+                    "Avg Time": f"{results.get('average_time', 0):.2f}s",
+                    "Simple Route": f"{results.get('routing_stats', {}).get('simple_percentage', 0):.1f}%",
+                    "Complex Route": f"{results.get('routing_stats', {}).get('complex_percentage', 0):.1f}%",
+                    "Cost Estimate": f"${results.get('estimated_cost', 0):.3f}"
+                })
+            
+            summary = f"""⚖️ Configuration Comparison Results
+
+📊 Best Performing:
+• Highest Accuracy: {max(comparison.keys(), key=lambda k: comparison[k].get('accuracy', 0))}
+• Fastest: {min(comparison.keys(), key=lambda k: comparison[k].get('average_time', float('inf')))}
+• Most Cost-Effective: {min(comparison.keys(), key=lambda k: comparison[k].get('estimated_cost', float('inf')))}
+
+🎯 Recommendations:
+• For accuracy: Use the highest performing configuration
+• For speed: Use the fastest configuration  
+• For budget: Use the most cost-effective configuration
+• For production: Balance accuracy and cost
+"""
+            
+            return summary, pd.DataFrame(comp_data)
+        else:
+            return "❌ Comparison completed but no results returned", None
+            
+    except Exception as e:
+        return f"❌ Configuration comparison failed: {e}", None
+
+def run_and_submit_all(profile: gr.OAuthProfile | None, config_name):
+    """Main evaluation function with configurable agent"""
     space_id = os.getenv("SPACE_ID")
     
     if not profile:
-        return "❌ Please login to Hugging Face first.", None
+        return "Please login to Hugging Face.", None
     
     username = profile.username
     api_url = DEFAULT_API_URL
     questions_url = f"{api_url}/questions"
     submit_url = f"{api_url}/submit"
     
-    # Initialize agent
+    # System status
+    status_lines = [f"🚀 Starting evaluation for user: {username}"]
+    status_lines.append(f"🔧 Using configuration: {config_name}")
+    
+    if SYSTEM_AVAILABLE:
+        status_lines.append("✅ GAIA agent system active")
+    else:
+        status_lines.append(f"⚠️  Fallback mode: {agent_error}")
+    
+    # Initialize agent with selected config
     try:
-        agent = GAIAAgent()
+        agent = GAIAAgent(config_name)
+        if agent.error_message:
+            status_lines.append(f"⚠️  Agent warning: {agent.error_message}")
     except Exception as e:
         return f"❌ Error initializing agent: {e}", None
     
     agent_code = f"https://huggingface.co/spaces/{space_id}/tree/main"
     
-    # Fetch questions
+    # Fetch and process questions (same as before)
     try:
-        print("📥 Fetching questions from scoring server...")
         response = requests.get(questions_url, timeout=15)
         response.raise_for_status()
         questions_data = response.json()
         
         if not questions_data:
             return "❌ No questions received from server.", None
-        
-        print(f"📋 Received {len(questions_data)} questions")
+            
+        status_lines.append(f"✅ Received {len(questions_data)} questions")
             
     except Exception as e:
         return f"❌ Error fetching questions: {e}", None
@@ -181,21 +299,17 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
         question_text = item.get("question")
         
         if not task_id or not question_text:
-            print(f"⚠️ Skipping incomplete question {i}")
             continue
-        
-        print(f"🔄 Processing question {i}/{len(questions_data)}: {task_id}")
         
         try:
             submitted_answer = agent(task_id=task_id, question=question_text)
             answers_payload.append({"task_id": task_id, "submitted_answer": submitted_answer})
             
-            # Truncate long questions for display
             display_question = question_text[:100] + "..." if len(question_text) > 100 else question_text
             results_log.append({
                 "Task ID": task_id,
                 "Question": display_question,
-                "Submitted Answer": submitted_answer[:100] + "..." if len(submitted_answer) > 100 else submitted_answer
+                "Submitted Answer": submitted_answer
             })
             
         except Exception as e:
@@ -206,7 +320,6 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
                 "Question": question_text[:100] + "..." if len(question_text) > 100 else question_text,
                 "Submitted Answer": error_answer
             })
-            print(f"❌ Error processing question {task_id}: {e}")
     
     if not answers_payload:
         return "❌ No answers generated.", pd.DataFrame(results_log)
@@ -219,129 +332,162 @@ def run_and_submit_all(profile: gr.OAuthProfile | None):
     }
     
     try:
-        print("📤 Submitting answers to scoring server...")
         response = requests.post(submit_url, json=submission_data, timeout=60)
         response.raise_for_status()
         result_data = response.json()
         
-        final_status = (
+        final_status = "\n".join(status_lines) + "\n\n" + (
             f"🎉 Submission Successful!\n"
             f"👤 User: {result_data.get('username')}\n"
             f"📊 Score: {result_data.get('score', 'N/A')}% "
             f"({result_data.get('correct_count', '?')}/{result_data.get('total_attempted', '?')} correct)\n"
-            f"💬 Message: {result_data.get('message', 'No message')}\n"
-            f"🔗 Agent Code: {agent_code}"
+            f"💬 Message: {result_data.get('message', 'No message')}"
         )
         
-        print(f"✅ Submission complete: {result_data.get('score', 'N/A')}% accuracy")
         return final_status, pd.DataFrame(results_log)
         
     except Exception as e:
-        error_msg = f"❌ Submission failed: {e}"
-        print(error_msg)
-        return error_msg, pd.DataFrame(results_log)
+        error_status = "\n".join(status_lines) + f"\n\n❌ Submission failed: {e}"
+        return error_status, pd.DataFrame(results_log)
 
-# Enhanced Gradio Interface with Quick Test
-with gr.Blocks(
-    title="GAIA Agent Evaluation",
-    theme=gr.themes.Soft(),
-) as demo:
-    gr.Markdown("""
-    # 🧠 GAIA Agent Evaluation
+# Enhanced Gradio Interface with Testing
+with gr.Blocks(title="GAIA Agent Evaluation & Testing") as demo:
+    gr.Markdown("# 🤖 GAIA Agent Evaluation & Testing System")
     
-    **Multi-agent system for GAIA benchmark evaluation**
+    if SYSTEM_AVAILABLE:
+        gr.Markdown("✅ **Status**: Advanced multi-agent GAIA system loaded")
+        gr.Markdown("""
+        **System Features:**
+        - 🧠 Smart routing (simple → direct LLM, complex → multi-agent)
+        - 🔧 4 specialized agents (data analyst, web researcher, document processor, general assistant)
+        - 📚 RAG-enhanced decision making with 165 GAIA examples
+        - 🎯 GAIA-compliant answer formatting
+        - 💰 Cost-optimized with automatic fallback
+        """)
+    else:
+        gr.Markdown(f"⚠️ **Status**: Fallback mode active - {agent_error}")
     
-    This agent uses:
-    - 🤖 Smart routing between specialized agents
-    - 📁 File processing capabilities  
-    - 🔍 RAG-enhanced decision making
-    - 🛡️ Production error handling
+    if TESTING_AVAILABLE:
+        gr.Markdown("✅ **Testing Framework**: Available")
+    else:
+        gr.Markdown("⚠️ **Testing Framework**: Not available")
     
-    *Built for HF Agents Course Final Assignment*
-    """)
-    
-    # Quick Test Section
-    with gr.Row():
-        with gr.Column():
-            gr.Markdown("## 🧪 Quick Test")
-            gr.Markdown("Test your agent with a single question before running the full evaluation.")
-            
-            test_question = gr.Textbox(
-                label="Test Question",
-                placeholder="Enter a question to test your agent...",
-                lines=2
-            )
+    with gr.Tabs():
+        # Testing Tab
+        with gr.TabItem("🧪 Testing & Validation"):
+            gr.Markdown("### Test your agent before final submission")
             
             with gr.Row():
-                quick_test_btn = gr.Button("🧪 Test Agent", variant="primary")
-                clear_test_btn = gr.Button("🗑️ Clear", variant="secondary")
+                test_config = gr.Dropdown(
+                    choices=["groq", "google", "performance"],
+                    value="groq",
+                    label="Configuration to Test"
+                )
+                test_questions = gr.Slider(
+                    minimum=1,
+                    maximum=50,
+                    value=5,
+                    step=1,
+                    label="Number of Questions"
+                )
             
-            test_result = gr.Markdown(
-                value="*Enter a question above and click 'Test Agent' to verify your system works.*",
-                label="Test Result"
+            with gr.Row():
+                quick_test_btn = gr.Button("🧪 Quick Test", variant="secondary")
+                comprehensive_test_btn = gr.Button("🔬 Comprehensive Test", variant="primary")
+                compare_btn = gr.Button("⚖️ Compare Configs", variant="secondary")
+            
+            test_output = gr.Textbox(
+                label="📊 Test Results",
+                lines=15,
+                interactive=False
             )
             
-            # Example questions
-            gr.Examples(
-                examples=[
-                    "What is 2 + 2?",
-                    "What is the capital of France?",
-                    "Calculate the square root of 144",
-                    "What are the main components of photosynthesis?",
-                    "How many continents are there?"
-                ],
-                inputs=test_question,
-                label="Quick Test Examples:"
+            test_table = gr.DataFrame(
+                label="📋 Detailed Results",
+                wrap=True
             )
-    
-    gr.Markdown("---")
-    
-    # Main Evaluation Section
-    gr.Markdown("## 🎯 Full GAIA Evaluation")
-    gr.Markdown("**Warning:** This will submit your results to the course evaluation system.")
-    
-    gr.LoginButton()
-    
-    with gr.Row():
-        run_button = gr.Button("🚀 Run Evaluation & Submit All Answers", variant="primary", size="lg")
-    
-    with gr.Row():
-        with gr.Column():
+            
+            # Connect test buttons
+            quick_test_btn.click(
+                fn=lambda config, questions: run_quick_test(config, questions),
+                inputs=[test_config, test_questions],
+                outputs=[test_output, test_table]
+            )
+            
+            comprehensive_test_btn.click(
+                fn=lambda config, questions: run_comprehensive_test(config, questions),
+                inputs=[test_config, test_questions],
+                outputs=[test_output, test_table]
+            )
+            
+            compare_btn.click(
+                fn=compare_configs,
+                outputs=[test_output, test_table]
+            )
+        
+        # Submission Tab
+        with gr.TabItem("🚀 Final Submission"):
+            gr.Markdown("### Submit to course evaluation system")
+            gr.Markdown("""
+            **Instructions:**
+            1. **Login** to Hugging Face
+            2. **Select** your preferred configuration
+            3. **Click 'Run Evaluation'** to process all questions and submit
+            """)
+            
+            gr.LoginButton()
+            
+            with gr.Row():
+                submit_config = gr.Dropdown(
+                    choices=["groq", "google", "performance"],
+                    value="groq",
+                    label="Configuration for Submission"
+                )
+            
+            with gr.Row():
+                run_button = gr.Button(
+                    "🚀 Run Evaluation & Submit All Answers", 
+                    variant="primary",
+                    size="lg"
+                )
+            
             status_output = gr.Textbox(
-                label="📋 Evaluation Status", 
-                lines=8, 
-                interactive=False,
-                placeholder="Click the button above to start evaluation..."
+                label="📊 Submission Status", 
+                lines=10, 
+                interactive=False
             )
-        with gr.Column():
+            
             results_table = gr.DataFrame(
-                label="📊 Results Table", 
-                wrap=True,
-                height=400
+                label="📋 Submission Results", 
+                wrap=True
             )
-    
-    # Event handlers - Connect the buttons to functions
-    quick_test_btn.click(
-        fn=quick_test_question,
-        inputs=[test_question],
-        outputs=[test_result]
-    )
-    
-    clear_test_btn.click(
-        fn=lambda: ("", "*Enter a question above and click 'Test Agent' to verify your system works.*"),
-        outputs=[test_question, test_result]
-    )
-    
-    test_question.submit(
-        fn=quick_test_question,
-        inputs=[test_question],
-        outputs=[test_result]
-    )
-    
-    run_button.click(
-        fn=run_and_submit_all, 
-        outputs=[status_output, results_table]
-    )
+            
+            # Connect submission button
+            run_button.click(
+                fn=lambda profile, config: run_and_submit_all(profile, config),
+                inputs=[gr.LoginButton.load(), submit_config],
+                outputs=[status_output, results_table]
+            )
 
 if __name__ == "__main__":
+    print("\n" + "="*60)
+    print("🚀 GAIA Agent Evaluation & Testing System Starting")
+    print("="*60)
+    
+    # Environment check
+    space_host = os.getenv("SPACE_HOST")
+    space_id = os.getenv("SPACE_ID")
+    
+    if space_host:
+        print(f"✅ SPACE_HOST: {space_host}")
+    if space_id:
+        print(f"✅ SPACE_ID: {space_id}")
+    
+    # System status
+    print(f"✅ GAIA agent system: {'LOADED' if SYSTEM_AVAILABLE else 'FALLBACK'}")
+    print(f"✅ Testing framework: {'LOADED' if TESTING_AVAILABLE else 'NOT AVAILABLE'}")
+    
+    print("="*60)
+    print("🎯 Launching enhanced Gradio interface...")
+    
     demo.launch(debug=True, share=False)
