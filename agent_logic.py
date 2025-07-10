@@ -827,239 +827,131 @@ class GAIAAgent:
     # ============================================================================        
 
     def _create_specialist_agents(self) -> Dict[str, Any]:
-        """Create specialist agents using smolagents pattern"""
-        logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
-        
-        # 1. Data Analyst - CodeAgent for direct Python file access
-        data_analyst = CodeAgent(
-            name="data_analyst", 
-            description="Excel/CSV analysis and numerical calculations using pandas",
-            tools=[],
-            additional_authorized_imports=[
-                "pandas", "numpy", "openpyxl", "xlrd", "csv",
-                "scipy", "matplotlib", "seaborn", 
-                "sklearn", "scikit-learn", "statistics", "math"
-            ],
-            model=self.specialist_model,
-            max_steps=self.config.max_agent_steps,
-            add_base_tools=True,
-            logger=logger
-        )
-        
-        # 2. Web Researcher - ToolCallingAgent for search with robust fallback system
-        web_tools = []
-        web_tool_source = "none"
-        
-        # Try LangChain tools first (superior quality)
-        if LANGCHAIN_TOOLS_AVAILABLE:
-            try:
-                available_research_tools = get_langchain_tools()
-                tool_status = get_tool_status()
-                
-                if tool_status['research_tools_available']:
-                    web_tools.extend(available_research_tools)
-                    web_tool_source = "langchain"
-                    print(f"✅ Added {len(available_research_tools)} LangChain research tools")
-                    
-                    # Add complementary VisitWebpageTool (still useful with LangChain)
-                    try:
-                        from smolagents import VisitWebpageTool
-                        web_tools.append(VisitWebpageTool())
-                        print("✅ Added VisitWebpageTool for webpage content extraction")
-                    except Exception as e:
-                        print(f"⚠️  VisitWebpageTool failed: {e}")
-                        
-            except Exception as e:
-                print(f"⚠️  LangChain tools error: {e}")
-        
-        # Fallback to native SmolagAgent tools ONLY if LangChain tools failed
-        if not web_tools:
-            print("🔄 Using native SmolagAgent tools...")
-            web_tool_source = "native"
+            """Create specialist agents using smolagents pattern"""
+            logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
             
-            # Try GoogleSearchTool
-            if os.getenv("SERPER_API_KEY") or os.getenv("SERPAPI_API_KEY"):
+            # 1. Data Analyst - CodeAgent for direct Python file access
+            data_analyst = CodeAgent(
+                name="data_analyst", 
+                description="Excel/CSV analysis and numerical calculations using pandas",
+                tools=[],
+                additional_authorized_imports=[
+                    "pandas", "numpy", "openpyxl", "xlrd", "csv",
+                    "scipy", "matplotlib", "seaborn", 
+                    "sklearn", "scikit-learn", "statistics", "math"
+                ],
+                model=self.specialist_model,
+                max_steps=self.config.max_agent_steps,
+                add_base_tools=True,
+                logger=logger
+            )
+            
+            # 2. Web Researcher - Focused on search and discovery
+            try:
+                from tools import get_web_researcher_tools
+                web_tools = get_web_researcher_tools()
+            except ImportError:
+                print("⚠️ tools module unavailable - using fallback")
+                web_tools = []
                 try:
-                    from smolagents import GoogleSearchTool
-                    provider = "serper" if os.getenv("SERPER_API_KEY") else "serpapi"
-                    web_tools.append(GoogleSearchTool(provider=provider))
-                    print(f"✅ Added GoogleSearchTool ({provider})")
+                    from smolagents import VisitWebpageTool, WikipediaSearchTool
+                    web_tools.extend([VisitWebpageTool(), WikipediaSearchTool()])
                 except Exception as e:
-                    print(f"⚠️  GoogleSearchTool failed: {e}")
+                    print(f"⚠️ Fallback tools failed: {e}")
+
+            web_researcher = ToolCallingAgent(
+                name="web_researcher",
+                description="Search web, find information sources, verify accessibility",
+                tools=web_tools,
+                model=self.specialist_model,
+                max_steps=self.config.max_agent_steps,
+                add_base_tools=len(web_tools) == 0,
+                logger=logger
+            )
             
-            # Add other native tools
+            # 3. Content Processor - Deep content analysis
             try:
-                from smolagents import VisitWebpageTool, WikipediaSearchTool
-                web_tools.extend([VisitWebpageTool(), WikipediaSearchTool()])
-                print("✅ Added VisitWebpageTool and WikipediaSearchTool")
-            except Exception as e:
-                print(f"⚠️  Native tools failed: {e}")
+                from tools import get_content_processor_tools
+                content_tools = get_content_processor_tools()
+            except ImportError:
+                print("⚠️ tools module unavailable - no specialized tools")
+                content_tools = []
+
+            content_processor = ToolCallingAgent(
+                name="content_processor", 
+                description="Extract and process content from documents, videos, audio, and complex sources",
+                tools=content_tools,
+                model=self.specialist_model,
+                max_steps=self.config.max_agent_steps,
+                add_base_tools=True,
+                logger=logger
+            )
+
+            # Return specialist agents
+            specialist_agents = {
+                "data_analyst": data_analyst,
+                "web_researcher": web_researcher,
+                "content_processor": content_processor
+            }
             
-            # Final fallback to DuckDuckGo
-            if not web_tools:
-                try:
-                    import duckduckgo_search  # Check dependency
-                    from smolagents import DuckDuckGoSearchTool
-                    web_tools.append(DuckDuckGoSearchTool())
-                    print("✅ Added DuckDuckGoSearchTool")
-                except ImportError:
-                    print("⚠️  Install: pip install duckduckgo-search")
-                except Exception as e:
-                    print(f"⚠️  DuckDuckGoSearchTool failed: {e}")
+            print(f"🎯 Created {len(specialist_agents)} specialist agents:")
+            print(f"   📊 data_analyst: {len(data_analyst.additional_authorized_imports)} imports")
+            print(f"   🔍 web_researcher: {len(web_tools)} tools")
+            print(f"   📱 content_processor: {len(content_tools)} tools")
+            
+            return specialist_agents
         
-        # Create web researcher description
-        if web_tools:
-            tool_names = [getattr(t, 'name', t.__class__.__name__) for t in web_tools]
-            web_researcher_description = f"Web researcher with {len(web_tools)} tools: {', '.join(tool_names)}"
-        else:
-            web_researcher_description = "Basic web researcher (no tools available)"
-            print("❌ No web tools available")
-
-        # Check base tools dependency
-        use_base_tools = False
-        try:
-            import duckduckgo_search
-            use_base_tools = True
-        except ImportError:
-            print("⚠️  Base tools disabled (missing duckduckgo-search)")
-
-        # Create web researcher
-        web_researcher = ToolCallingAgent(
-            name="web_researcher",
-            description=web_researcher_description,
-            tools=web_tools,
-            model=self.specialist_model,
-            max_steps=self.config.max_agent_steps,
-            add_base_tools=False,
-            logger=logger
-        )
-        
-        # Status report
-        if web_tool_source == "langchain":
-            print(f"✅ Created web_researcher with LangChain tools: Enhanced capabilities")
-        elif web_tool_source == "native":
-            print(f"✅ Created web_researcher with native tools: Basic capabilities")
-        else:
-            print(f"⚠️  Created web_researcher with no tools: Limited capabilities")
-        
-        # 3. Content Processor - specialized agent for content acquisition and processing
-        content_tools = []
-
-        # Add VisionWebBrowserTool if available
-        if VISION_BROWSER_AVAILABLE:
-            try:
-                vision_browser = VisionWebBrowserTool()
-                if hasattr(vision_browser, 'setup'):
-                    vision_browser.setup()
-                content_tools.append(vision_browser)
-                print("✅ Added VisionWebBrowserTool to content processor")
-            except Exception as e:
-                print(f"⚠️ VisionWebBrowserTool initialization failed: {e}")
-
-        # Add ContentRetrieverTool if available
-        if CUSTOM_TOOLS_AVAILABLE:
-            try:
-                content_retriever = ContentRetrieverTool()
-                content_tools.append(content_retriever)
-                print("✅ Added ContentRetrieverTool to content processor")
-            except Exception as e:
-                print(f"⚠️ Error adding ContentRetrieverTool: {e}")
-
-        # Add SpeechToTextTool if available        
-        try:
-            speech_tool = SpeechToTextTool()
-            content_tools.append(speech_tool)
-            print("✅ Added SpeechToTextTool to content processor")
-        except ImportError:
-            print("⚠️ SpeechToTextTool requires transformers - skipping")
-        except Exception as e:
-            print(f"⚠️ Error adding SpeechToTextTool: {e}")
-
-        # Create content processor description
-        content_tool_names = [getattr(tool, 'name', tool.__class__.__name__) for tool in content_tools]
-
-        content_processor_description = f"""Multi-modal content acquisition and processing specialist.
-
-        WORKFLOW: Navigate pages → Acquire content → Process content
-
-        AVAILABLE TOOLS: {', '.join(content_tool_names) if content_tool_names else 'Basic content processing only'}
-
-        CAPABILITIES:
-        - Complex webpage navigation and content discovery {'(available)' if VISION_BROWSER_AVAILABLE else '(limited)'}
-        - Document extraction and processing  
-        - Audio transcription and analysis
-        - Image and multimedia content processing
-
-        STRATEGY: When web_researcher can't find content through web search"""
-        
-        content_processor = ToolCallingAgent(
-            name="content_processor", 
-            description=content_processor_description,
-            tools=content_tools,
-            model=self.specialist_model,
-            max_steps=self.config.max_agent_steps,
-            add_base_tools=True,
-            logger=logger
-        )
-
-    # Create coordinator description
-        # Return dict
-        specialist_agents = {
-            "data_analyst": data_analyst,
-            "web_researcher": web_researcher,
-            "content_processor": content_processor
-        }
-        
-        print(f"🎯 Created {len(specialist_agents)} specialist agents:")
-        print(f"   data_analyst: CodeAgent with direct Python file access")
-        print(f"   web_researcher: ToolCallingAgent with web search tools")
-        print(f"   content_processor: ToolCallingAgent for processing multi-modal content tools")
-        
-        return specialist_agents
-    
-    
-    def _create_coordinator(self) -> CodeAgent:
-        """Create coordinator using smolagents hierarchical pattern"""
+def _create_coordinator(self) -> CodeAgent:
+        """Create coordinator using smolagents hierarchical pattern with file-first strategy"""
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         
         # Define specialists
         specialist_agents = self._create_specialist_agents()
         
-        # Coordinator gets hierarchy from managed_agents
+        # Enhanced coordinator with direct file access via CodeAgent imports
         coordinator = CodeAgent(
             name="gaia_coordinator",
-            description="""Coordinator that manages three specialist agents for GAIA tasks.
+            description="""GAIA task coordinator managing three specialist agents.
 
-            MANAGED AGENTS:
-            - data_analyst: For Excel/CSV analysis and calculations  
-            - web_researcher: For web searches and information gathering
-            - content_processor: For multi-modal content acquisition and processing
+    WORKFLOW:
 
-            WORKFLOW:
-            1. Analyze the question and identify required capabilities
-            2. Delegate to appropriate specialist agent(s) using their names
-            3. Coordinate multiple specialists if needed
-            4. Synthesize results into final answer
-            """,
-            tools=[],  # No direct tools - delegates to managed agents
+    1. ANALYZE TASK: Question analysis and file preprocessing (extract archives, inspect contents)
+    2. CHOOSE SPECIALIST: Based on question type and available files/data
+    3. DELEGATE: Assign complete task to appropriate specialist(s)
+    4. SYNTHESIZE: Combine results and format GAIA answer
+
+    SPECIALISTS AVAILABLE:
+    - data_analyst: Numerical analysis, calculations, data processing
+    - web_researcher: Search and discovery, online information gathering  
+    - content_processor: Document/media processing, content extraction
+
+    The coordinator handles file preparation so specialists can focus on their core capabilities.""",
+            tools=[],  # No tools needed - direct file access via imports
             managed_agents=list(specialist_agents.values()),
             additional_authorized_imports=[
-            # File handling
-            "open", "codecs", "chardet", "os", "sys", "io", "pathlib",
-            "mimetypes", "requests", "json", "zipfile", "tempfile",
-            
-            # Data processing
-            "pandas", "numpy", "csv", "re",
-            
-            # Smart file handling functions
-            "smart_file_handler", "is_url",
-            
-            # Web requests
-            "urllib", "time"
+                # File preprocessing (CORE RESPONSIBILITY)
+                "zipfile", "tarfile", "gzip", "bz2",  # Archive handling
+                "smart_file_handler", "is_url",       # Custom utilities
+                
+                # File operations and inspection
+                "open", "codecs", "chardet", "os", "sys", "io", "pathlib",
+                "mimetypes", "tempfile", "shutil",    # File management
+                
+                # Data preprocessing for specialist preparation
+                "pandas", "numpy", "csv", "json", "xml", "base64",
+                
+                # Binary and media file inspection
+                "PIL", "wave", "struct", "binascii",  # Basic media inspection
+
+                # Smart file handling functions
+                "smart_file_handler", "is_url",
+                
+                # Web and networking
+                "requests", "urllib", "time", "typing"
             ],
             model=self.specialist_model,
-            planning_interval=7,
-            max_steps=12,
+            planning_interval=5,  # More frequent planning for file-first workflow
+            max_steps=15,  # Extra steps for file access + coordination
             logger=logger
         )
         

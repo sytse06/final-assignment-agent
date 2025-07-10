@@ -15,10 +15,26 @@ except ImportError as e:
 # Import YouTube tool if available
 try:
     from .youtube_content_tool import YouTubeContentTool
+    YOUTUBE_TOOL_AVAILABLE = True
     print("✅ YouTubeContentTool loaded")
 except ImportError as e:
-    print(f"⚠️ YouTubeContentTool failed to load: {e}")
     YouTubeContentTool = None
+    YOUTUBE_TOOL_AVAILABLE = False
+    
+    # More specific error messages based on the actual error
+    error_msg = str(e).lower()
+    if "no module named 'tools.youtube_content_tool'" in error_msg:
+        print("⚠️ YouTubeContentTool not found: tools/youtube_content_tool.py missing")
+        print("💡 Create tools/youtube_content_tool.py file")
+    elif "yt_dlp" in error_msg or "yt-dlp" in error_msg:
+        print(f"⚠️ YouTubeContentTool dependency issue: {e}")
+        print("💡 Install: pip install yt-dlp")
+    elif "requests" in error_msg:
+        print(f"⚠️ YouTubeContentTool dependency issue: {e}")
+        print("💡 Install: pip install requests")
+    else:
+        print(f"⚠️ YouTubeContentTool failed to load: {e}")
+        print("💡 Check tools/youtube_content_tool.py for syntax errors")
 
 # Import VisionWebBrowserTool with enhanced error detection
 try:
@@ -63,10 +79,14 @@ __all__ = [
     'YouTubeContentTool', 
     'VisionWebBrowserTool',
     
+    # Availability flags
+    'YOUTUBE_TOOL_AVAILABLE',
+    'VISION_BROWSER_AVAILABLE',
+    'LANGCHAIN_TOOLS_AVAILABLE',
+    
     # LangChain research tools
     'ALL_LANGCHAIN_TOOLS',
     'get_langchain_tools',
-    'LANGCHAIN_TOOLS_AVAILABLE',
     
     # Utility functions
     'get_tool_status',
@@ -75,8 +95,10 @@ __all__ = [
     
     # Diagnostic functions
     'diagnose_vision_tool',
+    'diagnose_youtube_tool',
     'validate_tool_dependencies',
-    'check_vision_status'
+    'check_vision_status',
+    'check_youtube_status'
 ]
 
 def get_tool_status():
@@ -184,12 +206,89 @@ def diagnose_vision_tool():
         print(f"📁 Files in tools directory: {[f.name for f in tools_files]}")
         return False
 
+def diagnose_youtube_tool():
+    """Comprehensive diagnosis of YouTubeContentTool status"""
+    print("🎥 Diagnosing YouTubeContentTool...")
+    
+    # Check file existence
+    current_dir = Path(__file__).parent
+    youtube_tool_path = current_dir / "youtube_content_tool.py"
+    
+    print(f"📁 Looking for: {youtube_tool_path}")
+    print(f"📁 Absolute path: {youtube_tool_path.absolute()}")
+    
+    if youtube_tool_path.exists():
+        print("✅ youtube_content_tool.py file exists")
+        
+        # Check file size and basic content
+        file_size = youtube_tool_path.stat().st_size
+        print(f"📄 File size: {file_size} bytes")
+        
+        if file_size == 0:
+            print("❌ File is empty!")
+            return False
+        
+        # Try to read the file and check for basic class definition
+        try:
+            with open(youtube_tool_path, 'r') as f:
+                content = f.read()
+                if 'class YouTubeContentTool' in content:
+                    print("✅ YouTubeContentTool class found in file")
+                else:
+                    print("❌ YouTubeContentTool class not found in file")
+                    print("💡 File content preview:")
+                    print(content[:200] + "..." if len(content) > 200 else content)
+                    return False
+        except Exception as e:
+            print(f"❌ Error reading file: {e}")
+            return False
+        
+        # Check dependencies
+        try:
+            import yt_dlp
+            print("✅ yt-dlp dependency available")
+        except ImportError:
+            print("❌ yt-dlp dependency missing")
+            print("💡 Install: pip install yt-dlp")
+            return False
+        
+        try:
+            import requests
+            print("✅ requests dependency available")
+        except ImportError:
+            print("❌ requests dependency missing")
+            print("💡 Install: pip install requests")
+            return False
+        
+        # Try importing the tool
+        try:
+            from .youtube_content_tool import YouTubeContentTool
+            print("✅ YouTubeContentTool import successful")
+            
+            # Try instantiating
+            tool = YouTubeContentTool()
+            print("✅ YouTubeContentTool instantiation successful")
+            return True
+            
+        except Exception as e:
+            print(f"❌ YouTubeContentTool import/instantiation failed: {e}")
+            print(f"💡 Error details: {type(e).__name__}: {e}")
+            return False
+    else:
+        print("❌ youtube_content_tool.py file does not exist")
+        print(f"💡 Create the file at: {youtube_tool_path}")
+        
+        # Show what files do exist in the tools directory
+        tools_files = list(current_dir.glob("*.py"))
+        print(f"📁 Files in tools directory: {[f.name for f in tools_files]}")
+        return False
+
 def validate_tool_dependencies():
     """Enhanced validation with specific error detection for each tool"""
     issues = []
     recommendations = []
     
-    # Check helium and selenium availability first
+    # Check helium and selenium availability
     helium_available = False
     selenium_available = False
     
@@ -207,6 +306,24 @@ def validate_tool_dependencies():
     except ImportError:
         print("❌ selenium package not available")
     
+    # Check YouTube tool dependencies
+    yt_dlp_available = False
+    requests_available = False
+    
+    try:
+        import yt_dlp
+        yt_dlp_available = True
+        print("✅ yt-dlp package available")
+    except ImportError:
+        print("❌ yt-dlp package not available")
+    
+    try:
+        import requests
+        requests_available = True
+        print("✅ requests package available")
+    except ImportError:
+        print("❌ requests package not available")
+    
     # Check VisionWebBrowserTool with specific diagnosis
     if VisionWebBrowserTool is None:
         if not helium_available or not selenium_available:
@@ -221,6 +338,21 @@ def validate_tool_dependencies():
             # Dependencies are available but tool still failed to load
             issues.append("VisionWebBrowserTool file missing or has errors")
             recommendations.append("Check if tools/vision_browser_tool.py exists and has no syntax errors")
+    
+    # Check YouTubeContentTool with specific diagnosis
+    if YouTubeContentTool is None:
+        if not yt_dlp_available or not requests_available:
+            issues.append("YouTubeContentTool dependencies missing")
+            missing_deps = []
+            if not yt_dlp_available:
+                missing_deps.append("yt-dlp")
+            if not requests_available:
+                missing_deps.append("requests")
+            recommendations.append(f"Install missing dependencies: pip install {' '.join(missing_deps)}")
+        else:
+            # Dependencies are available but tool still failed to load
+            issues.append("YouTubeContentTool file missing or has errors")
+            recommendations.append("Check if tools/youtube_content_tool.py exists and has no syntax errors")
     
     # Enhanced DuckDuckGo check
     ddgs_available = False
@@ -260,8 +392,11 @@ def validate_tool_dependencies():
         'dependency_details': {
             'helium_available': helium_available,
             'selenium_available': selenium_available,
+            'yt_dlp_available': yt_dlp_available,
+            'requests_available': requests_available,
             'ddgs_available': ddgs_available,
-            'vision_tool_available': VisionWebBrowserTool is not None
+            'vision_tool_available': VisionWebBrowserTool is not None,
+            'youtube_tool_available': YouTubeContentTool is not None
         }
     }
 
@@ -291,6 +426,34 @@ def check_vision_status():
     
     return success and deps['status'] == 'healthy'
 
+def check_youtube_status():
+    """Quick status check for YouTube capabilities"""
+    print("🎥 YouTube Tool Status Check:")
+    success = diagnose_youtube_tool()
+    
+    print(f"\n🔍 Dependency Status:")
+    deps = validate_tool_dependencies()
+    print(f"Overall Status: {deps['status']}")
+    
+    if deps['issues']:
+        print("\n❌ Issues found:")
+        for issue in deps['issues']:
+            print(f"   - {issue}")
+    
+    if deps['recommendations']:
+        print("\n💡 Recommendations:")
+        for rec in deps['recommendations']:
+            print(f"   - {rec}")
+    
+    print(f"\n📊 YouTube-specific Details:")
+    youtube_deps = {k: v for k, v in deps['dependency_details'].items() 
+                   if 'youtube' in k.lower() or k in ['yt_dlp_available', 'requests_available']}
+    for key, value in youtube_deps.items():
+        status = "✅" if value else "❌"
+        print(f"   {key}: {status}")
+    
+    return success and deps['status'] == 'healthy'
+
 def get_content_processor_tools():
     """Get tools specifically for content_processor specialist"""
     tools = []
@@ -305,7 +468,7 @@ def get_content_processor_tools():
         tools.append(VisionWebBrowserTool())
         print("✓ Added VisionWebBrowserTool to content_processor")
     
-    # Multimedia content processing
+    # Multimedia content processing (NEW: YouTube support)
     if YouTubeContentTool:
         tools.append(YouTubeContentTool())
         print("✓ Added YouTubeContentTool to content_processor")
@@ -314,7 +477,7 @@ def get_content_processor_tools():
     return tools
 
 def get_web_researcher_tools():
-    """Get tools specifically for web_researcher specialist"""
+    """Get tools specifically for web_researcher specialist - FOCUSED ON SEARCH & DISCOVERY"""
     tools = []
     
     # Add LangChain research tools (PRIMARY for web research)
@@ -323,17 +486,15 @@ def get_web_researcher_tools():
         tools.extend(langchain_tools)
         print(f"✓ Added {len(langchain_tools)} LangChain research tools to web_researcher (PRIMARY)")
     
-    # Add content processing for research verification
-    if ContentRetrieverTool:
-        tools.append(ContentRetrieverTool())
-        print("✓ Added ContentRetrieverTool to web_researcher for content verification")
+    # Always add VisitWebpageTool (essential for web research)
+    try:
+        from smolagents import VisitWebpageTool
+        tools.append(VisitWebpageTool())
+        print("✓ Added VisitWebpageTool to web_researcher (essential)")
+    except Exception as e:
+        print(f"⚠️ Failed to add VisitWebpageTool: {e}")
     
-    # Add multimedia research capabilities
-    if YouTubeContentTool:
-        tools.append(YouTubeContentTool())
-        print("✓ Added YouTubeContentTool to web_researcher for video content research")
-    
-    print(f"🔍 Web researcher tools: {len(tools)} available")
+    print(f"🔍 Web researcher tools: {len(tools)} available (focused on search & discovery)")
     return tools
 
 # Print initialization status
