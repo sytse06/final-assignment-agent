@@ -40,6 +40,12 @@ from smolagents import (
 # Import retriever system
 from dev_retriever import load_gaia_retriever
 
+# Import file handling utilities
+from agent_files import (
+    smart_file_path_selection,
+    analyze_file_metadata
+)
+
 # Import logging
 from agent_logging import AgentLoggingSetup
 
@@ -241,45 +247,6 @@ def llm_invoke_with_retry(llm, messages):
 # ============================================================================
 # FILE HANDLING UTILITY FUNCTIONS
 # ============================================================================
-
-def is_url(path: str) -> bool:
-    """Detect URL vs local path"""
-    try:
-        parsed = urlparse(path)
-        return bool(parsed.scheme and parsed.netloc)
-    except Exception:
-        return False
-
-def smart_file_handler(file_path: str, config: GAIAConfig) -> str:
-    """Handle URLs and local paths transparently"""
-    if not file_path:
-        raise ValueError("No file path provided")
-    
-    if is_url(file_path):
-        if not config.enable_url_downloading:
-            raise ValueError("URL downloading disabled")
-        
-        # Download to temp file with proper extension
-        parsed_url = urlparse(file_path)
-        filename = parsed_url.path.split('/')[-1] if parsed_url.path else 'file'
-        extension = '.' + filename.split('.')[-1] if '.' in filename else ''
-        
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=extension)
-        
-        try:
-            response = requests.get(file_path, timeout=config.download_timeout)
-            response.raise_for_status()
-            temp_file.write(response.content)
-            temp_file.close()
-            return temp_file.name
-        except Exception as e:
-            temp_file.close()
-            raise Exception(f"Download failed: {str(e)}")
-    else:
-        # Local path - return as-is
-        if not os.path.exists(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
-        return file_path
     
 def extract_file_info_from_task_id(task_id: str) -> Dict[str, str]:
     """
@@ -317,20 +284,6 @@ def extract_file_info_from_task_id(task_id: str) -> Dict[str, str]:
         print(f"⚠️  Could not extract file info for task {task_id}: {e}")
         return {"file_name": "", "file_path": "", "has_file": False}
 
-def _load_image_for_agent(self, file_path: str) -> Image.Image:
-    """Load image file for SmolagAgent processing"""
-    try:
-        if os.path.exists(file_path):
-            image = Image.open(file_path).convert("RGB")
-            print(f"✅ Image loaded: {file_path}")
-            return image
-        else:
-            print(f"❌ Image file not found: {file_path}")
-            return None
-    except Exception as e:
-        print(f"❌ Error loading image: {e}")
-        return None
-
 def validate_gaia_format(answer: str) -> bool:
     """Check if answer meets GAIA requirements"""
     if not answer or len(answer.strip()) == 0:
@@ -355,12 +308,6 @@ class GAIAAgent:
         
         self.config: GAIAConfig = config
         self.capabilities: Dict[str, Any] = {}  # Store capability assessment
-        
-        import sys
-        current_module = sys.modules[__name__]
-        current_module.smart_file_handler = smart_file_handler
-        current_module.is_url = is_url
-        current_module.config = self.config
         
         print("🔄 Initializing core components...")
         self.retriever: Any = self._initialize_retriever()
@@ -711,100 +658,21 @@ class GAIAAgent:
             return {"error": f"Image analysis failed: {str(e)}"}
 
     def _analyze_file_metadata(self, file_name: str, file_path: str) -> Dict[str, Any]:
-        """Enhanced file analysis with vision-aware metadata"""
+        """Enhanced file analysis using agent_files utilities"""
         if not file_name:
             return {"no_file": True}
         
         try:
-            # Basic file analysis
-            path_obj = Path(file_name)
-            extension = path_obj.suffix.lower()
-            
-            import mimetypes
-            mime_type, _ = mimetypes.guess_type(file_name)
-            
-            # Categorize file type with enhanced image handling
-            if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
-                category = "data"
-                processing_approach = "direct_pandas"
-                recommended_specialist = "data_analyst"
-                specialist_guidance = {
-                    "tool_command": "pd.read_excel(file_path) or pd.read_csv(file_path)",
-                    "imports_needed": ["pandas", "openpyxl"],
-                    "processing_strategy": "Load data → analyze structure → perform calculations"
-                }
-            elif extension in ['.pdf', '.docx', '.doc', '.txt']:
-                category = "document"
-                processing_approach = "content_extraction"
-                recommended_specialist = "content_processor"
-                specialist_guidance = {
-                    "tool_command": "Use ContentRetrieverTool with file_path from additional_args",
-                    "imports_needed": [],
-                    "processing_strategy": "Extract content → analyze text → answer question"
-                }
-            elif extension in ['.mp3', '.mp4', '.wav', '.m4a', '.mov']:
-                category = "media"
-                processing_approach = "transcription"
-                recommended_specialist = "content_processor"
-                specialist_guidance = {
-                    "tool_command": "Use SpeechToTextTool with file_path from additional_args",
-                    "imports_needed": [],
-                    "processing_strategy": "Transcribe audio → analyze transcript → extract information"
-                }
-            elif extension in ['.png', '.jpg', '.jpeg', '.gif', '.bmp']:
-                category = "image"
-                processing_approach = "vision_analysis"
-                recommended_specialist = "content_processor"
-                
-                # 🔥 NEW: Enhanced image analysis
-                image_metadata = self._analyze_image_metadata(file_path)
-                
-                # Adjust processing strategy based on model capabilities
-                if self.capabilities.get("model_supports_vision", False):
-                    processing_strategy = "Load image → analyze visual content → extract information"
-                    tool_command = "Use vision tools with file_path and images from additional_args"
-                else:
-                    processing_strategy = "Load image → OCR text extraction → analyze text"
-                    tool_command = "Use ContentRetrieverTool for OCR text extraction"
-                
-                specialist_guidance = {
-                    "tool_command": tool_command,
-                    "imports_needed": ["PIL"],
-                    "processing_strategy": processing_strategy,
-                    "image_info": image_metadata,
-                    "vision_capable": self.capabilities.get("model_supports_vision", False)
-                }
-            else:
-                category = "unknown"
-                processing_approach = "content_extraction"
-                recommended_specialist = "content_processor"
-                specialist_guidance = {
-                    "tool_command": "Use ContentRetrieverTool with file_path from additional_args",
-                    "imports_needed": [],
-                    "processing_strategy": "Extract content → analyze → answer question"
-                }
-            
-            return {
-                "file_name": file_name,
-                "file_path": file_path,
-                "extension": extension,
-                "mime_type": mime_type,
-                "category": category,
-                "processing_approach": processing_approach,
-                "recommended_specialist": recommended_specialist,
-                "specialist_guidance": specialist_guidance,
-                "estimated_complexity": "medium"
-            }
-            
+            return analyze_file_metadata(file_name, file_path, self.capabilities)
         except Exception as e:
-            print(f"⚠️ File analysis error: {e}")
             return {
                 "file_name": file_name,
                 "file_path": file_path,
                 "category": "unknown",
                 "processing_approach": "content_extraction",
                 "recommended_specialist": "content_processor",
-                "error": str(e)
+                "error": str(e),
+                "file_exists": os.path.exists(file_path) if file_path else False
             }
 
     def _load_image_for_agent(self, file_path: str) -> Optional[Image.Image]:
@@ -931,7 +799,6 @@ class GAIAAgent:
                 additional_authorized_imports=[
                     # File preprocessing (CORE RESPONSIBILITY)
                     "zipfile", "tarfile", "gzip", "bz2",  # Archive handling
-                    "smart_file_handler", "is_url",       # Custom utilities
                     
                     # File operations and inspection
                     "open", "codecs", "chardet", "os", "sys", "io", "pathlib",
@@ -958,40 +825,82 @@ class GAIAAgent:
             return coordinator
 
     def _build_coordinator_task(self, state: GAIAState) -> str:
-        """Build concise coordination task focused on execution"""
+        """🔥 ENHANCED: Build coordination task with smart file information"""
         question = state["question"]
-        file_name = state.get("file_name", "")
-        has_file = state.get("has_file", False)
         similar_examples = state.get("similar_examples", [])
         complexity = state.get("complexity", "unknown")
+        has_file = state.get("has_file", False)
+        file_name = state.get("file_name", "")
+        file_path = state.get("file_path", "")
+        file_metadata = state.get("file_metadata", {})
         
-        # Build context sections
+        # Build enhanced file context with processing guidance
         file_context = ""
-        if has_file and file_name:
-            file_context = f"\nFILE: {file_name}"
+        if has_file:
+            # Determine best file reference and provide processing guidance
+            if file_name and file_name.strip() and os.path.exists(file_name):
+                # Filename exists and has extension
+                file_context = f"\nFILE AVAILABLE: {file_name}"
+                if file_metadata:
+                    file_type = file_metadata.get("category", "unknown")
+                    recommended_specialist = file_metadata.get("recommended_specialist", "content_processor")
+                    file_context += f"\nFILE TYPE: {file_type}"
+                    file_context += f"\nRECOMMENDED PROCESSING: {recommended_specialist}"
+                    
+                    # Add specific processing guidance
+                    if file_type == "data":
+                        file_context += "\nGUIDANCE: Use data_analyst for CSV/Excel analysis with pandas"
+                    elif file_type == "document":
+                        file_context += "\nGUIDANCE: Use content_processor with file_path from additional_args"
+                    elif file_type == "image":
+                        file_context += "\nGUIDANCE: Use content_processor with vision capabilities"
+                    elif file_type == "media":
+                        file_context += "\nGUIDANCE: Use content_processor for audio/video transcription"
+                
+            elif file_path and file_path.strip() and os.path.exists(file_path):
+                # Cache path exists but may lack extension
+                file_context = f"\nFILE AVAILABLE: {file_path}"
+                if file_name:
+                    file_context += f" (original name: {file_name})"
+                file_context += "\nGUIDANCE: Pass file_path to specialist - ContentRetrieverTool will handle extension detection"
+                
+            else:
+                file_context = "\nFILE: Referenced but not accessible - proceed without file"
         
+        # Build examples context
         examples_context = ""
         if similar_examples:
-            examples_context = "\nSIMILAR EXAMPLES:\n"
+            examples_context = "\nSIMILAR SUCCESSFUL EXAMPLES:\n"
             for i, example in enumerate(similar_examples[:2], 1):
                 examples_context += f"{i}. {example.get('question', '')[:80]}... → {example.get('answer', '')}\n"
         
-        # Core task
+        # Core coordination task with enhanced file handling instructions
         task = f"""GAIA Coordinator Task
 
     QUESTION: {question}
     COMPLEXITY: {complexity}{file_context}{examples_context}
 
     YOUR SPECIALISTS:
-    - data_analyst: Data analysis, calculations, file processing
-    - web_researcher: Web search, information gathering  
-    - content_processor: Document/media processing, complex content extraction
+    - data_analyst: CodeAgent with pandas/numpy for data analysis and calculations
+    - web_researcher: ToolCallingAgent for web search and information gathering  
+    - content_processor: ToolCallingAgent with ContentRetrieverTool for document/media processing
 
-    WORKFLOW:
-    1. Analyze question and files (if any)
-    2. Choose appropriate specialist(s) 
-    3. Delegate with clear instructions
-    4. Format final answer
+    COORDINATOR RESPONSIBILITIES:
+    1. ANALYZE FILES: If file provided, inspect and preprocess as needed
+    2. ROUTE INTELLIGENTLY: Choose appropriate specialist based on task and file type
+    3. DELEGATE CLEARLY: Provide specialist with file_path and clear instructions
+    4. SYNTHESIZE RESULTS: Combine specialist outputs into final answer
+
+    FILE HANDLING STRATEGY:
+    - Simple data files (CSV, JSON): Consider processing directly with pandas/json
+    - Complex documents (PDF, DOCX): Delegate to content_processor with file_path
+    - Archives (ZIP, TAR): Extract contents first, then process individual files
+    - Images/Media: Delegate to content_processor with appropriate tools
+
+    SPECIALIST DELEGATION:
+    When delegating to content_processor, use: "Process the file at file_path from additional_args"
+    When delegating to data_analyst, provide clear data processing instructions
+    When delegating to web_researcher, provide specific search queries
 
     CRITICAL REQUIREMENTS:
     - End with: FINAL ANSWER: [specific answer]
@@ -1285,85 +1194,208 @@ class GAIAAgent:
             }
 
     def _coordinator_node(self, state: GAIAState) -> GAIAState:
-        """🔥 CORRECTED: Hierarchical coordinator node - Analysis and execution in one step"""
-        print(f"🧠 Coordinator: {state['question'][:80]}...")
+        """🔥 ENHANCED: Hierarchical coordinator with comprehensive logging and tracking"""
+        task_id = state.get("task_id", "unknown")
+        question = state["question"]
         
+        print(f"🧠 Coordinator: {question[:80]}...")
+        
+        # Enhanced tracking and logging
         track("Starting coordinator", self.config)
         
         if self.config.enable_context_bridge:
             ContextBridge.track_operation("Starting coordinator")
         
         if self.logging:
-            self.logging.log_step("coordinator_start", "Starting coordinator analysis and execution")
+            self.logging.log_step("coordinator_start", "Starting coordinator analysis and execution", {
+                'task_id': task_id,
+                'node_name': 'coordinator',
+                'question_preview': question[:100]
+            })
+            self.logging.set_routing_path("hierarchical_coordinator")
         
         try:
             # Create fresh coordinator with managed specialists for this task
+            track("Creating coordinator with managed specialists", self.config)
             self.coordinator = self._create_coordinator()
             
-            # Build integrated coordination task (analysis + execution)
+            if self.logging:
+                self.logging.log_step("coordinator_created", "Coordinator with specialists created", {
+                    'specialist_count': len(self.coordinator.managed_agents) if hasattr(self.coordinator, 'managed_agents') else 0
+                })
+            
+            # File path analysis and selection
+            file_path = state.get("file_path", "")
+            file_name = state.get("file_name", "")
+            has_file = state.get("has_file", False)
+            file_metadata = state.get("file_metadata", {})
+            
+            # 🔧 USE agent_files utility for smart file path selection
+            best_file_path = ""
+            file_selection_method = "none"
+            
+            if has_file:
+                track("Analyzing file information for coordinator", self.config)
+                best_file_path = smart_file_path_selection(file_name, file_path) if has_file else ""
+                
+                if best_file_path == file_name:
+                    file_selection_method = "filename_with_extension"
+                elif best_file_path == file_path:
+                    file_selection_method = "cache_path_fallback"
+                else:
+                    file_selection_method = "no_accessible_file"
+                
+                if self.logging:
+                    self.logging.log_step("file_analysis", f"File path selected: {file_selection_method}", {
+                        'file_name': file_name,
+                        'file_path': file_path[:50] + "..." if len(file_path) > 50 else file_path,
+                        'best_file_path': best_file_path[:50] + "..." if len(best_file_path) > 50 else best_file_path,
+                        'selection_method': file_selection_method,
+                        'file_exists': os.path.exists(best_file_path) if best_file_path else False,
+                        'file_metadata': file_metadata.get("category", "unknown") if file_metadata else "none"
+                    })
+                
+                print(f"📁 File selection: {file_selection_method} → {os.path.basename(best_file_path) if best_file_path else 'none'}")
+            
+            # Build coordination task with enhanced context
+            track("Building coordination task with file context", self.config)
             coordination_task = self._build_coordinator_task(state)
             
+            if self.logging:
+                self.logging.log_step("task_built", "Coordination task constructed", {
+                    'task_length': len(coordination_task),
+                    'has_file_context': has_file,
+                    'similar_examples_count': len(state.get("similar_examples", []))
+                })
+            
+            # Context bridge tracking for execution phase
             if self.config.enable_context_bridge:
                 ContextBridge.track_operation("Executing coordinator with managed specialists")
             
-            #  Give coordinator file access
-            file_path = state.get("file_path", "")
-            file_name = state.get("file_name", "")
+            # Determine execution strategy based on file type
             has_image = any(ext in file_name.lower() for ext in ['.png', '.jpg', '.jpeg', '.gif', '.bmp']) if file_name else False
+            execution_strategy = "no_file"
             
-            if file_path and has_image:
-                # Load image for vision processing
-                image = self._load_image_for_agent(file_path)
+            if best_file_path and has_image:
+                execution_strategy = "image_vision_processing"
+            elif best_file_path:
+                execution_strategy = "file_processing"
+            
+            if self.logging:
+                self.logging.log_step("execution_strategy", f"Execution strategy: {execution_strategy}", {
+                    'strategy': execution_strategy,
+                    'has_file': bool(best_file_path),
+                    'is_image': has_image,
+                    'file_type': file_metadata.get("category", "unknown") if file_metadata else "unknown"
+                })
+            
+            # Execute coordination based on strategy
+            coordination_result = None
+            
+            if execution_strategy == "image_vision_processing":
+                track("Loading image for vision processing", self.config)
+                image = self._load_image_for_agent(best_file_path)
                 
                 if image:
                     print("🖼️ Running coordinator with vision support")
-                    # Pass image to coordinator using SmolagAgents vision pattern
+                    track("Executing coordinator with vision support", self.config)
+                    
+                    if self.logging:
+                        self.logging.log_step("vision_execution", "Executing with vision support", {
+                            'image_loaded': True,
+                            'file_path': best_file_path
+                        })
+                    
                     coordination_result = self.coordinator.run(
                         coordination_task,
-                        images=[image],  # 🔥 KEY: Pass images list
-                        additional_args={"file_path": file_path}
+                        images=[image],
+                        additional_args={"file_path": best_file_path, "file_name": file_name}
                     )
                 else:
                     print("⚠️ Image loading failed, proceeding without vision")
+                    track("Image loading failed, fallback to file processing", self.config)
+                    
+                    if self.logging:
+                        self.logging.log_step("vision_fallback", "Image loading failed, proceeding without vision", {
+                            'image_loaded': False,
+                            'fallback_strategy': 'file_processing'
+                        })
+                    
                     coordination_result = self.coordinator.run(
                         coordination_task,
-                        additional_args={"file_path": file_path}
+                        additional_args={"file_path": best_file_path, "file_name": file_name}
                     )
-            elif file_path:
-                # Non-image file processing
+                    
+            elif execution_strategy == "file_processing":
+                print(f"📄 Running coordinator with file: {os.path.basename(best_file_path)}")
+                track("Executing coordinator with file processing", self.config)
+                
+                if self.logging:
+                    self.logging.log_step("file_execution", "Executing with file processing", {
+                        'file_basename': os.path.basename(best_file_path),
+                        'file_size': os.path.getsize(best_file_path) if os.path.exists(best_file_path) else 0
+                    })
+                
                 coordination_result = self.coordinator.run(
                     coordination_task,
-                    additional_args={"file_path": file_path}
+                    additional_args={"file_path": best_file_path, "file_name": file_name}
                 )
-            else:
-                # No file needed
+                
+            else:  # no_file strategy
+                print("📝 Running coordinator without files")
+                track("Executing coordinator without files", self.config)
+                
+                if self.logging:
+                    self.logging.log_step("no_file_execution", "Executing without files", {
+                        'text_only': True
+                    })
+                
                 coordination_result = self.coordinator.run(coordination_task)
             
+            # Post-execution tracking and logging
             track("Hierarchical coordinator completed analysis and execution", self.config)
             
-            print(f"✅ Hierarchical coordinator completed analysis and execution")
+            if self.config.enable_context_bridge:
+                ContextBridge.track_operation("Coordinator execution completed successfully")
+            
+            print(f"✅ Hierarchical coordinator completed: {execution_strategy}")
             
             if self.logging:
-                self.logging.log_step("coordinator_complete", "Hierarchical coordinator analysis and execution completed")
+                self.logging.log_step("coordinator_complete", "Hierarchical coordinator execution completed", {
+                    'execution_strategy': execution_strategy,
+                    'result_length': len(str(coordination_result)),
+                    'success': True
+                })
             
-            # Return with execution results (not just analysis)
+            # Return enhanced state with execution details
             return {
                 **state,
                 "agent_used": "hierarchical_coordinator",
                 "raw_answer": coordination_result,
                 "execution_successful": True,
-                "steps": state["steps"] + ["Hierarchical coordinator analysis and execution completed"]
+                "execution_strategy": execution_strategy,
+                "file_selection_method": file_selection_method,
+                "steps": state["steps"] + [f"Hierarchical coordinator completed ({execution_strategy})"]
             }
             
         except Exception as e:
             error_msg = f"Coordinator failed: {str(e)}"
             print(f"❌ {error_msg}")
             
+            # Enhanced error tracking and logging
+            track(f"Coordinator error: {str(e)}", self.config)
+            
             if self.config.enable_context_bridge:
                 ContextBridge.track_error(error_msg)
             
             if self.logging:
-                self.logging.log_step("coordinator_error", error_msg)
+                self.logging.log_step("coordinator_error", error_msg, {
+                    'error_type': type(e).__name__,
+                    'error_message': str(e),
+                    'task_id': task_id,
+                    'execution_strategy': locals().get('execution_strategy', 'unknown'),
+                    'file_selection_method': locals().get('file_selection_method', 'unknown')
+                })
             
             return {
                 **state,
@@ -1371,6 +1403,8 @@ class GAIAAgent:
                 "agent_used": "hierarchical_coordinator",
                 "raw_answer": error_msg,
                 "execution_successful": False,
+                "execution_strategy": locals().get('execution_strategy', 'failed'),
+                "file_selection_method": locals().get('file_selection_method', 'failed'),
                 "steps": state["steps"] + [f"Hierarchical coordinator failed: {error_msg}"]
             }
 
