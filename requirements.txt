@@ -24,7 +24,7 @@ langchain-google-genai>=2.1.5
 # Model Providers
 openai>=1.40.0
 groq>=0.4.0
-litellm>=1.72.1
+litellm>=1.74.2
 
 # File Processing
 beautifulsoup4>=4.12.0
