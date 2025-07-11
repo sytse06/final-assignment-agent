@@ -422,17 +422,17 @@ class GAIAAgent:
         """Initialize orchestration model (LangChain)"""
         try:
             # Initialize orchestration model (LangChain)
-            if self.config.model_provider == "groq":
-                orchestration_model = ChatGroq(
-                    model=self.config.model_name,
-                    api_key=os.getenv("GROQ_API_KEY"),
-                    temperature=self.config.temperature
-                )
-            elif self.config.model_provider == "openrouter":
+            if self.config.model_provider == "openrouter":
                 orchestration_model = ChatOpenAI(
                     model=self.config.model_name,
                     api_key=os.getenv("OPENROUTER_API_KEY"),
                     base_url="https://openrouter.ai/api/v1",
+                    temperature=self.config.temperature
+                )
+            elif self.config.model_provider == "groq":
+                orchestration_model = ChatGroc(
+                    model=self.config.model_name,
+                    api_key=os.getenv("GROC_API_KEY"),                    
                     temperature=self.config.temperature
                 )
             elif self.config.model_provider == "google":
@@ -451,7 +451,7 @@ class GAIAAgent:
             else:
                 # Fallback to Openrouter
                 orchestration_model = ChatOpenAI(
-                    model="qwen/qwen3-32b",
+                    model="qwen/qwen2.5-vl-32b-instruct",
                     api_key=os.getenv("OPENROUTER_API_KEY"),
                     base_url="https://openrouter.ai/api/v1",
                     temperature=self.config.temperature
@@ -467,12 +467,12 @@ class GAIAAgent:
     def _initialize_specialist_model(self) -> LiteLLMModel:
         """🔥 NEW: Initialize LiteLLM model for SmolagAgents"""
         try:
-            if self.config.model_provider == "groq":
-                model_id = f"groq/{self.config.model_name}"
-                api_key = os.getenv("GROQ_API_KEY")
-            elif self.config.model_provider == "openrouter":
+            if self.config.model_provider == "openrouter":
                 model_id = f"openrouter/{self.config.model_name}"
                 api_key = os.getenv("OPENROUTER_API_KEY")
+            elif self.config.model_provider == "groq":
+                model_id = f"groq/{self.config.model_name}"
+                api_key = os.getenv("GROQ_API_KEY")
             elif self.config.model_provider == "ollama":
                 model_id = f"ollama_chat/{self.config.model_name}"
                 return LiteLLMModel(
@@ -485,7 +485,7 @@ class GAIAAgent:
                 api_key = os.getenv("GOOGLE_API_KEY")
             else:
                 # Fallback to OpenRouter
-                model_id = "openrouter/qwen/qwen-2.5-coder-32b-instruct:free"
+                model_id = "qwen/qwen2.5-vl-32b-instruct"
                 api_key = os.getenv("OPENROUTER_API_KEY")
             
             specialist_model = LiteLLMModel(
@@ -530,12 +530,14 @@ class GAIAAgent:
                 'claude-3.5': True,
                 
                 # Google models
+                'google/gemini-2.5-flash': True,
                 'gemini-pro-vision': True,
                 'gemini-1.5': True,
                 'gemini-2': True,
                 'gemini-2.5': True,
                 
-                # Open source models
+                # Miscellanous models
+                'qwen2.5-vl-32b-instruct': True,
                 'llava': True,
                 'qwen-vl': True,
                 'instructblip': True,
@@ -544,7 +546,7 @@ class GAIAAgent:
                 # Known text-only models
                 'gpt-3.5': False,
                 'text-davinci': False,
-                'qwen-qwq': False,  # Current model in config
+                'qwen-qwq': False,
                 'llama': False,
                 'mistral': False,
                 'mixtral': False

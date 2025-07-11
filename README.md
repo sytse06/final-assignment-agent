@@ -16,22 +16,20 @@ hf_oauth: true
 ## 🌟 Features
 
 - **🤖 Langgraph based workflow**: Complexity detection routes simple questions to direct LLM processing and complex questions to specialized agents
-- **📁 Embedded smolagents agent system for direct file i/o and delegation to specialized agents**: Handles all 17 GAIA file types including Excel, PDFs, images, audio, and more  
-- **🔍 RAG-Enhanced Decision Making**: Uses 165 GAIA examples to guide agent selection and strategy
+- **📁 Embedded smolagents agent system for direct file i/o and delegation to specialized agents**: Via python i/o different file types like Excel, PDFs, images, audio, and more  
+- **🔍 Vision browser tool and many more**: Makes snapshots of web pages to capture context  
 
 ## 🏗️ Architecture
 
 ### Core Components
 - **GAIAAgent**: Main orchestrator with LangGraph workflow
-- **Smart Routing System**: Complexity-based strategy selection
-- **Specialized Agents**: Data analyst, web researcher, multimodal content processor, general assistant
-- **RAG System**: Example-driven decision making
+- **LLM based complexity check**: Complexity-based strategy selection
+- **Specialized Agents**: Coordinator agent with data analyst, web researcher, content processor as specialists
+- **RAG System**: Example-driven decision making to improve context
 
 ### Performance
 - **Target Accuracy**: 50-60% on GAIA benchmark
 - **Smart Routing**: Optimizes cost and speed
-- **Multi-Provider Support**: Google, OpenRouter with automatic fallback
+- **Multi-Provider Support**: OpenRouter, Google with automatic fallback
 
 ## 🚀 Built for HF Agents Course Final Assignment
-
-This implementation demonstrates advanced multi-agent architecture principles with production-ready features including comprehensive testing, intelligent routing, and robust error handling.

@@ -6,10 +6,11 @@ import pandas as pd
 
 # Import existing system
 try:
-    from agent_interface import create_gaia_agent, get_groq_config
+    from agent_interface import create_gaia_agent, get_openrouter_config, get_performance_config
     SYSTEM_AVAILABLE = True
 except ImportError:
     SYSTEM_AVAILABLE = False
+    print("❌ Agent system not available - using fallback mode")
 
 DEFAULT_API_URL = "https://agents-course-unit4-scoring.hf.space"
 
@@ -20,28 +21,67 @@ class GAIAAgent:
         if SYSTEM_AVAILABLE:
             try:
                 config = get_openrouter_config()
-                config.enable_csv_logging = FalseSpaces
+                config.enable_csv_logging = False
                 config.debug_mode = False
+                config.max_agent_steps = 15
+                
                 self.agent = create_gaia_agent(config)
-                print("✅ Agent initialized")
+                print("✅ GAIA Agent initialized successfully")
+                
             except Exception as e:
                 print(f"❌ Agent initialization failed: {e}")
+                self.agent = None
+        else:
+            print("❌ Agent system not available - using fallback responses")
     
     def __call__(self, task_id: str, question: str) -> str:
+        
         if self.agent:
             try:
+                # Calling execution method
                 result = self.agent.run_single_question(question=question, task_id=task_id)
-                return result.get("final_answer", "No answer")
+                
+                # Extract the final answer
+                final_answer = result.get("final_answer", "")
+                
+                # Log execution details for debugging
+                complexity = result.get("complexity", "unknown")
+                steps = len(result.get("steps", []))
+                print(f"Task {task_id}: {complexity} question, {steps} steps")
+                
+                return final_answer if final_answer else "No answer generated"
+                
             except Exception as e:
-                print(f"Processing error: {e}")
+                print(f"❌ Processing error for task {task_id}: {e}")
+                return f"ERROR: {str(e)}"
         
-        # Fallback responses
+        # Enhanced fallback responses when agent system unavailable
+        return self._fallback_response(question)
+    
+    def _fallback_response(self, question: str) -> str:
+        """Fallback when agent system fails"""
+        question_lower = question.lower()
+        
+        # Basic math
         if "2+2" in question.replace(" ", ""):
             return "4"
-        elif "capital" in question.lower() and "france" in question.lower():
-            return "Paris"
-        else:
-            return "Unable to determine answer"
+        elif "3+3" in question.replace(" ", ""):
+            return "6"
+        
+        # Geography
+        if "capital" in question_lower:
+            if "france" in question_lower:
+                return "Paris"
+            elif "italy" in question_lower:
+                return "Rome"
+            elif "germany" in question_lower:
+                return "Berlin"
+        
+        # Common facts
+        if "president" in question_lower and "united states" in question_lower:
+            return "Donald Trump"
+        
+        return "Unable to determine answer"
 
 def run_and_submit_all(profile: gr.OAuthProfile | None):
     space_id = os.getenv("SPACE_ID")
@@ -138,7 +178,7 @@ with gr.Blocks() as demo:
     gr.LoginButton()
     
     run_button = gr.Button("Run Evaluation & Submit All Answers", variant="primary")
-    status_output = gr.Textbox(label="Status", lines=5, interactive=False)
+    status_output = gr.Textbox(label="Status", lines=8, interactive=False)
     results_table = gr.DataFrame(label="Results", wrap=True)
     
     run_button.click(fn=run_and_submit_all, outputs=[status_output, results_table])

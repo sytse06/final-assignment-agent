@@ -8,12 +8,12 @@ from agent_logic import GAIAAgent, GAIAConfig
 # CONFIGURATION PRESETS (✅ Real Value)
 # ============================================================================
 
-def get_groq_config() -> GAIAConfig:
+def get_openrouter_config() -> GAIAConfig:
     """Fast, reliable Groq configuration"""
     return GAIAConfig(
-        model_provider="groq",
-        model_name="qwen-qwq-32b",
-        temperature=0.3,
+        model_provider="openrouter",
+        model_name="google/gemini-2.5-flash",
+        temperature=0.1,
         enable_smart_routing=True,
         enable_csv_logging=True
     )
@@ -28,11 +28,11 @@ def get_google_config() -> GAIAConfig:
         enable_csv_logging=True
     )
 
-def get_openrouter_config() -> GAIAConfig:
-    """OpenRouter configuration"""
+def get_groq_config() -> GAIAConfig:
+    """Groc configuration"""
     return GAIAConfig(
-        model_provider="openrouter",
-        model_name="google/gemini-2.5-flash",
+        model_provider="groq",
+        model_name="qwen/qwen3-32b",
         temperature=0.1,
         enable_smart_routing=True,
         enable_csv_logging=True
@@ -55,7 +55,7 @@ def get_performance_config() -> GAIAConfig:
     """Speed-optimized configuration"""
     return GAIAConfig(
         model_provider="groq",
-        model_name="qwen-qwq-32b", 
+        model_name="qwen/qwen3-32b", 
         temperature=0.1,
         max_agent_steps=12,
         enable_smart_routing=True,
