@@ -99,6 +99,8 @@ langchain-anthropic = "^0.3.17"
 pytest = "^7.4.0"
 pytest-cov = "^4.1.0"
 pytest-mock = "^3.12.0"
+# Notebooks
+nbstripout = "^0.8.1"
 
 # Code quality
 black = "^23.0.0"
@@ -119,6 +121,7 @@ notebook = "^7.0.0"
 # Debugging and profiling
 ipdb = "^0.13.0"
 memory-profiler = "^0.61.0"
+nbstripout = "^0.8.1"
 
 [tool.poetry.extras]
 selenium = ["selenium"]

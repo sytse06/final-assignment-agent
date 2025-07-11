@@ -5054,7 +5054,7 @@ version = "0.8.1"
 description = "Strips outputs from Jupyter and IPython notebooks"
 optional = false
 python-versions = ">=3.8"
-groups = ["main"]
+groups = ["main", "dev"]
 files = [
     {file = "nbstripout-0.8.1-py2.py3-none-any.whl", hash = "sha256:79a8c8da488d98c54c112fa87185045f0271a97d84f1d46918d6a3ee561b30e7"},
     {file = "nbstripout-0.8.1.tar.gz", hash = "sha256:eaac8b6b4e729e8dfe1e5df2c0f8ba44abc5a17a65448f0480141f80be230bb1"},
@@ -10181,4 +10181,4 @@ selenium = ["selenium"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "3181ce5b6a89396f1dd24655e4ef5c726f7dd6d9e7702cd03180c8eb5bfb7cf7"
+content-hash = "1272f0a2fa3571a86a6bdd2abe8059594d072596f127af5fa4c598f988e8c249"
