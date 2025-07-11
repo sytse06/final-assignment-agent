@@ -35,13 +35,17 @@ class GAIAAgent:
             print("❌ Agent system not available - using fallback responses")
     
     def __call__(self, task_id: str, question: str) -> str:
+        """Main execution method called by the evaluation system"""
         
         if self.agent:
             try:
-                # Calling execution method
-                result = self.agent.run_single_question(question=question, task_id=task_id)
+                # Try the correct method name first
+                if hasattr(self.agent, 'process_question'):
+                    result = self.agent.process_question(question, task_id=task_id)
+                else:
+                    result = self.agent.run_single_question(question=question, task_id=task_id)
                 
-                # Extract the final answer
+                # Extract the final answer (works for both methods)
                 final_answer = result.get("final_answer", "")
                 
                 # Log execution details for debugging
@@ -49,11 +53,28 @@ class GAIAAgent:
                 steps = len(result.get("steps", []))
                 print(f"Task {task_id}: {complexity} question, {steps} steps")
                 
-                return final_answer if final_answer else "No answer generated"
-                
+                # Enhanced answer validation
+                if final_answer and final_answer.strip():
+                    return final_answer.strip()
+                else:
+                    # Fallback: try to extract from raw_answer
+                    raw_answer = result.get("raw_answer", "")
+                    if raw_answer and raw_answer.strip():
+                        return raw_answer.strip()
+                    else:
+                        return "No answer generated"
+                    
             except Exception as e:
                 print(f"❌ Processing error for task {task_id}: {e}")
-                return f"ERROR: {str(e)}"
+                
+                # Enhanced error handling
+                error_str = str(e)
+                if "rate limit" in error_str.lower():
+                    return "Rate limit reached - please try again later"
+                elif "timeout" in error_str.lower():
+                    return "Request timeout - question too complex"
+                else:
+                    return f"ERROR: {error_str}"
         
         # Enhanced fallback responses when agent system unavailable
         return self._fallback_response(question)
