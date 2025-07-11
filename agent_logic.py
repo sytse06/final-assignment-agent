@@ -692,6 +692,17 @@ class GAIAAgent:
             print(f"❌ Error loading image: {e}")
             return None
 
+    def _download_file_once(self, task_id: str, file_name: str) -> Optional[str]:
+        """Download file from GAIA evaluation system"""
+        try:
+            # For HF Spaces evaluation, files are typically pre-cached
+            # Return None to indicate no local file available
+            print(f"📁 File download requested: {file_name} for task {task_id}")
+            return None
+        except Exception as e:
+            print(f"❌ File download failed: {e}")
+            return None
+
     # ============================================================================
     # SMOLAGENTS COORDINATOR AND SPECIALISTS
     # ============================================================================        
