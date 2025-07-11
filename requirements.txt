@@ -42,7 +42,7 @@ docling>=2.36.1
 pymupdf>=1.26.1
 
 # Web Scraping and Search
-#duckduckgo-search>=8.0.2
+duckduckgo-search>=8.0.2
 lxml>=5.3.0
 
 # RAG and Embeddings
