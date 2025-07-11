@@ -707,8 +707,8 @@ class GAIAAgent:
                 tools=[],
                 additional_authorized_imports=[
                     "pandas", "numpy", "openpyxl", "xlrd", "csv",
-                    "scipy", "matplotlib", "seaborn", 
-                    "sklearn", "scikit-learn", "statistics", "math"
+                    "scipy", "matplotlib", "seaborn", "scikit-learn", 
+                    "statistics", "math"
                 ],
                 model=self.specialist_model,
                 max_steps=self.config.max_agent_steps,
@@ -800,20 +800,17 @@ class GAIAAgent:
                 managed_agents=list(specialist_agents.values()),
                 additional_authorized_imports=[
                     # File preprocessing (CORE RESPONSIBILITY)
-                    "zipfile", "tarfile", "gzip", "bz2",  # Archive handling
+                    "zipfile", "tarfile", "gzip", "bz2",
                     
                     # File operations and inspection
-                    "open", "codecs", "chardet", "os", "sys", "io", "pathlib",
-                    "mimetypes", "tempfile", "shutil",    # File management
+                    "codecs", "chardet", "os", "sys", "io", "pathlib",
+                    "mimetypes", "tempfile", "shutil",
                     
                     # Data preprocessing for specialist preparation
                     "pandas", "numpy", "csv", "json", "xml", "base64",
                     
                     # Binary and media file inspection
-                    "PIL", "wave", "struct", "binascii",  # Basic media inspection
-
-                    # Smart file handling functions
-                    "smart_file_handler", "is_url",
+                    "PIL", "wave", "struct", "binascii",
                     
                     # Web and networking
                     "requests", "urllib", "time", "typing"

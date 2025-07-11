@@ -10,7 +10,7 @@ huggingface-hub>=0.33.0
 torch>=2.1.0
 
 # SmolagAgents - Core agent framework
-smolagents[transformers]>=1.19.0
+smolagents[all]>=1.19.0
 
 # LangChain Ecosystem (CRITICAL - WAS MISSING)
 langchain-core>=0.3.68,<0.4.0
@@ -32,6 +32,7 @@ pillow>=11.0.0
 openpyxl>=3.1.0
 pypdf2>=3.0.0
 python-docx>=1.1.0
+chardet>=5.2.0
 
 # Scientific Computing
 numpy>=2.0.0,<3.0.0
@@ -67,7 +68,7 @@ arxiv>=2.1.0
 # Data Analysis (CodeAgent additional_authorized_imports)
 matplotlib>=3.7.0
 seaborn>=0.12.0
-scikit-learn>=1.3.0
+scikit-learn>=1.7.0
 xlrd>=2.0.1
 xlsxwriter>=3.1.0
 
