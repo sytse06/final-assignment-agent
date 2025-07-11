@@ -12,10 +12,24 @@ def get_groq_config() -> GAIAConfig:
     """Fast, reliable Groq configuration"""
     return GAIAConfig(
         model_provider="groq",
-        model_name="qwen-qwq-32b",
+        model_name="qwen/qwen3-32b",
         temperature=0.3,
         enable_smart_routing=True,
         enable_csv_logging=True
+    )
+
+def get_anthropic_config() -> GAIAConfig:
+    """Anthropic Claude Sonnet 4 configuration"""
+    return GAIAConfig(
+        model_provider="anthropic",
+        model_name="claude-sonnet-4-20250514",
+        temperature=0.2,
+        max_agent_steps=18,
+        enable_smart_routing=True,
+        skip_rag_for_simple=True,
+        rag_examples_count=3,
+        enable_csv_logging=True,
+        debug_mode=False
     )
 
 def get_google_config() -> GAIAConfig:
@@ -82,13 +96,15 @@ def create_gaia_agent(preset_or_config=None) -> GAIAAgent:
     
     if isinstance(preset_or_config, str):
         presets = {
+            "openrouter": get_openrouter_config,
+            "anthropic": get_anthropic_config,
+            "claude": get_anthropic_config,
+            "performance": get_performance_config,
+            "accuracy": get_accuracy_config,
             "groq": get_groq_config,
             "qwen": get_groq_config,  
             "google": get_google_config,
             "gemini": get_google_config,
-            "openrouter": get_openrouter_config,
-            "performance": get_performance_config,
-            "accuracy": get_accuracy_config
         }
         
         if preset_or_config.lower() in presets:
@@ -145,7 +161,7 @@ def compare_configs(config_names: List[str], test_question: str = "What is 25% o
     
     return results
 
-def test_routing(config_name: str = "groq") -> Dict:
+def test_routing(config_name: str = "anthropic") -> Dict:
     """Test smart routing behavior"""
     
     test_cases = [

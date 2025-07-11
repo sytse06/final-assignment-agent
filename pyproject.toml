@@ -60,7 +60,7 @@ selenium = {version = "^4.15.0", optional = true}
 
 # Optional dependencies for enhanced functionality
 openai = {version = "^1.0.0", optional = true}
-anthropic = {version = "^0.7.0", optional = true}
+anthropic = {version = "^0.57.0", optional = true}
 seaborn = "^0.13.2"
 nbstripout = "^0.8.1"
 sentence-transformers = "^4.1.0"
@@ -92,6 +92,7 @@ chardet = "^5.2.0"
 helium = "^5.1.1"
 ddgs = "^9.0.0"
 duckduckgo-search = "^8.1.1"
+langchain-anthropic = "^0.3.17"
 
 [tool.poetry.group.dev.dependencies]
 # Testing

@@ -20,9 +20,10 @@ import uuid
 # Import our agent system and dataset manager
 from agent_logic import GAIAAgent, GAIAConfig
 from agent_interface import (
-    create_gaia_agent, 
-    get_groq_config, 
-    get_openrouter_config, 
+    create_gaia_agent,
+    get_openrouter_config,
+    get_anthropic_config, 
+    get_groq_config,  
     get_google_config, 
     get_ollama_config, 
     get_performance_config, 
@@ -81,13 +82,14 @@ def get_agent_config_by_name(config_name: str) -> GAIAConfig:
     """Get agent configuration by name - UPDATED for GAIAConfig compatibility"""
     
     config_functions = {
-        "groq": get_groq_config,
-        "qwen": get_groq_config,
+        "openrouter": get_openrouter_config,
+        "or": get_openrouter_config,
+        "anthropic": get_anthropic_config,
+        "claude": get_anthropic_config,
+        "groq": get_groq_config,,
         "qwen3_32b": get_groq_config,
         "google": get_google_config,
         "gemini": get_google_config,
-        "openrouter": get_openrouter_config,
-        "or": get_openrouter_config,
         "ollama": get_ollama_config,
         "local": get_ollama_config,
         "performance": get_performance_config,

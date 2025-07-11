@@ -22,6 +22,7 @@ from langgraph.graph import StateGraph, START, END
 from langchain_openai import ChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
 
 import openai
 
@@ -422,23 +423,25 @@ class GAIAAgent:
         """Initialize orchestration model (LangChain)"""
         try:
             # Initialize orchestration model (LangChain)
-            if self.config.model_provider == "groq":
-                orchestration_model = ChatGroq(
-                    model=self.config.model_name,
-                    api_key=os.getenv("GROQ_API_KEY"),
-                    temperature=self.config.temperature
-                )
-            elif self.config.model_provider == "openrouter":
+            if self.config.model_provider == "openrouter":
                 orchestration_model = ChatOpenAI(
                     model=self.config.model_name,
                     api_key=os.getenv("OPENROUTER_API_KEY"),
                     base_url="https://openrouter.ai/api/v1",
                     temperature=self.config.temperature
                 )
-            elif self.config.model_provider == "google":
-                orchestration_model = ChatGoogleGenerativeAI(
+            elif self.config.model_provider == "anthropic":
+                orchestration_model = ChatAnthropic(
                     model=self.config.model_name,
-                    google_api_key=os.getenv("GOOGLE_API_KEY"),
+                    api_key=os.getenv("ANTHROPIC_API_KEY"),
+                    base_url="https://api.anthropic.com",
+                    temperature=self.config.temperature
+                )
+            elif self.config.model_provider == "groq":
+                orchestration_model = ChatGroq(
+                    model=self.config.model_name,
+                    google_api_key=os.getenv("GROQ_API_KEY"),
+                    base_url="https://api.groq.com",
                     temperature=self.config.temperature
                 )
             elif self.config.model_provider == "ollama":
@@ -465,14 +468,14 @@ class GAIAAgent:
             raise
 
     def _initialize_specialist_model(self) -> LiteLLMModel:
-        """🔥 NEW: Initialize LiteLLM model for SmolagAgents"""
+        """Initialize LiteLLM model for SmolagAgents"""
         try:
-            if self.config.model_provider == "groq":
-                model_id = f"groq/{self.config.model_name}"
-                api_key = os.getenv("GROQ_API_KEY")
-            elif self.config.model_provider == "openrouter":
+            if self.config.model_provider == "openrouter":
                 model_id = f"openrouter/{self.config.model_name}"
                 api_key = os.getenv("OPENROUTER_API_KEY")
+            elif self.config.model_provider == "anthropic":
+                model_id = f"anthropic/{self.config.model_name}"
+                api_key = os.getenv("ANTHROPIC_API_KEY")
             elif self.config.model_provider == "ollama":
                 model_id = f"ollama_chat/{self.config.model_name}"
                 return LiteLLMModel(
@@ -480,9 +483,9 @@ class GAIAAgent:
                     api_base=self.config.api_base or "http://localhost:11434",
                     num_ctx=self.config.num_ctx,
                     temperature=self.config.temperature)
-            elif self.config.model_provider == "google":
-                model_id = f"gemini/{self.config.model_name}"
-                api_key = os.getenv("GOOGLE_API_KEY")
+            elif self.config.model_provider == "groq":
+                model_id = f"groq/{self.config.model_name}"
+                api_key = os.getenv("GROQ_API_KEY")
             else:
                 # Fallback to OpenRouter
                 model_id = "openrouter/qwen/qwen-2.5-coder-32b-instruct:free"
@@ -525,9 +528,10 @@ class GAIAAgent:
                 'gpt-4o': True,
                 'gpt-4-turbo': True,
                 
-                # Anthropic models  
-                'claude-3': True,
-                'claude-3.5': True,
+                # Anthropic models
+                'claude-sonnet-4': True,  
+                'claude-sonnet-3.7': True,
+                'claude-sonnet-3.5': True,
                 
                 # Google models
                 'gemini-pro-vision': True,
