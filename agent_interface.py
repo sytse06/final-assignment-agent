@@ -8,12 +8,12 @@ from agent_logic import GAIAAgent, GAIAConfig
 # CONFIGURATION PRESETS (✅ Real Value)
 # ============================================================================
 
-def get_groq_config() -> GAIAConfig:
+def get_openrouter_config() -> GAIAConfig:
     """Fast, reliable Groq configuration"""
     return GAIAConfig(
-        model_provider="groq",
-        model_name="qwen/qwen3-32b",
-        temperature=0.3,
+        model_provider="openrouter",
+        model_name="google/gemini-2.5-flash",
+        temperature=0.1,
         enable_smart_routing=True,
         enable_csv_logging=True
     )
@@ -42,11 +42,11 @@ def get_google_config() -> GAIAConfig:
         enable_csv_logging=True
     )
 
-def get_openrouter_config() -> GAIAConfig:
+def get_groq_config() -> GAIAConfig:
     """OpenRouter configuration"""
     return GAIAConfig(
-        model_provider="openrouter",
-        model_name="google/gemini-2.5-flash",
+        model_provider="groq",
+        model_name="qwen/qwen3-32b",
         temperature=0.1,
         enable_smart_routing=True,
         enable_csv_logging=True
@@ -68,9 +68,9 @@ def get_ollama_config(model_name: str = "devstral-16k") -> GAIAConfig:
 def get_performance_config() -> GAIAConfig:
     """Speed-optimized configuration"""
     return GAIAConfig(
-        model_provider="groq",
-        model_name="qwen-qwq-32b", 
-        temperature=0.1,
+        model_provider="anthropic",
+        model_name="claude-sonnet-4-20250514", 
+        temperature=0.3,
         max_agent_steps=12,
         enable_smart_routing=True,
         debug_mode=False
@@ -110,12 +110,12 @@ def create_gaia_agent(preset_or_config=None) -> GAIAAgent:
         if preset_or_config.lower() in presets:
             config = presets[preset_or_config.lower()]()
         else:
-            print(f"⚠️  Unknown preset '{preset_or_config}', using groq")
-            config = get_groq_config()
+            print(f"⚠️  Unknown preset '{preset_or_config}', using openrouter")
+            config = get_openrouter_config()
     
     elif isinstance(preset_or_config, dict):
         # Apply overrides to default config
-        config = get_groq_config()  # Start with default
+        config = get_anthropic_config()  # Start with default
         for key, value in preset_or_config.items():
             if hasattr(config, key):
                 setattr(config, key, value)
@@ -200,7 +200,7 @@ def test_routing(config_name: str = "anthropic") -> Dict:
     
     return {"accuracy": accuracy, "results": results}
 
-def quick_test(question: str = "What is 25% of 400?", config: str = "groq") -> bool:
+def quick_test(question: str = "What is 25% of 400?", config: str = "openrouter") -> bool:
     """Quick test - returns True/False for success"""
     try:
         agent = create_gaia_agent(config)
@@ -220,7 +220,7 @@ def quick_test(question: str = "What is 25% of 400?", config: str = "groq") -> b
 # BATCH TESTING (✅ Real Value - Multi-Question Testing)
 # ============================================================================
 
-def test_questions(questions: List[str], config: str = "groq") -> Dict:
+def test_questions(questions: List[str], config: str = "openrouter") -> Dict:
     """Test multiple questions with one configuration"""
     
     print(f"🧪 Testing {len(questions)} questions with {config}")
@@ -265,7 +265,7 @@ def test_questions(questions: List[str], config: str = "groq") -> Dict:
 # CONVENIENCE TESTING SUITES (✅ Real Value - Predefined Test Sets)
 # ============================================================================
 
-def test_math_suite(config: str = "groq"):
+def test_math_suite(config: str = "openrouter"):
     """Test mathematical reasoning"""
     math_questions = [
         "What is 25% of 400?",
@@ -275,7 +275,7 @@ def test_math_suite(config: str = "groq"):
     ]
     return test_questions(math_questions, config)
 
-def test_knowledge_suite(config: str = "groq"):
+def test_knowledge_suite(config: str = "openrouter"):
     """Test factual knowledge"""
     knowledge_questions = [
         "What are the primary colors?",
@@ -285,7 +285,7 @@ def test_knowledge_suite(config: str = "groq"):
     ]
     return test_questions(knowledge_questions, config)
 
-def run_comprehensive_test(config: str = "groq"):
+def run_comprehensive_test(config: str = "openrouter"):
     """Run all test suites"""
     print(f"🚀 Comprehensive test with {config}")
     print("=" * 40)

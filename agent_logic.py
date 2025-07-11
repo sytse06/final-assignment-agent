@@ -99,8 +99,8 @@ except Exception as e:
 @dataclass
 class GAIAConfig:
     """Configuration for GAIA agent"""
-    model_provider: str = "groq"
-    model_name: str = "qwen-qwq-32b"
+    model_provider: str = "openrouter"
+    model_name: str = "google/gemini-2.5-flash"
     temperature: float = 0.3
     agent_evaluation_api: str = "https://agents-course-unit4-scoring.hf.space/"
     enable_url_downloading: bool = True
