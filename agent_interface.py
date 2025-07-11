@@ -9,7 +9,7 @@ from agent_logic import GAIAAgent, GAIAConfig
 # ============================================================================
 
 def get_openrouter_config() -> GAIAConfig:
-    """Fast, reliable Groq configuration"""
+    """Openrouter gemini-2.5-flash configuration"""
     return GAIAConfig(
         model_provider="openrouter",
         model_name="google/gemini-2.5-flash",
@@ -29,7 +29,7 @@ def get_google_config() -> GAIAConfig:
     )
 
 def get_groq_config() -> GAIAConfig:
-    """Groc configuration"""
+    """Groq configuration"""
     return GAIAConfig(
         model_provider="groq",
         model_name="qwen/qwen3-32b",

@@ -430,9 +430,9 @@ class GAIAAgent:
                     temperature=self.config.temperature
                 )
             elif self.config.model_provider == "groq":
-                orchestration_model = ChatGroc(
+                orchestration_model = ChatGroq(
                     model=self.config.model_name,
-                    api_key=os.getenv("GROC_API_KEY"),                    
+                    api_key=os.getenv("GROQ_API_KEY"),                    
                     temperature=self.config.temperature
                 )
             elif self.config.model_provider == "google":
@@ -536,7 +536,7 @@ class GAIAAgent:
                 'gemini-2': True,
                 'gemini-2.5': True,
                 
-                # Miscellanous models
+                # Miscellaneous models
                 'qwen2.5-vl-32b-instruct': True,
                 'llava': True,
                 'qwen-vl': True,
