@@ -12,7 +12,7 @@ datasets>=2.14.0
 evaluate>=0.4.0
 
 # SmolagAgents - Core agent framework
-smolagents[all]>=1.19.0
+smolagents[transformers]>=1.19.0
 
 # LangChain Ecosystem (CRITICAL - WAS MISSING)
 langchain-core>=0.3.68,<0.4.0
