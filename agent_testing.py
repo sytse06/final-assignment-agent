@@ -86,7 +86,7 @@ def get_agent_config_by_name(config_name: str) -> GAIAConfig:
         "or": get_openrouter_config,
         "anthropic": get_anthropic_config,
         "claude": get_anthropic_config,
-        "groq": get_groq_config,,
+        "groq": get_groq_config,
         "qwen3_32b": get_groq_config,
         "google": get_google_config,
         "gemini": get_google_config,
