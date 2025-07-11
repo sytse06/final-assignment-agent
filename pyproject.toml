@@ -121,7 +121,6 @@ notebook = "^7.0.0"
 # Debugging and profiling
 ipdb = "^0.13.0"
 memory-profiler = "^0.61.0"
-nbstripout = "^0.8.1"
 
 [tool.poetry.extras]
 selenium = ["selenium"]
