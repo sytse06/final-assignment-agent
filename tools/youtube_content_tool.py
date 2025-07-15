@@ -2,8 +2,12 @@ from smolagents import Tool
 import yt_dlp
 import re
 import requests
+import os
+import tempfile
+import json
 from urllib.parse import urlparse, parse_qs
-from typing import Optional
+from typing import Optional, Dict, Any
+import logging
 
 
 class YouTubeContentTool(Tool):
@@ -23,39 +27,160 @@ class YouTubeContentTool(Tool):
     }
     output_type = "string"
 
-    def __init__(self, **kwargs):
-        self._state_question = None
+    def __init__(self, cookies_file: Optional[str] = None, **kwargs):
+        """
+        Initialize YouTube tool with optional cookie support
+        
+        Args:
+            cookies_file: Path to cookies.txt file for authentication
+        """
+        # Initialize instance variables
+        self._state_question: Optional[str] = None
+        self.cookies_file: Optional[str] = cookies_file
+        self.browser_cookies: Optional[Dict[str, Optional[str]]] = None
+        
+        self._setup_logging()
         super().__init__(**kwargs)
+    
+    def _setup_logging(self):
+        """Setup logging to help debug extraction issues"""
+        logging.getLogger('yt_dlp').setLevel(logging.WARNING)
     
     def configure_from_state(self, question: str):
         """Store question for potential query enhancement"""
         self._state_question = question
         print(f"🎥 YouTubeContentTool noted question context: {question[:50]}...")
+        
+    def set_cookies_from_browser(self, browser: str = "chrome", profile: Optional[str] = None) -> None:
+        """
+        Configure tool to extract cookies from browser
+        
+        Args:
+            browser: Browser name ("chrome", "firefox", "safari", "edge", "opera")
+            profile: Optional browser profile name
+        """
+        self.browser_cookies = {"browser": browser, "profile": profile}
+        print(f"🍪 Configured to use {browser} cookies" + (f" (profile: {profile})" if profile else ""))
+
+    def set_cookies_from_file(self, cookies_file: str) -> None:
+        """
+        Set cookies from Netscape format cookies.txt file
+        
+        Args:
+            cookies_file: Path to cookies.txt file
+        """
+        if os.path.exists(cookies_file):
+            self.cookies_file = cookies_file
+            print(f"🍪 Using cookies from file: {cookies_file}")
+        else:
+            print(f"⚠️ Cookie file not found: {cookies_file}")
+
+    def create_cookies_from_env(self) -> Optional[str]:
+        """
+        Create cookies file from environment variables/secrets for HF Spaces deployment
+        Expects YOUTUBE_COOKIES secret/environment variable with cookie data
+        
+        Returns:
+            Path to temporary cookies file or None
+        """
+        try:
+            # Check for cookie data in environment variable/secret
+            cookie_data = os.environ.get('YOUTUBE_COOKIES')
+            if not cookie_data:
+                print("ℹ️ No YOUTUBE_COOKIES secret/environment variable found")
+                return None
+            
+            # Create temporary cookies file
+            temp_dir = tempfile.gettempdir()
+            cookies_path = os.path.join(temp_dir, 'youtube_cookies.txt')
+            
+            # Write cookies to file
+            with open(cookies_path, 'w') as f:
+                f.write(cookie_data)
+            
+            print(f"🍪 Created temporary cookies file: {cookies_path}")
+            return cookies_path
+            
+        except Exception as e:
+            print(f"⚠️ Failed to create cookies from secret/environment: {e}")
+            return None
+
+    def _should_try_simple_first(self, video_url: str) -> bool:
+        """
+        Determine if we should try simple extraction first
+        Some videos are more likely to work without authentication
+        """
+        video_id = self._extract_video_id(video_url)
+        if not video_id:
+            return True  # Default to simple approach
+        
+        # Simple heuristics - could be expanded
+        # Most YouTube videos work with simple approach unless:
+        # - They're very popular (more protection)
+        # - They're from major channels (more protection)
+        # - They're recent (more protection)
+        
+        # For now, always try simple first (fastest)
+        return True
 
     def forward(self, url_or_id: str, query: Optional[str] = None) -> str:
         """
-        OFFICIAL WORKAROUND: Use Optional[str] = None in signature
-        Runtime validation handled by making query truly optional
+        Extract YouTube content with enhanced cookie support
         """
         # Validate required parameter
         if not url_or_id or not url_or_id.strip():
             raise ValueError("url_or_id parameter is required")
         
-        # Handle optional query parameter (None is valid)
+        # Handle optional query parameter
         if query is None:
             query = ""
         
-        # Extract YouTube video content with yt-dlp
         try:
             # Normalize input to video URL
             video_url = self._normalize_video_url(url_or_id)
             if not video_url:
                 return "Error: Invalid YouTube URL or video ID"
             
-            # Extract video content using yt-dlp
-            video_content = self._extract_video_content(video_url)
+            # Try multiple extraction strategies with smart ordering
+            video_content = None
+            
+            # Option 1: Simple public video approach (fastest, works for most content)
             if not video_content:
-                return "Error: Failed to extract video content"
+                print("🎬 Trying simple public video extraction...")
+                video_content = self._extract_public_video_content(video_url)
+            
+            # Option 2: Try with environment cookies (HF Spaces)
+            if not video_content:
+                env_cookies = self.create_cookies_from_env()
+                if env_cookies:
+                    print("🍪 Trying with environment cookies...")
+                    video_content = self._extract_video_content(video_url, cookies_file=env_cookies)
+                    # Clean up temporary file
+                    try:
+                        os.unlink(env_cookies)
+                    except:
+                        pass
+            
+            # Option 3: Try with configured cookies file
+            if not video_content and self.cookies_file:
+                print(f"🍪 Trying with cookies file: {self.cookies_file}")
+                video_content = self._extract_video_content(video_url, cookies_file=self.cookies_file)
+            
+            # Option 4: Try with browser cookies (if configured)
+            if not video_content and self.browser_cookies:
+                print(f"🍪 Trying browser cookies: {self.browser_cookies['browser']}")
+                video_content = self._extract_video_content(
+                    video_url, 
+                    cookiesfrom_browser=self.browser_cookies
+                )
+            
+            # Option 5: Final fallback - no authentication
+            if not video_content:
+                print("⚠️ Trying final fallback without authentication...")
+                video_content = self._extract_video_content(video_url)
+            
+            if not video_content:
+                return self._format_extraction_failure(video_url)
             
             # Format output based on query
             if query.strip():
@@ -64,7 +189,117 @@ class YouTubeContentTool(Tool):
                 return self._format_full_response(video_content)
                 
         except Exception as e:
-            return f"Error extracting YouTube content: {str(e)}"
+            return f"Error extracting YouTube content: {str(e)}\n\n{self._get_troubleshooting_tips()}"
+
+    def _extract_video_content(self, video_url: str, cookies_file: Optional[str] = None, 
+                             cookiesfrom_browser: Optional[Dict] = None) -> Optional[dict]:
+        """Enhanced video content extraction with cookie support"""
+        try:
+            # Base yt-dlp options inspired by working YoutubeVideoTool
+            ydl_opts = {
+                'writesubtitles': True,
+                'writeautomaticsub': True,
+                'subtitleslangs': ['en', 'en-US', 'en-GB', 'en-AU'],
+                'skip_download': True,
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+                'forceurl': True,  # Force URL extraction (helps avoid some bot detection)
+                'noplaylist': True,  # Don't process playlists
+                # Simpler format selection (less suspicious)
+                'format': 'best[height<=720]/best',  # Reasonable quality limit
+                # Basic headers (don't over-engineer)
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                }
+            }
+            
+            # Add cookie authentication if available
+            if cookies_file and os.path.exists(cookies_file):
+                ydl_opts['cookiefile'] = cookies_file
+                print(f"🍪 Using cookies from file: {cookies_file}")
+            elif cookiesfrom_browser:
+                ydl_opts['cookiesfrombrowser'] = (
+                    cookiesfrom_browser['browser'], 
+                    cookiesfrom_browser.get('profile')
+                )
+                print(f"🍪 Using {cookiesfrom_browser['browser']} browser cookies")
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Extract video info and subtitles
+                info = ydl.extract_info(video_url, download=False)
+                
+                # Get transcript from subtitles
+                transcript = self._extract_transcript(info)
+                
+                return {
+                    'video_id': info.get('id'),
+                    'title': info.get('title', 'Unknown Title'),
+                    'description': info.get('description', ''),
+                    'duration': info.get('duration', 0),
+                    'view_count': info.get('view_count', 0),
+                    'upload_date': info.get('upload_date', ''),
+                    'uploader': info.get('uploader', 'Unknown'),
+                    'uploader_id': info.get('uploader_id', ''),
+                    'transcript': transcript,
+                    'has_transcript': transcript is not None and len(transcript.strip()) > 0,
+                    'url': video_url,
+                    'extraction_method': 'authenticated'
+                }
+                
+        except Exception as e:
+            print(f"yt-dlp extraction error: {e}")
+            return None
+
+    def _extract_public_video_content(self, video_url: str) -> Optional[dict]:
+        """
+        Simple extraction for public videos using YoutubeVideoTool approach
+        This method targets lower-quality content that's less protected
+        """
+        try:
+            # Minimal configuration inspired by working YoutubeVideoTool
+            ydl_opts = {
+                'quiet': True,
+                'skip_download': True,
+                'writesubtitles': True,
+                'writeautomaticsub': True,
+                'subtitlesformat': 'vtt',
+                'subtitleslangs': ['en'],
+                'forceurl': True,  # Key flag from working tool
+                'noplaylist': True,
+                # Target lower quality content (less protected)
+                'format': 'bestvideo[height<=480]+bestaudio/best[height<=480]',
+                # Minimal headers to avoid detection
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=False)
+                
+                # Get transcript from subtitles
+                transcript = self._extract_transcript(info)
+                
+                return {
+                    'video_id': info.get('id'),
+                    'title': info.get('title', 'Unknown Title'),
+                    'description': info.get('description', ''),
+                    'duration': info.get('duration', 0),
+                    'view_count': info.get('view_count', 0),
+                    'upload_date': info.get('upload_date', ''),
+                    'uploader': info.get('uploader', 'Unknown'),
+                    'uploader_id': info.get('uploader_id', ''),
+                    'transcript': transcript,
+                    'has_transcript': transcript is not None and len(transcript.strip()) > 0,
+                    'url': video_url,
+                    'extraction_method': 'public_simple'
+                }
+                
+        except Exception as e:
+            print(f"Public video extraction failed: {e}")
+            return None
 
     def _normalize_video_url(self, url_or_id: str) -> Optional[str]:
         """Convert various YouTube URL formats to standard format"""
