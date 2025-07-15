@@ -2,6 +2,7 @@
 # Cleaned up tools initialization for GAIA Agent with enhanced diagnostics
 
 import os
+import smolagents
 from pathlib import Path
 
 # Import core custom tools (keeping only what's relevant for GAIA)
@@ -11,6 +12,15 @@ try:
 except ImportError as e:
     print(f"⚠️ ContentRetrieverTool failed to load: {e}")
     ContentRetrieverTool = None
+# Import SpeechToTextTool with proper error handling
+try:
+    from smolagents import SpeechToTextTool
+    SPEECH_TO_TEXT_AVAILABLE = True
+    print("✅ SpeechToTextTool loaded")
+except ImportError as e:
+    print(f"⚠️ SpeechToTextTool failed to load: {e}")
+    SpeechToTextTool = None
+    SPEECH_TO_TEXT_AVAILABLE = False
 
 # Import YouTube tool if available
 try:
@@ -78,10 +88,12 @@ __all__ = [
     'ContentRetrieverTool',
     'YouTubeContentTool', 
     'VisionWebBrowserTool',
+    'SpeechToTextTool',
     
     # Availability flags
     'YOUTUBE_TOOL_AVAILABLE',
     'VISION_BROWSER_AVAILABLE',
+    'SPEECH_TO_TEXT_AVAILABLE',
     'LANGCHAIN_TOOLS_AVAILABLE',
     
     # LangChain research tools
@@ -111,6 +123,7 @@ def get_tool_status():
         'ContentRetrieverTool': ContentRetrieverTool is not None,
         'YouTubeContentTool': YouTubeContentTool is not None,
         'VisionWebBrowserTool': VisionWebBrowserTool is not None,
+        'SpeechToTextTool': SPEECH_TO_TEXT_AVAILABLE,
         
         # Research capabilities
         'research_tools_available': langchain_status.get('research_tools_available', False),
@@ -120,7 +133,8 @@ def get_tool_status():
         'total_core_tools': sum([
             ContentRetrieverTool is not None,
             YouTubeContentTool is not None,
-            VisionWebBrowserTool is not None
+            VisionWebBrowserTool is not None,
+            SPEECH_TO_TEXT_AVAILABLE
         ]),
         'total_research_tools': len(ALL_LANGCHAIN_TOOLS) if LANGCHAIN_TOOLS_AVAILABLE else 0,
         
@@ -128,6 +142,7 @@ def get_tool_status():
         'content_processing_capable': ContentRetrieverTool is not None,
         'web_navigation_capable': VisionWebBrowserTool is not None,
         'multimedia_capable': YouTubeContentTool is not None,
+        'audio_processing_capable': SPEECH_TO_TEXT_AVAILABLE,
         'research_capable': langchain_status.get('research_tools_available', False)
     }
 
@@ -462,11 +477,11 @@ def get_content_processor_tools():
     if ContentRetrieverTool:
         tools.append(ContentRetrieverTool())
         print("✓ Added ContentRetrieverTool to content_processor")
-    
-    # Vision-based web navigation and content acquisition
-    if VisionWebBrowserTool:
-        tools.append(VisionWebBrowserTool())
-        print("✓ Added VisionWebBrowserTool to content_processor")
+
+    # Speech_to_text processing
+    if SpeechToTextTool:
+        tools.append(SpeechToTextTool())
+        print("✓ Added SpeechToTextTool to content_processor")        
     
     # Multimedia content processing (NEW: YouTube support)
     if YouTubeContentTool:

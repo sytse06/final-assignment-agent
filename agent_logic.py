@@ -760,10 +760,13 @@ class GAIAAgent:
     # ============================================================================        
 
     def _create_specialist_agents(self) -> Dict[str, Any]:
-            """Create specialist agents using smolagents pattern"""
-            logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
-            
-            # 1. Data Analyst - CodeAgent for direct Python file access
+        """Create specialist agents using smolagents pattern"""
+        logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
+        
+        specialist_agents = {}
+        
+        # 1. Data Analyst - CodeAgent for direct Python file access
+        try:
             data_analyst = CodeAgent(
                 name="data_analyst", 
                 description="Excel/CSV analysis and numerical calculations using pandas",
@@ -778,13 +781,19 @@ class GAIAAgent:
                 add_base_tools=True,
                 logger=logger
             )
+            specialist_agents["data_analyst"] = data_analyst
+            print(f"✅ Data Analyst: {len(data_analyst.additional_authorized_imports)} imports")
+        except Exception as e:
+            print(f"❌ Failed to create data_analyst: {e}")
             
-            # 2. Web Researcher - Focused on search and discovery
+        # 2. Web Researcher - ToolCallingAgent for text-based search
+        try:
+            web_tools = []
             try:
                 from tools import get_web_researcher_tools
                 web_tools = get_web_researcher_tools()
             except ImportError:
-                print("⚠️ tools module unavailable - using fallback")
+                print("⚠️ tools module unavailable - using fallback webtools")
                 web_tools = []
                 try:
                     from smolagents import VisitWebpageTool, WikipediaSearchTool
@@ -801,8 +810,14 @@ class GAIAAgent:
                 add_base_tools=len(web_tools) == 0,
                 logger=logger
             )
+            specialist_agents["web_researcher"] = web_researcher
+            print(f"✅ Web Researcher: {len(web_tools)} tools")
+        except Exception as e:
+            print(f"❌ Failed to create web_researcher: {e}")
             
-            # 3. Content Processor - Deep content analysis
+        # 3. Content Processor - ToolCallingAgent for document/media processing
+        try:
+            content_tools = []
             try:
                 from tools import get_content_processor_tools
                 content_tools = get_content_processor_tools()
@@ -819,20 +834,57 @@ class GAIAAgent:
                 add_base_tools=True,
                 logger=logger
             )
+            specialist_agents["content_processor"] = content_processor
+            print(f"✅ Content Processor: {len(content_tools)}")
+        except Exception as e:
+            print(f"❌ Failed to create content_processor: {e}")
+        
+        # 4. Vision Browser Agent - CodeAgent for visual web navigation
+        try:
+            if VISION_BROWSER_AVAILABLE:
+                vision_browser_agent = CodeAgent(
+                    name="vision_browser_agent",
+                    description="Visual web navigation and screenshot analysis specialist.",
+                    tools=[],
+                    additional_authorized_imports=[
+                        # Browser automation
+                        "selenium", "helium", 
+                        
+                        # Image processing
+                        "PIL", "io", "base64", "requests",
+                        
+                        # Browser setup and configuration
+                        "webdriver_manager", "chromedriver_autoinstaller",
+                        
+                        # File and system operations
+                        "os", "sys", "time", "tempfile", "pathlib",
+                        
+                        # Error handling and retries
+                        "contextlib", "functools", "traceback"
+                    ],
+                    model=self.specialist_model,
+                    max_steps=self.config.max_agent_steps,
+                    add_base_tools=True,
+                    logger=logger
+                )
+                specialist_agents["vision_browser_agent"] = vision_browser_agent
+                print(f"✅ Vision Browser Agent: {len(vision_browser_agent.additional_authorized_imports)} imports")
+            else:
+                print("⚠️ Vision Browser Agent: Not available (missing dependencies)")
+        except Exception as e:
+            print(f"❌ Failed to create vision_browser_agent: {e}")
 
-            # Return specialist agents
-            specialist_agents = {
-                "data_analyst": data_analyst,
-                "web_researcher": web_researcher,
-                "content_processor": content_processor
-            }
-            
-            print(f"🎯 Created {len(specialist_agents)} specialist agents:")
-            print(f"   📊 data_analyst: {len(data_analyst.additional_authorized_imports)} imports")
-            print(f"   🔍 web_researcher: {len(web_tools)} tools")
-            print(f"   📱 content_processor: {len(content_tools)} tools")
-            
-            return specialist_agents
+        # Print final summary
+        print(f"🎯 Created {len(specialist_agents)} specialist agents:")
+        for name, agent in specialist_agents.items():
+            if hasattr(agent, 'additional_authorized_imports'):
+                print(f"   📊 {name}: {len(agent.additional_authorized_imports)} imports")
+            elif hasattr(agent, 'tools'):
+                print(f"   🔧 {name}: {len(agent.tools)} tools")
+            else:
+                print(f"   ✅ {name}: configured")
+        
+        return specialist_agents
         
     def _create_coordinator(self) -> CodeAgent:
             """Create coordinator using smolagents hierarchical pattern with file-first strategy"""
@@ -844,7 +896,7 @@ class GAIAAgent:
             # Enhanced coordinator with direct file access via CodeAgent imports
             coordinator = CodeAgent(
                 name="gaia_coordinator",
-                description="""GAIA task coordinator managing three specialist agents.
+                description="""GAIA task coordinator managing four specialist agents.
 
         WORKFLOW:
 
@@ -857,6 +909,7 @@ class GAIAAgent:
         - data_analyst: Numerical analysis, calculations, data processing
         - web_researcher: Search and discovery, online information gathering  
         - content_processor: Document/media processing, content extraction
+        - vision_browser_agent: Visual web navigation with screenshots
 
         The coordinator handles file preparation so specialists can focus on their core capabilities.""",
                 tools=[],  # No tools needed - direct file access via imports
@@ -874,16 +927,13 @@ class GAIAAgent:
                     
                     # Binary and media file inspection
                     "PIL", "wave", "struct", "binascii",  # Basic media inspection
-
-                    # Smart file handling functions
-                    "smart_file_handler", "is_url",
                     
                     # Web and networking
                     "requests", "urllib", "time", "typing"
                 ],
                 model=self.specialist_model,
-                planning_interval=5,  # More frequent planning for file-first workflow
-                max_steps=15,  # Extra steps for file access + coordination
+                planning_interval=5,
+                max_steps=15,
                 logger=logger
             )
             
@@ -918,9 +968,12 @@ class GAIAAgent:
                     elif file_type == "document":
                         file_context += "\nGUIDANCE: Use content_processor with file_path from additional_args"
                     elif file_type == "image":
-                        file_context += "\nGUIDANCE: Use content_processor with vision capabilities"
+                        file_context += "\nGUIDANCE: Use vision_browser_agent for visual analysis and OCR"
                     elif file_type == "media":
                         file_context += "\nGUIDANCE: Use content_processor for audio/video transcription"
+                    else:
+                        file_context += "\nGUIDANCE: Analyze file type and choose appropriate specialist"            
+                    
                 
             elif file_path and file_path.strip() and os.path.exists(file_path):
                 # Cache path exists but may lack extension
@@ -949,6 +1002,7 @@ class GAIAAgent:
     - data_analyst: CodeAgent with pandas/numpy for data analysis and calculations
     - web_researcher: ToolCallingAgent for web search and information gathering  
     - content_processor: ToolCallingAgent with ContentRetrieverTool for document/media processing
+    - vision_browser_agent: CodeAgent for visual web navigation with screenshots
 
     COORDINATOR RESPONSIBILITIES:
     1. ANALYZE FILES: If file provided, inspect and preprocess as needed
@@ -960,12 +1014,15 @@ class GAIAAgent:
     - Simple data files (CSV, JSON): Consider processing directly with pandas/json
     - Complex documents (PDF, DOCX): Delegate to content_processor with file_path
     - Archives (ZIP, TAR): Extract contents first, then process individual files
-    - Images/Media: Delegate to content_processor with appropriate tools
+    - Images: Delegate to vision_browser_agent for analysis of visual web content and screenshots
+    - Audio/video: Delegate to content_processor with appropriate tools
 
     SPECIALIST DELEGATION:
     When delegating to content_processor, use: "Process the file at file_path from additional_args"
     When delegating to data_analyst, provide clear data processing instructions
     When delegating to web_researcher, provide specific search queries
+    When delegating to vision_browser_agent, provide details to analyze and identify
+    
 
     CRITICAL REQUIREMENTS:
     - End with: FINAL ANSWER: [specific answer]
