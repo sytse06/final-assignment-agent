@@ -93,6 +93,8 @@ helium = "^5.1.1"
 ddgs = "^9.0.0"
 duckduckgo-search = "^8.1.1"
 langchain-anthropic = "^0.3.17"
+chromedriver-autoinstaller = "^0.6.4"
+retrying = "^1.4.0"
 
 [tool.poetry.group.dev.dependencies]
 # Testing
