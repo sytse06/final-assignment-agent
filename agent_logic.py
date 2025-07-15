@@ -41,12 +41,6 @@ from smolagents import (
 # Import retriever system
 from dev_retriever import load_gaia_retriever
 
-# Import file handling utilities
-from agent_files import (
-    smart_file_path_selection,
-    analyze_file_metadata
-)
-
 # Import logging
 from agent_logging import AgentLoggingSetup
 
@@ -662,21 +656,71 @@ class GAIAAgent:
             return {"error": f"Image analysis failed: {str(e)}"}
 
     def _analyze_file_metadata(self, file_name: str, file_path: str) -> Dict[str, Any]:
-        """Enhanced file analysis using agent_files utilities"""
+        """Simple file analysis without agent_files dependency"""
         if not file_name:
             return {"no_file": True}
         
         try:
-            return analyze_file_metadata(file_name, file_path, self.capabilities)
-        except Exception as e:
+            # Choose best available file path
+            if file_name and file_name.strip() and os.path.exists(file_name):
+                best_path = file_name
+            elif file_path and file_path.strip() and os.path.exists(file_path):
+                best_path = file_path
+            else:
+                best_path = file_name or file_path
+            
+            # Basic file info
+            path_obj = Path(file_name) if file_name else Path(file_path)
+            extension = path_obj.suffix.lower() if path_obj.suffix else ""
+            
+            # File existence and size
+            file_exists = os.path.exists(best_path) if best_path else False
+            file_size = os.path.getsize(best_path) if file_exists else 0
+            
+            # MIME type
+            import mimetypes
+            mime_type = mimetypes.guess_type(file_name or file_path)[0] or 'application/octet-stream'
+            
+            # Simple categorization
+            if extension in ['.xlsx', '.csv', '.xls', '.tsv']:
+                category, recommended_specialist = "data", "data_analyst"
+            elif extension in ['.pdf', '.docx', '.doc', '.txt', '.rtf']:
+                category, recommended_specialist = "document", "content_processor"
+            elif extension in ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff']:
+                category, recommended_specialist = "image", "content_processor"
+            elif extension in ['.mp3', '.mp4', '.wav', '.m4a', '.mov', '.avi']:
+                category, recommended_specialist = "media", "content_processor"
+            elif extension in ['.py', '.js', '.sql', '.json', '.xml', '.yaml', '.yml']:
+                category, recommended_specialist = "code", "content_processor"
+            elif extension in ['.zip', '.tar', '.gz', '.rar']:
+                category, recommended_specialist = "archive", "content_processor"
+            else:
+                category, recommended_specialist = "unknown", "content_processor"
+            
             return {
                 "file_name": file_name,
                 "file_path": file_path,
+                "best_path": best_path,
+                "extension": extension,
+                "mime_type": mime_type,
+                "category": category,
+                "recommended_specialist": recommended_specialist,
+                "file_exists": file_exists,
+                "file_size": file_size,
+                "estimated_complexity": "high" if file_size > 10_000_000 else "medium"
+            }
+            
+        except Exception as e:
+            # Error fallback
+            return {
+                "file_name": file_name,
+                "file_path": file_path,
+                "best_path": file_path or file_name,
                 "category": "unknown",
-                "processing_approach": "content_extraction",
                 "recommended_specialist": "content_processor",
                 "error": str(e),
-                "file_exists": os.path.exists(file_path) if file_path else False
+                "file_exists": False,
+                "estimated_complexity": "medium"
             }
 
     def _load_image_for_agent(self, file_path: str) -> Optional[Image.Image]:
@@ -692,6 +736,23 @@ class GAIAAgent:
             
         except Exception as e:
             print(f"❌ Error loading image: {e}")
+            return None
+        
+    def download_file_once(self, task_id: str, file_name: str) -> str:
+        """Download file from GAIA API endpoint"""
+        try:
+            file_url = f"{self.agent_evaluation_api}/files/{task_id}"
+            response = requests.get(file_url)
+            response.raise_for_status()
+            
+            # Save with proper extension from file_name
+            local_path = f"/tmp/{file_name}"  # Preserves .png extension
+            with open(local_path, 'wb') as f:
+                f.write(response.content)
+                
+            return local_path
+        except Exception as e:
+            print(f"❌ File download failed: {e}")
             return None
 
     # ============================================================================
@@ -1198,7 +1259,7 @@ class GAIAAgent:
             }
 
     def _coordinator_node(self, state: GAIAState) -> GAIAState:
-        """🔥 ENHANCED: Hierarchical coordinator with comprehensive logging and tracking"""
+        """Hierarchical coordinator with comprehensive logging and tracking"""
         task_id = state.get("task_id", "unknown")
         question = state["question"]
         
@@ -1234,18 +1295,28 @@ class GAIAAgent:
             has_file = state.get("has_file", False)
             file_metadata = state.get("file_metadata", {})
             
-            # 🔧 USE agent_files utility for smart file path selection
+            # Inline file path selection logic
             best_file_path = ""
             file_selection_method = "none"
             
             if has_file:
                 track("Analyzing file information for coordinator", self.config)
-                best_file_path = smart_file_path_selection(file_name, file_path) if has_file else ""
                 
-                if best_file_path == file_name:
+                # Prefer filename if it exists and has extension
+                if file_name and file_name.strip() and os.path.exists(file_name):
+                    best_file_path = file_name
                     file_selection_method = "filename_with_extension"
-                elif best_file_path == file_path:
+                # Fallback to cache path if it exists
+                elif file_path and file_path.strip() and os.path.exists(file_path):
+                    best_file_path = file_path
                     file_selection_method = "cache_path_fallback"
+                # Return whatever we have, even if it doesn't exist
+                elif file_name and file_name.strip():
+                    best_file_path = file_name
+                    file_selection_method = "filename_preferred"
+                elif file_path and file_path.strip():
+                    best_file_path = file_path
+                    file_selection_method = "cache_path_only"
                 else:
                     file_selection_method = "no_accessible_file"
                 
