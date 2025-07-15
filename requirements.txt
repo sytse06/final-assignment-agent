@@ -1,51 +1,89 @@
-# Core dependencies
+# Core Gradio and web framework
 gradio>=5.13.2
 requests>=2.32.3
 pandas>=2.0.0
 python-dotenv>=1.0.0
 
-# AI/ML framework
+# AI/ML Core
 transformers>=4.40.0
 huggingface-hub>=0.33.0
 torch>=2.1.0
+datasets>=2.14.0
+evaluate>=0.4.0
 
-# SmolagAgents with transformers support
+# SmolagAgents - Core agent framework
 smolagents[transformers]>=1.19.0
 
-# LangChain ecosystem
+# LangChain Ecosystem (CRITICAL - WAS MISSING)
+langchain-core>=0.3.68,<0.4.0
+langchain-openai>=0.3.27
 langchain-community>=0.3.24
 langchain-huggingface>=0.2.0
 langgraph>=0.4.8
 langchain-groq>=0.3.2
 langchain-google-genai>=2.1.5
 
-# Model providers
+# Model Providers
+openai>=1.40.0
 groq>=0.4.0
-litellm>=1.72.1
+litellm>=1.74.2
 
-# File processing
+# File Processing
+mimetype>=0.1.5
 beautifulsoup4>=4.12.0
 pillow>=11.0.0
 openpyxl>=3.1.0
 pypdf2>=3.0.0
 python-docx>=1.1.0
+chardet>=5.2.0
+python-pptx>=1.0.2
+xlsxwriter>=3.1.0
 
-# Scientific computing
+# Data Analysis (CodeAgent additional_authorized_imports)
+matplotlib>=3.7.0
+seaborn>=0.12.0
+xlrd>=2.0.1
+xlsxwriter>=3.1.0
+
+# Scientific Computing
 numpy>=2.0.0,<3.0.0
 scipy>=1.11.0
 
-# Document processing
+# Document Processing
 docling>=2.36.1
 pymupdf>=1.26.1
 
-# Web scraping
+# Web Scraping and Search
 duckduckgo-search>=8.0.2
 lxml>=5.3.0
+markdownify>=1.1.0
+wikipedia-api>=0.8.1
 
-# RAG and embeddings
+# RAG and Embeddings
 sentence-transformers>=4.1.0
 weaviate-client>=4.14.4
 langchain-weaviate>=0.0.5
 
+# Browser Automation (VisionWebBrowserTool)
+selenium>=4.15.0
+helium>=3.2.3
+webdriver-manager>=4.0.0
+
+# YouTube Processing (YouTubeContentTool)  
+yt-dlp>=2024.1.1
+pydub>=0.25.1
+
+# Research Tools (langchain_tools.py)
+google-search-results>=2.4.2
+wikipedia>=1.4.0
+arxiv>=2.1.0
+
+# Audio/Video Processing
+librosa>=0.10.1
+soundfile>=0.12.1
+ffmpeg-python>=0.2.0
+opencv-python>=4.8.0
+
 # Utilities
 backoff>=2.2.1
+tiktoken>=0.5.0

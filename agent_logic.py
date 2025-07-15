@@ -709,8 +709,8 @@ class GAIAAgent:
                 tools=[],
                 additional_authorized_imports=[
                     "pandas", "numpy", "openpyxl", "xlrd", "csv",
-                    "scipy", "matplotlib", "seaborn", 
-                    "sklearn", "scikit-learn", "statistics", "math"
+                    "scipy", "matplotlib", "seaborn", "statistics", 
+                    "math"
                 ],
                 model=self.specialist_model,
                 max_steps=self.config.max_agent_steps,
