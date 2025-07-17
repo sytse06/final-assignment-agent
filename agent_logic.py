@@ -1378,7 +1378,7 @@ class GAIAAgent:
             
             # Build coordination task with enhanced context
             track("Building coordination task with file context", self.config)
-            coordination_task = self._build_coordinator_task(state)
+            coordination_task = self._build_specialist_context(state)
             
             if self.logging:
                 self.logging.log_step("task_built", "Coordination task constructed", {
