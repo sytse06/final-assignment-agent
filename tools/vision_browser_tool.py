@@ -295,7 +295,7 @@ _browser_session = BrowserSession()
 
 class VisionWebBrowserTool(Tool):
     name = "vision_browser_tool"
-    description = """🔥 IMPROVED: Navigate web pages with advanced interaction capabilities. 
+    description = """Navigate web pages with advanced interaction capabilities. 
     
     Based on SmolagAgents best practices for browser automation:
     - Navigate to web pages with automatic screenshots

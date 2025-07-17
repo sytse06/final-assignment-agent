@@ -841,36 +841,30 @@ class GAIAAgent:
         
         # 4. Vision Browser Agent - CodeAgent for visual web navigation
         try:
+            from tools import VisionWebBrowserTool, VISION_BROWSER_AVAILABLE
+            
             if VISION_BROWSER_AVAILABLE:
                 vision_browser_agent = CodeAgent(
                     name="vision_browser_agent",
                     description="Visual web navigation and screenshot analysis specialist.",
-                    tools=[],
+                    tools=[VisionWebBrowserTool()],
                     additional_authorized_imports=[
-                        # Browser automation
-                        "selenium", "helium", 
-                        
-                        # Image processing
-                        "PIL", "io", "base64", "requests",
-                        
-                        # Browser setup and configuration
+                        "selenium", "helium", "PIL", "io", "base64", "requests",
                         "webdriver_manager", "chromedriver_autoinstaller",
-                        
-                        # File and system operations
                         "os", "sys", "time", "tempfile", "pathlib",
-                        
-                        # Error handling and retries
                         "contextlib", "functools", "traceback"
                     ],
                     model=self.specialist_model,
                     max_steps=self.config.max_agent_steps,
-                    add_base_tools=True,
+                    add_base_tools=False,
                     logger=logger
                 )
                 specialist_agents["vision_browser_agent"] = vision_browser_agent
-                print(f"✅ Vision Browser Agent: {len(vision_browser_agent.additional_authorized_imports)} imports")
+                print(f"✅ Vision Browser Agent: 1 tool + {len(vision_browser_agent.additional_authorized_imports)} imports")
             else:
-                print("⚠️ Vision Browser Agent: Not available (missing dependencies)")
+                print("⚠️ Vision Browser Agent: Not available (dependencies missing)")
+        except ImportError as e:
+            print(f"⚠️ Vision Browser Agent: {e}")
         except Exception as e:
             print(f"❌ Failed to create vision_browser_agent: {e}")
 
@@ -899,20 +893,28 @@ class GAIAAgent:
                 description="""GAIA task coordinator managing four specialist agents.
 
         WORKFLOW:
-
         1. ANALYZE TASK: Question analysis and file preprocessing (extract archives, inspect contents)
-        2. CHOOSE SPECIALIST: Based on question type and available files/data
+        2. CHOOSE SPECIALIST: Select the most direct path to answer the question
         3. DELEGATE: Assign complete task to appropriate specialist(s)
         4. SYNTHESIZE: Combine results and format GAIA answer
 
         SPECIALISTS AVAILABLE:
-        - data_analyst: Numerical analysis, calculations, data processing
-        - web_researcher: Search and discovery, online information gathering  
-        - content_processor: Document/media processing, content extraction
-        - vision_browser_agent: Visual web navigation with screenshots
+        - content_processor: Extracts and analyzes content from any source
+        When delegating, use: "Answer this question: [question] using content from documents, videos, audio recordings, and web sources"
+        - data_analyst: Performs numerical analysis and calculations
+        When delegating, use: "Answer this question: [question] by analyzing the data"
+        - web_researcher: Discovers and researches information
+        When delegating, use: "Answer this question: [question] by researching information"
+        - vision_browser_agent: Analyzes visual web interfaces
+        When delegating, use: "Answer this question: [question] by analyzing visual elements"
+        
+        COORDINATION PRINCIPLES:
+        - Handle file preparation so specialists focus on core capabilities
+        - Provide clear, task-oriented instructions to specialists
+        - Ensure specialists receive complete context for their tasks
 
-        The coordinator handles file preparation so specialists can focus on their core capabilities.""",
-                tools=[],  # No tools needed - direct file access via imports
+                The coordinator handles file preparation so specialists can focus on their core capabilities.""",
+                tools=[], 
                 managed_agents=list(specialist_agents.values()),
                 additional_authorized_imports=[
                     # File preprocessing (CORE RESPONSIBILITY)
@@ -939,8 +941,8 @@ class GAIAAgent:
             
             return coordinator
 
-    def _build_coordinator_task(self, state: GAIAState) -> str:
-        """🔥 ENHANCED: Build coordination task with smart file information"""
+    def _build_specialist_context(self, state: GAIAState) -> str:
+        """Build task context for specialist execution"""
         question = state["question"]
         similar_examples = state.get("similar_examples", [])
         complexity = state.get("complexity", "unknown")
@@ -949,87 +951,72 @@ class GAIAAgent:
         file_path = state.get("file_path", "")
         file_metadata = state.get("file_metadata", {})
         
-        # Build enhanced file context with processing guidance
+        # Build file context for specialist
         file_context = ""
         if has_file:
-            # Determine best file reference and provide processing guidance
             if file_name and file_name.strip() and os.path.exists(file_name):
-                # Filename exists and has extension
                 file_context = f"\nFILE AVAILABLE: {file_name}"
                 if file_metadata:
                     file_type = file_metadata.get("category", "unknown")
-                    recommended_specialist = file_metadata.get("recommended_specialist", "content_processor")
-                    file_context += f"\nFILE TYPE: {file_type}"
-                    file_context += f"\nRECOMMENDED PROCESSING: {recommended_specialist}"
+                    file_context += f" ({file_type})"
                     
-                    # Add specific processing guidance
+                    # Processing guidance for specialist
                     if file_type == "data":
-                        file_context += "\nGUIDANCE: Use data_analyst for CSV/Excel analysis with pandas"
+                        file_context += " - numerical/tabular data for analysis"
                     elif file_type == "document":
-                        file_context += "\nGUIDANCE: Use content_processor with file_path from additional_args"
+                        file_context += " - text content for extraction"
                     elif file_type == "image":
-                        file_context += "\nGUIDANCE: Use vision_browser_agent for visual analysis and OCR"
+                        file_context += " - visual content for analysis"
                     elif file_type == "media":
-                        file_context += "\nGUIDANCE: Use content_processor for audio/video transcription"
-                    else:
-                        file_context += "\nGUIDANCE: Analyze file type and choose appropriate specialist"            
-                    
-                
+                        file_context += " - audio/video content for transcription and analysis"
+                    elif file_type == "archive":
+                        file_context += " - compressed content requiring extraction"
+                        
             elif file_path and file_path.strip() and os.path.exists(file_path):
-                # Cache path exists but may lack extension
                 file_context = f"\nFILE AVAILABLE: {file_path}"
                 if file_name:
-                    file_context += f" (original name: {file_name})"
-                file_context += "\nGUIDANCE: Pass file_path to specialist - ContentRetrieverTool will handle extension detection"
-                
+                    file_context += f" (original: {file_name})"
+                file_context += " - handle extension detection automatically"
             else:
-                file_context = "\nFILE: Referenced but not accessible - proceed without file"
+                file_context = "\nFILE: Referenced but not accessible"
         
-        # Build examples context
+        # Give specialist relevant content type context
+        content_hints = ""
+        if any(indicator in question.lower() for indicator in ["youtube.com", "youtu.be"]):
+            content_hints = "\nCONTENT TYPE: YouTube video - transcript extraction and analysis available"
+        elif question.startswith("http") or "www." in question:
+            content_hints = "\nCONTENT TYPE: Web URL - page content extraction available"
+        elif any(indicator in question.lower() for indicator in ["calculate", "sum", "average", "percentage"]):
+            content_hints = "\nCONTENT TYPE: Calculation required - numerical analysis needed"
+        elif any(indicator in question.lower() for indicator in ["find", "search", "look up", "who is"]):
+            content_hints = "\nCONTENT TYPE: Information discovery - research and search needed"
+        elif any(indicator in question.lower() for indicator in ["screenshot", "image", "visual", "see"]):
+            content_hints = "\nCONTENT TYPE: Visual analysis - screenshot and visual inspection needed"
+        
+        # Give specialist question/answer examples context for guidance
         examples_context = ""
         if similar_examples:
-            examples_context = "\nSIMILAR SUCCESSFUL EXAMPLES:\n"
+            examples_context = "\nSUCCESSFUL PATTERNS (use these to guide your approach and answer formatting):\n"
             for i, example in enumerate(similar_examples[:2], 1):
-                examples_context += f"{i}. {example.get('question', '')[:80]}... → {example.get('answer', '')}\n"
+                q = example.get("question", "")[:80]
+                a = example.get("answer", "")
+                examples_context += f"{i}. {q}... → {a}\n"
         
-        # Core coordination task with enhanced file handling instructions
-        task = f"""GAIA Coordinator Task
+        # Build execution context for specialist
+        task = f"""CURRENT TASK CONTEXT
 
     QUESTION: {question}
-    COMPLEXITY: {complexity}{file_context}{examples_context}
+    COMPLEXITY: {complexity}{file_context}{content_hints}{examples_context}
 
-    YOUR SPECIALISTS:
-    - data_analyst: CodeAgent with pandas/numpy for data analysis and calculations
-    - web_researcher: ToolCallingAgent for web search and information gathering  
-    - content_processor: ToolCallingAgent with ContentRetrieverTool for document/media processing
-    - vision_browser_agent: CodeAgent for visual web navigation with screenshots
+    EXECUTION CONTEXT:
+    You have been selected as the most appropriate specialist to answer this question. Use the context above to guide your tool selection and approach. The successful patterns show the type of precise, factual answers expected.
 
-    COORDINATOR RESPONSIBILITIES:
-    1. ANALYZE FILES: If file provided, inspect and preprocess as needed
-    2. ROUTE INTELLIGENTLY: Choose appropriate specialist based on task and file type
-    3. DELEGATE CLEARLY: Provide specialist with file_path and clear instructions
-    4. SYNTHESIZE RESULTS: Combine specialist outputs into final answer
-
-    FILE HANDLING STRATEGY:
-    - Simple data files (CSV, JSON): Consider processing directly with pandas/json
-    - Complex documents (PDF, DOCX): Delegate to content_processor with file_path
-    - Archives (ZIP, TAR): Extract contents first, then process individual files
-    - Images: Delegate to vision_browser_agent for analysis of visual web content and screenshots
-    - Audio/video: Delegate to content_processor with appropriate tools
-
-    SPECIALIST DELEGATION:
-    When delegating to content_processor, use: "Process the file at file_path from additional_args"
-    When delegating to data_analyst, provide clear data processing instructions
-    When delegating to web_researcher, provide specific search queries
-    When delegating to vision_browser_agent, provide details to analyze and identify
-    
-
-    CRITICAL REQUIREMENTS:
-    - End with: FINAL ANSWER: [specific answer]
+    GAIA FORMAT REQUIREMENTS:
+    - End with: FINAL ANSWER: [answer]
     - Format: numbers (no commas), strings (no articles), lists (comma-separated)
     - Be precise and factual
 
-    Execute now."""
+    Execute using your available tools and capabilities."""
 
         return task.strip()
                    
