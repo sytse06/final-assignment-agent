@@ -668,7 +668,7 @@ def cleanup_browser_session():
     _browser_session.cleanup()
     return "Browser session cleaned up"
 
-# 🔥 NEW: Additional utility functions for SmolagAgent integration
+# Additional utility functions for SmolagAgent integration
 def get_browser_instructions() -> str:
     """Get Helium usage instructions for SmolagAgent integration"""
     return """

@@ -5,6 +5,8 @@ __pycache__/
 *.pyc
 .venv/
 *.log
+*.pem
+*.gradio
 .DS_Store
 *.code-workspace
 
