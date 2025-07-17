@@ -1117,6 +1117,8 @@ class VisionWebBrowserTool(Tool):
         self, 
         action: str,
         url: Optional[str] = None,
+        headless: Optional[bool] = True,
+        driver: Optional[str] = None,
         element_text: Optional[str] = None,
         text_input: Optional[str] = None,
         element_selector: Optional[str] = None,
@@ -1137,7 +1139,16 @@ class VisionWebBrowserTool(Tool):
         
         try:
             # 🔥 Direct method calls to session - no duplication!
-            if action == "navigate":
+            if action == "start_chrome":
+                result = self._start_chrome(headless)
+            
+            elif action == "start_firefox":
+                result = self._start_firefox(headless)
+                
+            elif action == "set_driver":
+                result = self._set_driver(driver)
+                
+            elif action == "navigate":
                 result = self._navigate(url, wait_seconds)
                 
             elif action == "click_element":
@@ -1187,17 +1198,92 @@ class VisionWebBrowserTool(Tool):
                 
             else:
                 result = ContentResult(
-                    content_type="error",
-                    success=False,
-                    error_message=f"Unknown action: {action}. Available actions: navigate, click_element, type_text, fill_form, perform_search, select_dropdown, press_key_combination, search_text, scroll_page, wait_for_element, wait_for_page_load, extract_structured_data, close_popups, take_screenshot, extract_content, close_browser"
-                )
+                content_type="error",
+                success=False,
+                error_message=f"Unknown action: {action}. Available actions: start_chrome, start_firefox, set_driver, navigate, click_element, type_text, fill_form, perform_search, select_dropdown, press_key_combination, search_text, scroll_page, wait_for_element, wait_for_page_load, extract_structured_data, close_popups, take_screenshot, extract_content, close_browser"
+            )
             
             return self._format_result(result)
             
         except Exception as e:
             return self._format_error(f"Browser error: {str(e)}")
     
-    # 🔥 Action methods using composition - direct calls to session methods
+    # Action methods using composition - direct calls to session methods
+    def _start_chrome(self, headless: bool = False) -> ContentResult:
+        """Start Chrome browser"""
+        try:
+            if self._session and self._session.is_active:
+                return ContentResult(
+                    content_type="browser_start",
+                    success=True,
+                    content_text="Browser session already active",
+                    handoff_instructions="Chrome browser is already running."
+                )
+            
+            # Force create new session and initialize
+            self._session = BrowserSession()
+            init_result = self._session.initialize(headless=headless)
+            
+            if "failed" in init_result.lower():
+                return ContentResult(
+                    content_type="error",
+                    success=False,
+                    error_message=init_result
+                )
+            
+            self._initialized = True
+            screenshot_path = self._session.take_screenshot("browser_start")
+            
+            return ContentResult(
+                content_type="browser_start",
+                success=True,
+                content_text=init_result,
+                screenshot_path=screenshot_path,
+                handoff_instructions="Chrome browser started successfully. Ready for navigation."
+            )
+            
+        except Exception as e:
+            return ContentResult(
+                content_type="error",
+                success=False,
+                error_message=f"Chrome start failed: {str(e)}"
+            )
+
+    def _start_firefox(self, headless: bool = False) -> ContentResult:
+        """Start Firefox browser"""
+        try:
+            if self._session and self._session.is_active:
+                return ContentResult(
+                    content_type="browser_start",
+                    success=True,
+                    content_text="Browser session already active",
+                    handoff_instructions="Firefox browser is already running."
+                )
+            
+            # Note: This would need Firefox-specific implementation
+            # For now, fallback to Chrome
+            return self._start_chrome(headless)
+            
+        except Exception as e:
+            return ContentResult(
+                content_type="error",
+                success=False,
+                error_message=f"Firefox start failed: {str(e)}"
+            )
+
+    def _set_driver(self, driver_config: str) -> ContentResult:
+        """Set custom driver"""
+        try:
+            # This would need custom driver implementation
+            # For now, fallback to starting Chrome
+            return self._start_chrome()
+            
+        except Exception as e:
+            return ContentResult(
+                content_type="error",
+                success=False,
+                error_message=f"Set driver failed: {str(e)}"
+            )
     
     def _navigate(self, url: str, wait_seconds: int) -> ContentResult:
         """Navigate to URL with automatic screenshot"""
