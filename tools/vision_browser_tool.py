@@ -95,8 +95,17 @@ class BrowserSession:
             if headless:
                 chrome_options.add_argument("--headless")
             
-            # Initialize with helium
-            self.driver = helium.start_chrome(headless=headless, options=chrome_options)
+            # Try to use environment functions first
+            try:
+                if hasattr(globals(), 'start_chrome'):
+                    self.driver = start_chrome()
+                else:
+                    # Fallback to direct helium with options
+                    self.driver = helium.start_chrome(headless=headless, options=chrome_options)
+            except:
+                # Final fallback to direct helium
+                self.driver = helium.start_chrome(headless=headless, options=chrome_options)
+            
             self.is_active = True
             os.makedirs(self.download_dir, exist_ok=True)
             
