@@ -66,16 +66,16 @@ class BrowserSession:
             return "Session already active"
             
         try:
-            # Better Chrome options based on HF tutorial
-            chrome_options = webdriver.ChromeOptions()
+            # Container based browser settings
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--window-size=1920,1080")
             chrome_options.add_argument("--force-device-scale-factor=1")
-            chrome_options.add_argument("--window-size=1200,1000")  # Slightly larger for better visibility
-            chrome_options.add_argument("--window-position=0,0")
-            chrome_options.add_argument("--disable-pdf-viewer")
             chrome_options.add_argument("--disable-web-security")
             chrome_options.add_argument("--disable-popup-blocking")
-            chrome_options.add_argument("--disable-blink-features=AutomationControlled")  # NEW: Avoid detection
-            chrome_options.add_argument("--no-sandbox")  # NEW: Better compatibility
+            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
             
             prefs = {
                 "download.default_directory": self.download_dir,
@@ -92,28 +92,16 @@ class BrowserSession:
             chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
             chrome_options.add_experimental_option('useAutomationExtension', False)
             
-            if headless:
-                chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--log-level=3")
+            chrome_options.add_argument("--silent")
             
-            # Try to use environment functions first
-            try:
-                if hasattr(globals(), 'start_chrome'):
-                    self.driver = start_chrome()
-                else:
-                    # Fallback to direct helium with options
-                    self.driver = helium.start_chrome(headless=headless, options=chrome_options)
-            except:
-                # Final fallback to direct helium
-                self.driver = helium.start_chrome(headless=headless, options=chrome_options)
-            
+            # Initialize browser
+            self.driver = helium.start_chrome(headless=True, options=chrome_options)
             self.is_active = True
             os.makedirs(self.download_dir, exist_ok=True)
             
-            # Set implicit wait for better element detection
-            self.driver.implicitly_wait(3)
-            
-            print(f"✅ Enhanced browser session initialized: {self.driver.current_url}")
-            return "Enhanced session initialized with text input capabilities"
+            print(f"✅ HF Spaces optimized browser initialized")
+            return "Session initialized"
             
         except Exception as e:
             return f"Initialization failed: {str(e)}"
@@ -1209,7 +1197,7 @@ class VisionWebBrowserTool(Tool):
             return self._format_error(f"Browser error: {str(e)}")
     
     # Action methods using composition - direct calls to session methods
-    def _start_chrome(self, headless: bool = False) -> ContentResult:
+    def _start_chrome(self, headless: bool = True) -> ContentResult:
         """Start Chrome browser"""
         try:
             if self._session and self._session.is_active:
