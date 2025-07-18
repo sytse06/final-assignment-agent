@@ -61,53 +61,203 @@ class BrowserSession:
             }
         }
         
-    def initialize(self, headless: bool = False):
+    def initialize(self, headless: bool = True):
+        """
+        Browser initialization
+        """
         if self.is_active:
             return "Session already active"
-            
+        
+        # 🔥 DECLARE VARIABLES OUTSIDE TRY BLOCKS
+        chrome_options = None
+        
         try:
-            # Container based browser settings
-            chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--window-size=1920,1080")
-            chrome_options.add_argument("--force-device-scale-factor=1")
-            chrome_options.add_argument("--disable-web-security")
-            chrome_options.add_argument("--disable-popup-blocking")
-            chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+            print(f"🔧 Initializing browser with direct selenium (headless={headless})")
             
-            prefs = {
-                "download.default_directory": self.download_dir,
-                "download.prompt_for_download": False,
-                "download.directory_upgrade": True,
-                "safebrowsing.enabled": True,
-                "plugins.always_open_pdf_externally": True,
-                "profile.default_content_setting_values.notifications": 2,
-                "profile.default_content_settings.popups": 0,
-                "profile.password_manager_enabled": False,
-                "credentials_enable_service": False,
-            }
-            chrome_options.add_experimental_option("prefs", prefs)
-            chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-            chrome_options.add_experimental_option('useAutomationExtension', False)
+            # Step 1: Import selenium
+            try:
+                from selenium import webdriver
+                from selenium.webdriver.chrome.service import Service
+                print("✅ Selenium imports successful")
+            except ImportError as e:
+                error_msg = f"Selenium import failed: {e}"
+                print(f"❌ {error_msg}")
+                return f"Initialization failed: {error_msg}"
             
-            chrome_options.add_argument("--log-level=3")
-            chrome_options.add_argument("--silent")
+            # Step 2: Configure Chrome options
+            try:
+                chrome_options = webdriver.ChromeOptions()
+                
+                # Essential options
+                chrome_options.add_argument("--headless")
+                chrome_options.add_argument("--no-sandbox")
+                chrome_options.add_argument("--disable-dev-shm-usage")
+                chrome_options.add_argument("--disable-gpu")
+                chrome_options.add_argument("--window-size=1920,1080")
+                chrome_options.add_argument("--force-device-scale-factor=1")
+                
+                # Automation optimization
+                chrome_options.add_argument("--disable-web-security")
+                chrome_options.add_argument("--disable-popup-blocking")
+                chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+                chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+                chrome_options.add_experimental_option('useAutomationExtension', False)
+                
+                # Logging and performance
+                chrome_options.add_argument("--log-level=3")
+                chrome_options.add_argument("--silent")
+                chrome_options.add_argument("--disable-background-timer-throttling")
+                chrome_options.add_argument("--disable-renderer-backgrounding")
+                
+                print("✅ Chrome options configured")
+            except Exception as e:
+                error_msg = f"Chrome options configuration failed: {e}"
+                print(f"❌ {error_msg}")
+                return f"Initialization failed: {error_msg}"
             
-            # Initialize browser
-            self.driver = helium.start_chrome(headless=True, options=chrome_options)
-            self.is_active = True
-            os.makedirs(self.download_dir, exist_ok=True)
+            # Step 3: Configure preferences
+            try:
+                os.makedirs(self.download_dir, exist_ok=True)
+                
+                prefs = {
+                    "download.default_directory": self.download_dir,
+                    "download.prompt_for_download": False,
+                    "download.directory_upgrade": True,
+                    "safebrowsing.enabled": True,
+                    "plugins.always_open_pdf_externally": True,
+                    "profile.default_content_setting_values.notifications": 2,
+                    "profile.default_content_settings.popups": 0,
+                    "profile.password_manager_enabled": False,
+                    "credentials_enable_service": False,
+                }
+                chrome_options.add_experimental_option("prefs", prefs)
+                print("✅ Chrome preferences configured")
+            except Exception as e:
+                error_msg = f"Chrome preferences configuration failed: {e}"
+                print(f"❌ {error_msg}")
+                return f"Initialization failed: {error_msg}"
             
-            print(f"✅ HF Spaces optimized browser initialized")
-            return "Session initialized"
+            # Step 4: Initialize Chrome driver
+            try:
+                print("🔧 Starting Chrome driver...")
+                self.driver = webdriver.Chrome(options=chrome_options)
+                print("✅ Chrome driver created successfully")
+            except Exception as e:
+                error_msg = f"Chrome driver creation failed: {e}"
+                print(f"❌ {error_msg}")
+                
+                # Try alternative initialization methods
+                try:
+                    print("🔧 Trying alternative driver initialization...")
+                    # Try with webdriver-manager if available
+                    try:
+                        from webdriver_manager.chrome import ChromeDriverManager
+                        service = Service(ChromeDriverManager().install())
+                        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                        print("✅ Alternative driver initialization successful")
+                    except ImportError:
+                        print("⚠️ webdriver-manager not available, trying basic fallback...")
+                        # Fallback without service
+                        self.driver = webdriver.Chrome(options=chrome_options)
+                        print("✅ Fallback driver initialization successful")
+                        
+                except Exception as fallback_error:
+                    error_msg = f"All driver initialization methods failed. Last error: {fallback_error}"
+                    print(f"❌ {error_msg}")
+                    return f"Initialization failed: {error_msg}"
             
+            # Step 5: Configure driver settings
+            try:
+                self.driver.implicitly_wait(10)
+                self.driver.set_page_load_timeout(60)
+                self.is_active = True
+                print("✅ Driver timeouts configured")
+            except Exception as e:
+                error_msg = f"Driver configuration failed: {e}"
+                print(f"❌ {error_msg}")
+                # Try to clean up
+                try:
+                    if self.driver:
+                        self.driver.quit()
+                except:
+                    pass
+                return f"Initialization failed: {error_msg}"
+            
+            # Step 6: Set up helium integration (optional)
+            try:
+                import helium
+                helium.set_driver(self.driver)
+                print("✅ Helium integration successful")
+            except ImportError:
+                print("⚠️ Helium not available - using selenium only")
+            except Exception as e:
+                print(f"⚠️ Helium integration failed: {e} - continuing with selenium only")
+            
+            # Step 7: Final validation
+            try:
+                current_url = self.driver.current_url
+                print(f"✅ Browser session initialized successfully")
+                print(f"📂 Downloads: {self.download_dir}")
+                print(f"🌐 Initial URL: {current_url}")
+                
+                return "Session initialized successfully"
+                
+            except Exception as e:
+                error_msg = f"Driver validation failed: {e}"
+                print(f"❌ {error_msg}")
+                # Clean up
+                try:
+                    if self.driver:
+                        self.driver.quit()
+                    self.is_active = False
+                except:
+                    pass
+                return f"Initialization failed: {error_msg}"
+                
         except Exception as e:
-            return f"Initialization failed: {str(e)}"
+            error_msg = f"Unexpected initialization error: {e}"
+            print(f"❌ {error_msg}")
+            # Ensure cleanup
+            if hasattr(self, 'driver') and self.driver:
+                try:
+                    self.driver.quit()
+                except:
+                    pass
+                self.is_active = False
+            return f"Initialization failed: {error_msg}"
+
+    def navigate_to(self, url: str):
+            """Navigate with error handling"""
+            if not self.is_active:
+                return False, "Browser session not active"
+                
+            try:
+                print(f"🔧 Navigating to {url}")
+                
+                # Validate URL
+                if not url or not isinstance(url, str):
+                    return False, "Invalid URL provided"
+                
+                # Add protocol if missing
+                if not url.startswith(('http://', 'https://')):
+                    url = 'https://' + url
+                    print(f"🔧 Added protocol: {url}")
+                
+                # Attempt navigation using selenium
+                self.driver.get(url)
+                print(f"✅ Navigation successful to {url}")
+                return True, "Navigation successful"
+                
+            except Exception as nav_error:
+                error_msg = f"Navigation failed: {nav_error}"
+                print(f"❌ {error_msg}")
+                return False, error_msg
     
     def take_screenshot(self, description: str = "screenshot") -> str:
         """Take screenshot with consistent naming and metadata"""
+        if not self.is_active:
+            return False, "Browser session not active"
+    
         try:
             if not self.is_active:
                 return None
@@ -140,6 +290,7 @@ class BrowserSession:
     
     def detect_content_type(self) -> str:
         """Content type detection"""
+    
         try:
             current_url = helium.get_driver().current_url.lower()
             page_source = helium.get_driver().page_source.lower()
@@ -175,24 +326,66 @@ class BrowserSession:
         except Exception:
             return "unknown"
     
-    def smart_click(self, element_text: str) -> bool:
-        """Smart clicking with fallbacks based on HF tutorial"""
+    def smart_click(self, element_text: str) -> tuple[bool, str]:
+        """Click with multiple fallback strategies"""
+        if not self.is_active:
+            return False, "Browser session not active"
+            
         try:
-            # Try direct helium click first
-            helium.click(element_text)
-            return True
-        except:
+            print(f"🔧 Attempting to click: '{element_text}'")
+            
+            # Strategy 1: Try helium if available
             try:
-                # Try as link
-                helium.click(helium.Link(element_text))
-                return True
-            except:
-                try:
-                    # Try as button
-                    helium.click(helium.Button(element_text))
-                    return True
-                except:
-                    return False
+                import helium
+                helium.click(element_text)
+                print(f"✅ Helium click successful")
+                return True, "Helium click successful"
+                
+            except ImportError:
+                print("⚠️ Helium not available, using selenium")
+            except Exception as helium_error:
+                print(f"⚠️ Helium click failed: {helium_error}, trying selenium")
+            
+            # Strategy 2: Selenium fallbacks
+            try:
+                from selenium.webdriver.common.by import By
+                from selenium.webdriver.support.ui import WebDriverWait
+                from selenium.webdriver.support import expected_conditions as EC
+                
+                # Wait for page to be ready
+                wait = WebDriverWait(self.driver, 10)
+                
+                # Multiple selector strategies
+                selectors = [
+                    (By.XPATH, f"//button[contains(text(), '{element_text}')]"),
+                    (By.XPATH, f"//a[contains(text(), '{element_text}')]"),
+                    (By.XPATH, f"//input[@value='{element_text}']"),
+                    (By.XPATH, f"//input[@placeholder='{element_text}']"),
+                    (By.XPATH, f"//*[contains(text(), '{element_text}')]"),
+                    (By.LINK_TEXT, element_text),
+                    (By.PARTIAL_LINK_TEXT, element_text),
+                ]
+                
+                for strategy, selector in selectors:
+                    try:
+                        element = wait.until(EC.element_to_be_clickable((strategy, selector)))
+                        element.click()
+                        print(f"✅ Selenium click successful with {strategy}")
+                        return True, f"Selenium click successful"
+                    except:
+                        continue
+                
+                return False, f"Element '{element_text}' not found with any strategy"
+                
+            except Exception as selenium_error:
+                error_msg = f"Selenium click failed: {selenium_error}"
+                print(f"❌ {error_msg}")
+                return False, error_msg
+                
+        except Exception as e:
+            error_msg = f"Click error: {e}"
+            print(f"❌ {error_msg}")
+            return False, error_msg
     
     def close_popups(self) -> str:
         """Close popups using HF tutorial method"""
@@ -1105,8 +1298,6 @@ class VisionWebBrowserTool(Tool):
         self, 
         action: str,
         url: Optional[str] = None,
-        headless: Optional[bool] = True,
-        driver: Optional[str] = None,
         element_text: Optional[str] = None,
         text_input: Optional[str] = None,
         element_selector: Optional[str] = None,
@@ -1274,37 +1465,173 @@ class VisionWebBrowserTool(Tool):
             )
     
     def _navigate(self, url: str, wait_seconds: int) -> ContentResult:
-        """Navigate to URL with automatic screenshot"""
-        if not url:
+        """Navigation with comprehensive error handling and fallbacks"""
+        
+        # Input validation
+        try:
+            if not url:
+                return ContentResult(
+                    content_type="error",
+                    success=False,
+                    error_message="URL required for navigation",
+                    handoff_instructions="Please provide a valid URL for navigation."
+                )
+            
+            if not isinstance(url, str):
+                return ContentResult(
+                    content_type="error", 
+                    success=False,
+                    error_message=f"URL must be a string, got {type(url)}",
+                    handoff_instructions="Please provide a valid URL string."
+                )
+                
+        except Exception as e:
             return ContentResult(
                 content_type="error",
                 success=False,
-                error_message="URL required for navigation"
+                error_message=f"Input validation failed: {e}",
+                handoff_instructions="Check the URL parameter and try again."
             )
         
+        # Browser session validation
         try:
-            helium.go_to(url)
-            time.sleep(wait_seconds)
-            
-            # Use session methods directly
-            screenshot_path = self.session.take_screenshot("navigation")
-            page_info = self.session.get_page_info()
-            
+            if not _browser_session.is_active:
+                print("⚠️ Browser session not active, attempting to initialize...")
+                init_result = _browser_session.initialize(headless=True)
+                
+                if "failed" in init_result.lower():
+                    return ContentResult(
+                        content_type="error",
+                        success=False, 
+                        error_message=f"Browser initialization failed: {init_result}",
+                        handoff_instructions="Browser could not be started. Check system configuration."
+                    )
+                print("✅ Browser session initialized for navigation")
+                
+        except Exception as e:
             return ContentResult(
-                content_type="navigation",
-                url=page_info.get("url"),
-                screenshot_path=screenshot_path,
-                content_text=f"Navigation complete. Title: {page_info.get('title', 'Unknown')}",
-                metadata=page_info,
-                handoff_instructions=f"Successfully navigated to {url}. Screenshot available for visual analysis.",
-                success=True
+                content_type="error",
+                success=False,
+                error_message=f"Browser session check failed: {e}",
+                handoff_instructions="Browser initialization error. Check dependencies."
             )
+        
+        # Navigation attempt
+        try:
+            print(f"🔧 Starting navigation to: {url}")
+            
+            # Use robust navigation method
+            navigation_success, nav_message = _browser_session.navigate_to(url)
+            
+            if not navigation_success:
+                return ContentResult(
+                    content_type="error",
+                    success=False,
+                    error_message=f"Navigation failed: {nav_message}",
+                    handoff_instructions=f"Could not navigate to {url}. Check URL validity and network connection."
+                )
+            
+            print(f"✅ Navigation successful: {nav_message}")
             
         except Exception as e:
             return ContentResult(
                 content_type="error",
                 success=False,
-                error_message=f"Navigation failed: {str(e)}"
+                error_message=f"Navigation attempt failed: {e}",
+                handoff_instructions="Navigation error occurred. Check URL and browser state."
+            )
+        
+        # Wait for page load
+        try:
+            if wait_seconds > 0:
+                print(f"⏱️ Waiting {wait_seconds} seconds for page load...")
+                time.sleep(wait_seconds)
+                
+        except Exception as e:
+            print(f"⚠️ Wait period warning: {e}")
+            # Continue despite wait issues
+        
+        # Take screenshot
+        screenshot_path = None
+        try:
+            print("📸 Taking navigation screenshot...")
+            screenshot_path = _browser_session.take_screenshot("navigation")
+            
+            if screenshot_path:
+                print(f"✅ Screenshot captured: {screenshot_path}")
+            else:
+                print("⚠️ Screenshot failed but continuing...")
+                
+        except Exception as e:
+            print(f"⚠️ Screenshot error: {e}")
+            # Continue without screenshot
+        
+        # Get page information
+        page_info = {}
+        try:
+            print("🔍 Gathering page information...")
+            page_info = _browser_session.get_page_info()
+            
+            if "error" in page_info:
+                print(f"⚠️ Page info warning: {page_info['error']}")
+                # Use minimal page info
+                page_info = {
+                    "url": url,
+                    "title": "Unknown",
+                    "content_type": "web_content", 
+                    "timestamp": time.time(),
+                    "warning": page_info["error"]
+                }
+            else:
+                print(f"✅ Page info gathered: {page_info.get('title', 'No title')}")
+                
+        except Exception as e:
+            print(f"⚠️ Page info error: {e}")
+            # Use fallback page info
+            page_info = {
+                "url": url,
+                "title": "Unknown",
+                "content_type": "web_content",
+                "timestamp": time.time(),
+                "error": str(e)
+            }
+        
+        # Build successful result
+        try:
+            # Determine final URL (may be different due to redirects)
+            final_url = page_info.get("url", url)
+            page_title = page_info.get("title", "Unknown")
+            
+            # Create success message
+            success_message = f"Navigation complete to {final_url}"
+            if page_title and page_title != "Unknown":
+                success_message += f". Page title: {page_title}"
+            
+            # Create handoff instructions
+            handoff_instructions = f"Successfully navigated to {final_url}."
+            if screenshot_path:
+                handoff_instructions += " Screenshot available for visual analysis."
+            if page_info.get("content_type"):
+                handoff_instructions += f" Content type: {page_info['content_type']}."
+            
+            return ContentResult(
+                content_type="navigation",
+                url=final_url,
+                screenshot_path=screenshot_path,
+                content_text=success_message,
+                metadata=page_info,
+                handoff_instructions=handoff_instructions,
+                success=True
+            )
+            
+        except Exception as e:
+            # Even result building failed - return minimal success
+            return ContentResult(
+                content_type="navigation",
+                url=url,
+                content_text=f"Navigation completed with warnings: {e}",
+                handoff_instructions=f"Navigated to {url} but encountered result building issues.",
+                success=True  # Navigation did succeed
             )
     
     def _click_element(self, element_text: str, wait_seconds: int) -> ContentResult:
