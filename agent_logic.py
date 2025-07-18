@@ -769,7 +769,7 @@ class GAIAAgent:
         try:
             data_analyst = CodeAgent(
                 name="data_analyst", 
-                description="Excel/CSV analysis and numerical calculations using pandas",
+                description="Numerical calculations, statistical analysis, and Excel/CSV data processing specialist",
                 tools=[],
                 additional_authorized_imports=[
                     "pandas", "numpy", "openpyxl", "xlrd", "csv",
@@ -803,7 +803,7 @@ class GAIAAgent:
 
             web_researcher = ToolCallingAgent(
                 name="web_researcher",
-                description="Search web, find information sources, verify accessibility",
+                description="Information discovery, web search, fact verification, and general web content retrieval specialist",
                 tools=web_tools,
                 model=self.specialist_model,
                 max_steps=self.config.max_agent_steps,
@@ -815,7 +815,7 @@ class GAIAAgent:
         except Exception as e:
             print(f"❌ Failed to create web_researcher: {e}")
             
-        # 3. Content Processor - ToolCallingAgent for document/media processing
+        # 3. Content Processor - ToolCallingAgent for document/multi media content processing
         try:
             content_tools = []
             try:
@@ -827,7 +827,7 @@ class GAIAAgent:
 
             content_processor = ToolCallingAgent(
                 name="content_processor", 
-                description="Extract and process content from documents, videos, audio, and complex sources",
+                description="YouTube video transcription, audio processing, document text extraction, and multimedia content analysis specialist",
                 tools=content_tools,
                 model=self.specialist_model,
                 max_steps=self.config.max_agent_steps,
@@ -839,14 +839,14 @@ class GAIAAgent:
         except Exception as e:
             print(f"❌ Failed to create content_processor: {e}")
         
-        # 4. Vision Browser Agent - CodeAgent for visual web navigation
+        # 4. Vision Browser - CodeAgent for interactive web automation and analysis
         try:
             from tools import VisionWebBrowserTool, VISION_BROWSER_AVAILABLE
             
             if VISION_BROWSER_AVAILABLE:
                 vision_browser_agent = CodeAgent(
-                    name="vision_browser_agent",
-                    description="Visual web navigation and screenshot analysis specialist.",
+                    name="vision_browser",
+                    description="Interactive web automation, form filling, search execution, and visual analysis specialist for public web content (no cookie/authentication support)",
                     tools=[VisionWebBrowserTool()],
                     additional_authorized_imports=[
                         "selenium", "helium", "PIL", "io", "base64", "requests",
@@ -894,26 +894,30 @@ class GAIAAgent:
 
         WORKFLOW:
         1. ANALYZE TASK: Question analysis and file preprocessing (extract archives, inspect contents)
-        2. CHOOSE SPECIALIST: Select the most direct path to answer the question
+        2. CHOOSE SPECIALIST: Select the optimal path to answer the question successfully
         3. DELEGATE: Assign complete task to appropriate specialist(s)
         4. SYNTHESIZE: Combine results and format GAIA answer
 
         SPECIALISTS AVAILABLE:
         - content_processor: Extracts and analyzes content from any source
-        When delegating, use: "Answer this question: [question] using content from documents, videos, audio recordings, and web sources"
+        When delegating, use: "Answer this question: [question] by extracting and analyzing content from multimedia sources"
         - data_analyst: Performs numerical analysis and calculations
         When delegating, use: "Answer this question: [question] by analyzing the data"
         - web_researcher: Discovers and researches information
         When delegating, use: "Answer this question: [question] by researching information"
-        - vision_browser_agent: Analyzes visual web interfaces
+        - vision_browser: Use for interactive web automation on public sites
         When delegating, use: "Answer this question: [question] by analyzing visual elements"
+        
+        PRIORITY RULES:
+        1. YouTube/video content → content_processor (has cookie support, bypasses restrictions)
+        2. Calculations/data analysis → data_analyst
+        3. Information lookup → web_researcher  
+        4. Interactive web tasks on public sites → vision_browser (no authentication required)
         
         COORDINATION PRINCIPLES:
         - Handle file preparation so specialists focus on core capabilities
         - Provide clear, task-oriented instructions to specialists
-        - Ensure specialists receive complete context for their tasks
-
-                The coordinator handles file preparation so specialists can focus on their core capabilities.""",
+        - Ensure specialists receive complete context for their tasks""",
                 tools=[], 
                 managed_agents=list(specialist_agents.values()),
                 additional_authorized_imports=[
@@ -982,16 +986,31 @@ class GAIAAgent:
         
         # Give specialist relevant content type context
         content_hints = ""
-        if any(indicator in question.lower() for indicator in ["youtube.com", "youtu.be"]):
-            content_hints = "\nCONTENT TYPE: YouTube video - transcript extraction and analysis available"
-        elif question.startswith("http") or "www." in question:
-            content_hints = "\nCONTENT TYPE: Web URL - page content extraction available"
-        elif any(indicator in question.lower() for indicator in ["calculate", "sum", "average", "percentage"]):
-            content_hints = "\nCONTENT TYPE: Calculation required - numerical analysis needed"
-        elif any(indicator in question.lower() for indicator in ["find", "search", "look up", "who is"]):
-            content_hints = "\nCONTENT TYPE: Information discovery - research and search needed"
-        elif any(indicator in question.lower() for indicator in ["screenshot", "image", "visual", "see"]):
-            content_hints = "\nCONTENT TYPE: Visual analysis - screenshot and visual inspection needed"
+        question_lower = question.lower()
+
+        # YouTube/Video content detection (HIGH PRIORITY - has cookie support)
+        if any(indicator in question_lower for indicator in ["youtube.com", "youtu.be", "video"]):
+            content_hints = "\nCONTENT TYPE: YouTube/Video - use content extraction tools with cookie support for restricted content"
+        
+        # Audio content detection
+        elif any(indicator in question_lower for indicator in ["audio", "sound", "music", "podcast", "listen"]):
+            content_hints = "\nCONTENT TYPE: Audio - use audio transcription and analysis tools"
+        
+        # Calculation/numerical analysis detection
+        elif any(indicator in question_lower for indicator in ["calculate", "sum", "average", "percentage", "statistics", "analyze data"]):
+            content_hints = "\nCONTENT TYPE: Numerical Analysis - use mathematical and statistical tools"
+        
+        # Information discovery detection
+        elif any(indicator in question_lower for indicator in ["find", "search", "look up", "who is", "what is", "when did", "where is"]):
+            content_hints = "\nCONTENT TYPE: Information Discovery - use web search and research tools"
+        
+        # Visual interface detection (PUBLIC sites only - no authentication)
+        elif any(indicator in question_lower for indicator in ["search on", "fill form", "submit", "click", "navigate", "screenshot", "visual interface", "interact with"]):
+            content_hints = "\nCONTENT TYPE: Interactive Web Interface - use browser automation for public sites (no authentication required)"
+        
+        # General web URL (NOT YouTube)
+        elif (question.startswith("http") or "www." in question) and "youtube" not in question_lower:
+            content_hints = "\nCONTENT TYPE: Web Page - use web content extraction tools"
         
         # Give specialist question/answer examples context for guidance
         examples_context = ""
@@ -1009,7 +1028,8 @@ class GAIAAgent:
     COMPLEXITY: {complexity}{file_context}{content_hints}{examples_context}
 
     EXECUTION CONTEXT:
-    You have been selected as the most appropriate specialist to answer this question. Use the context above to guide your tool selection and approach. The successful patterns show the type of precise, factual answers expected.
+    You have been selected as the most appropriate specialist to answer this question. Use the content type hints
+    above to guide your tool selection and approach. The successful patterns show the type of precise, factual answers expected.
 
     GAIA FORMAT REQUIREMENTS:
     - End with: FINAL ANSWER: [answer]
