@@ -1,6 +1,7 @@
 import os
 import tempfile
-from typing import Optional
+import json
+from typing import Optional, Dict
 from smolagents import Tool
 
 try:
@@ -18,40 +19,53 @@ except ImportError:
 
 class BrowserProfileTool(Tool):
     """
-    Simple browser profile setup tool for authenticated web access.
+    Browser profile setup tool with multiple cookie authentication strategies.
     
-    Sets up undetected Chrome browser with persistent profile directory
-    that preserves login sessions across tasks. Does not handle any
-    browser interactions - those are done via helium commands.
+    Supports cookie authentication from environment variables, browser extraction,
+    or file-based cookies. Designed to work in both local development and 
+    Docker/HF Spaces deployment environments.
     """
     
     name = "browser_profile"
-    description = """Set up authenticated browser session with saved profile.
+    description = """Set up browser session with authentication support.
 
-Initializes browser with persistent profile directory that maintains
-login sessions for platforms like YouTube, LinkedIn, GitHub.
+Initializes browser with persistent profile and cookie authentication.
+Supports multiple cookie sources for deployment flexibility.
 
 Usage: browser_profile("youtube") or browser_profile("linkedin")
 
 Available profiles: youtube, linkedin, github, general
-Browser will load with saved cookies and authentication state.
-All subsequent browser interactions use helium commands directly.
+Automatically detects and uses available authentication methods.
 """
     
     inputs = {
         "profile_name": {
             "type": "string", 
-            "description": "Profile name: 'youtube', 'linkedin', 'github', 'general'",
+            "description": "Platform profile: 'youtube', 'linkedin', 'github', 'general'",
         }
     }
     output_type = "string"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._profile_dir = os.path.expanduser("~/.gaia_browser_profiles")
-        self._screenshot_dir = tempfile.mkdtemp(prefix="gaia_screenshots_")
-        os.makedirs(self._profile_dir, exist_ok=True)
+        self._profile_dir = self._get_profile_directory()
         self._active_browser = None
+        self._temp_cookie_files = []
+        os.makedirs(self._profile_dir, exist_ok=True)
+        
+    def _get_profile_directory(self) -> str:
+        """Determine appropriate profile directory based on environment"""
+        if self._is_container_environment():
+            return "/tmp/browser_profiles"
+        else:
+            return os.path.expanduser("~/.gaia_browser_profiles")
+    
+    def _is_container_environment(self) -> bool:
+        """Detect if running in container/cloud environment"""
+        return (os.path.exists('/.dockerenv') or 
+                'SPACE_ID' in os.environ or 
+                'CONTAINER_NAME' in os.environ or
+                'CODESPACE_NAME' in os.environ)
         
     def forward(self, profile_name: str) -> str:
         if not DEPENDENCIES_AVAILABLE:
@@ -61,12 +75,113 @@ All subsequent browser interactions use helium commands directly.
             # Close existing browser if different profile
             if self._active_browser and hasattr(self._active_browser, 'current_profile'):
                 if self._active_browser.current_profile != profile_name:
-                    self._active_browser.quit()
-                    self._active_browser = None
+                    self._cleanup_browser()
                 else:
                     return f"Browser already active with {profile_name} profile"
             
-            # Create profile directory
+            # Try multiple cookie authentication strategies
+            cookie_file = self._get_cookies_for_platform(profile_name)
+            auth_method = "none"
+            
+            if cookie_file:
+                if cookie_file.startswith("/tmp/"):
+                    auth_method = "environment"
+                else:
+                    auth_method = "file"
+            
+            # Initialize browser with or without cookies
+            result = self._initialize_browser(profile_name, cookie_file)
+            
+            if result:
+                return f"Browser ready with {profile_name} profile. Authentication: {auth_method}"
+            else:
+                return f"Browser setup failed for {profile_name} profile"
+                
+        except Exception as e:
+            return f"Browser setup failed: {str(e)}"
+    
+    def _get_cookies_for_platform(self, platform: str) -> Optional[str]:
+        """Get cookies using multiple strategies"""
+        
+        # Strategy 1: Environment variable cookies (HF Spaces/Docker)
+        env_cookies = self._get_cookies_from_environment(platform)
+        if env_cookies:
+            return env_cookies
+        
+        # Strategy 2: File-based cookies (CI/CD)
+        file_cookies = self._get_cookies_from_file(platform)
+        if file_cookies:
+            return file_cookies
+        
+        # Strategy 3: Browser extraction (local development)
+        browser_cookies = self._get_cookies_from_browser(platform)
+        if browser_cookies:
+            return browser_cookies
+        
+        return None
+    
+    def _get_cookies_from_environment(self, platform: str) -> Optional[str]:
+        """Extract cookies from environment variables"""
+        try:
+            env_var_name = f"{platform.upper()}_COOKIES"
+            cookie_data = os.environ.get(env_var_name)
+            
+            if not cookie_data:
+                return None
+            
+            # Create temporary cookies file
+            temp_dir = tempfile.gettempdir()
+            cookies_path = os.path.join(temp_dir, f'{platform}_cookies_{os.getpid()}.txt')
+            
+            with open(cookies_path, 'w') as f:
+                f.write(cookie_data)
+            
+            # Track for cleanup
+            self._temp_cookie_files.append(cookies_path)
+            
+            return cookies_path
+            
+        except Exception:
+            return None
+    
+    def _get_cookies_from_file(self, platform: str) -> Optional[str]:
+        """Get cookies from predefined file locations"""
+        try:
+            # Common cookie file locations
+            possible_paths = [
+                f"/app/cookies/{platform}_cookies.txt",
+                f"./cookies/{platform}_cookies.txt",
+                f"~/.gaia_cookies/{platform}_cookies.txt",
+                f"/secrets/{platform}_cookies.txt"
+            ]
+            
+            for path in possible_paths:
+                expanded_path = os.path.expanduser(path)
+                if os.path.exists(expanded_path) and os.path.getsize(expanded_path) > 0:
+                    return expanded_path
+            
+            return None
+            
+        except Exception:
+            return None
+    
+    def _get_cookies_from_browser(self, platform: str) -> Optional[str]:
+        """Extract cookies from local browser (development only)"""
+        try:
+            # Only attempt in non-container environments
+            if self._is_container_environment():
+                return None
+            
+            # This would require browser cookie extraction
+            # For now, return None - can be implemented with browser_cookie3 library
+            return None
+            
+        except Exception:
+            return None
+    
+    def _initialize_browser(self, profile_name: str, cookie_file: Optional[str] = None) -> bool:
+        """Initialize browser with profile and optional cookies"""
+        try:
             profile_path = os.path.join(self._profile_dir, profile_name)
             os.makedirs(profile_path, exist_ok=True)
             
@@ -87,21 +202,72 @@ All subsequent browser interactions use helium commands directly.
             elif profile_name == "youtube":
                 options.add_argument("--disable-features=VizDisplayCompositor")
             
+            # Container-specific options
+            if self._is_container_environment():
+                options.add_argument("--headless")
+                options.add_argument("--disable-gpu")
+                options.add_argument("--disable-software-rasterizer")
+            
             # Initialize browser
             self._active_browser = uc.Chrome(options=options, version_main=None)
             self._active_browser.current_profile = profile_name
             self._active_browser.implicitly_wait(10)
             
+            # Load cookies if available
+            if cookie_file and os.path.exists(cookie_file):
+                self._load_cookies_into_browser(cookie_file)
+            
             # Set up helium integration
             if HELIUM_AVAILABLE:
                 helium.set_driver(self._active_browser)
             
-            return f"Browser ready with {profile_name} profile. Saved sessions and cookies loaded."
+            return True
             
-        except Exception as e:
-            return f"Browser setup failed: {str(e)}"
+        except Exception:
+            return False
     
-    def cleanup(self):
+    def _load_cookies_into_browser(self, cookie_file: str):
+        """Load cookies from file into browser session"""
+        try:
+            # Navigate to base domain first
+            current_profile = getattr(self._active_browser, 'current_profile', 'general')
+            
+            if current_profile == "youtube":
+                self._active_browser.get("https://youtube.com")
+            elif current_profile == "linkedin":
+                self._active_browser.get("https://linkedin.com")
+            elif current_profile == "github":
+                self._active_browser.get("https://github.com")
+            else:
+                self._active_browser.get("https://google.com")
+            
+            # Parse and add cookies
+            with open(cookie_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        try:
+                            parts = line.split('\t')
+                            if len(parts) >= 7:
+                                domain = parts[0]
+                                name = parts[5]
+                                value = parts[6]
+                                
+                                # Add cookie if domain matches
+                                if any(d in domain for d in ['.youtube.com', '.linkedin.com', '.github.com', '.google.com']):
+                                    cookie_dict = {
+                                        'name': name,
+                                        'value': value,
+                                        'domain': domain
+                                    }
+                                    self._active_browser.add_cookie(cookie_dict)
+                        except:
+                            continue
+            
+        except Exception:
+            pass
+    
+    def _cleanup_browser(self):
         """Clean up browser session"""
         if self._active_browser:
             try:
@@ -109,10 +275,23 @@ All subsequent browser interactions use helium commands directly.
             except:
                 pass
             self._active_browser = None
+    
+    def cleanup(self):
+        """Clean up browser session and temporary files"""
+        self._cleanup_browser()
+        
+        # Clean up temporary cookie files
+        for temp_file in self._temp_cookie_files:
+            try:
+                if os.path.exists(temp_file):
+                    os.unlink(temp_file)
+            except:
+                pass
+        self._temp_cookie_files.clear()
 
 def get_authenticated_browser_instructions() -> str:
     """
-    Complete browser automation instructions for CodeAgent with authentication support.
+    Browser automation instructions for CodeAgent with authentication support.
     
     Teaches CodeAgent how to handle authentication, browser automation, and 
     complex web workflows using helium commands and browser profiles.
@@ -298,59 +477,15 @@ wait_until(Text('Results loaded').exists)
 time.sleep(2)  # Explicit wait when needed
 ```
 
-ADVANCED PATTERNS:
-```py
-# Dynamic authentication detection
-def ensure_authenticated(platform):
-    if Text('Sign in').exists() or Text('Log in').exists():
-        browser_profile(platform)
-        refresh()
-        wait_until(lambda: not Text('Sign in').exists())
+DEPLOYMENT COOKIE SETUP:
 
-# Platform-specific data extraction
-def extract_youtube_transcript(video_url):
-    browser_profile("youtube")
-    go_to(video_url)
-    ensure_authenticated("youtube")
-    
-    if Text('Show transcript').exists():
-        click('Show transcript')
-        wait_until(Text('Transcript').exists)
-        return get_transcript_text()
-    
-# Error recovery with profile switching
-def robust_platform_access(platform, url, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            browser_profile(platform)
-            go_to(url)
-            
-            if not Text('Sign in').exists():
-                return True  # Successfully authenticated
-                
-            time.sleep(2)  # Wait between retries
-        except:
-            continue
-    return False  # Authentication failed
-```
+For HF Spaces deployment, set environment variables:
+- YOUTUBE_COOKIES: Netscape format cookies for YouTube
+- LINKEDIN_COOKIES: Netscape format cookies for LinkedIn  
+- GITHUB_COOKIES: Netscape format cookies for GitHub
 
-SCREENSHOT AND DEBUGGING:
-```py
-# Take screenshots for debugging (browser_profile sets up screenshot capability)
-import time
-timestamp = int(time.time())
-screenshot_path = f"/tmp/debug_{timestamp}.png"
-# Browser automatically captures state
-
-# Debug authentication issues
-def debug_auth_state():
-    if Text('Sign in').exists():
-        print("Not authenticated - sign in button present")
-    elif Text('Account').exists() or Text('Profile').exists():
-        print("Authenticated - user elements present")
-    else:
-        print("Authentication state unclear")
-```
+Export cookies from browser using browser extensions or developer tools.
+Tool automatically detects and uses available cookie sources.
 
 BEST PRACTICES:
 1. Always use browser_profile() before navigating to authenticated content
@@ -367,4 +502,39 @@ REMEMBER:
 - Profiles preserve login state between tasks and browser restarts
 - Always verify authentication worked before proceeding with task
 - Write robust error handling for authentication failures
+- Tool automatically adapts to deployment environment (local vs Docker)
+"""
+
+def get_cookie_export_instructions() -> str:
+    """Instructions for exporting cookies for deployment"""
+    return """
+COOKIE EXPORT FOR DEPLOYMENT
+
+LOCAL DEVELOPMENT:
+1. Log into platforms manually in Chrome
+2. Browser profiles automatically save authentication state
+3. No additional setup required
+
+HF SPACES / DOCKER DEPLOYMENT:
+1. Export cookies from authenticated browser sessions:
+   - Install browser extension: "Get cookies.txt" or "cookies.txt"
+   - Visit youtube.com, linkedin.com, github.com (while logged in)
+   - Export cookies in Netscape format for each platform
+
+2. Set environment variables in HF Spaces:
+   - YOUTUBE_COOKIES: Contents of youtube cookies.txt file
+   - LINKEDIN_COOKIES: Contents of linkedin cookies.txt file  
+   - GITHUB_COOKIES: Contents of github cookies.txt file
+
+3. Deploy application:
+   - Tool automatically detects environment variables
+   - Creates temporary cookie files for browser sessions
+   - Falls back to public access if no cookies available
+
+COOKIE FILE FORMAT:
+Netscape HTTP Cookie File format:
+# domain    flag    path    secure    expiration    name    value
+.youtube.com    TRUE    /    FALSE    1234567890    session_token    abc123...
+
+Tool supports multiple cookie sources and automatically selects best available option.
 """

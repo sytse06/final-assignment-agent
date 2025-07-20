@@ -37,6 +37,10 @@ from smolagents import (
     PythonInterpreterTool,
     SpeechToTextTool
 )
+from smolagents.vision_web_browser import (
+    go_back, close_popups, search_item_ctrl_f, 
+    save_screenshot, helium_instructions
+)
 
 # Import retriever system
 from dev_retriever import load_gaia_retriever
@@ -760,10 +764,36 @@ class GAIAAgent:
     # ============================================================================        
 
     def _create_specialist_agents(self) -> Dict[str, Any]:
-        """Create specialist agents using smolagents pattern"""
+        """Create specialist agents using smolagents pattern with authentication support"""
         logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
         
         specialist_agents = {}
+        
+        # Import smolagents components and our authentication tool
+        try:
+            from smolagents.vision_web_browser import (
+                go_back, close_popups, search_item_ctrl_f, 
+                save_screenshot, helium_instructions
+            )
+            from smolagents import VisitWebpageTool, WikipediaSearchTool
+            smolagents_available = True
+            print("✅ smolagents vision browser components loaded")
+        except ImportError as e:
+            print(f"⚠️ smolagents vision browser not available: {e}")
+            smolagents_available = False
+            save_screenshot = None
+        
+        # Import our authentication tool
+        try:
+            # Assuming BrowserProfileTool is defined in same module or imported
+            from .browser_profile_tool import BrowserProfileTool
+            # OR if defined in this file:
+            # browser_profile_tool = BrowserProfileTool()
+            auth_available = True
+            print("✅ Authentication tool loaded")
+        except ImportError:
+            print("⚠️ BrowserProfileTool not available")
+            auth_available = False
         
         # 1. Data Analyst - CodeAgent for direct Python file access
         try:
@@ -786,48 +816,99 @@ class GAIAAgent:
         except Exception as e:
             print(f"❌ Failed to create data_analyst: {e}")
             
-        # 2. Web Researcher - ToolCallingAgent for text-based search
+        # 2. Web Researcher - CodeAgent with browser automation and authentication
         try:
             web_tools = []
+            
+            # Get custom web tools
             try:
                 from tools import get_web_researcher_tools
                 web_tools = get_web_researcher_tools()
+                print(f"✅ Loaded {len(web_tools)} custom web tools")
             except ImportError:
-                print("⚠️ tools module unavailable - using fallback webtools")
+                print("⚠️ Custom tools module unavailable - using fallback")
                 web_tools = []
+            
+            # Add fallback smolagents tools
+            if len(web_tools) == 0 and smolagents_available:
                 try:
-                    from smolagents import VisitWebpageTool, WikipediaSearchTool
                     web_tools.extend([VisitWebpageTool(), WikipediaSearchTool()])
+                    print(f"✅ Added {len(web_tools)} fallback tools")
                 except Exception as e:
                     print(f"⚠️ Fallback tools failed: {e}")
-
-            web_researcher = ToolCallingAgent(
-                name="web_researcher",
-                description="Information discovery, web search, fact verification, and general web content retrieval specialist",
-                tools=web_tools,
-                model=self.specialist_model,
-                max_steps=self.config.max_agent_steps,
-                add_base_tools=len(web_tools) == 0,
-                logger=logger
-            )
+            
+            # Add smolagents vision browser tools
+            if smolagents_available:
+                web_tools.extend([go_back, close_popups, search_item_ctrl_f])
+                print("✅ Added smolagents browser tools")
+            
+            # Add authentication tool
+            if auth_available:
+                web_tools.append(BrowserProfileTool())
+                print("✅ Added authentication tool")
+            
+            # Create web researcher agent
+            web_researcher_kwargs = {
+                "name": "web_researcher",
+                "description": "Web search, browser automation, and authenticated content retrieval specialist",
+                "tools": web_tools,
+                "additional_authorized_imports": [
+                    "helium", "undetected_chromedriver", "selenium", "time"
+                ],
+                "model": self.specialist_model,
+                "max_steps": self.config.max_agent_steps,
+                "add_base_tools": len(web_tools) == 0,
+                "logger": logger
+            }
+            
+            # Add screenshot callback if available
+            if save_screenshot is not None:
+                web_researcher_kwargs["step_callbacks"] = [save_screenshot]
+            
+            web_researcher = CodeAgent(**web_researcher_kwargs)
+            
+            # Set up helium and browser instructions
+            try:
+                web_researcher.python_executor("from helium import *")
+                print("✅ Helium loaded for web researcher")
+                
+                # Combine instructions
+                if smolagents_available and auth_available:
+                    from .browser_profile_tool import get_authenticated_browser_instructions
+                    combined_instructions = helium_instructions + "\n\n" + get_authenticated_browser_instructions()
+                    web_researcher._browser_instructions = combined_instructions
+                    print("✅ Combined browser instructions loaded")
+                    
+            except Exception as e:
+                print(f"⚠️ Browser setup warning: {e}")
+            
             specialist_agents["web_researcher"] = web_researcher
             print(f"✅ Web Researcher: {len(web_tools)} tools")
+            
         except Exception as e:
             print(f"❌ Failed to create web_researcher: {e}")
             
-        # 3. Content Processor - ToolCallingAgent for document/multi media content processing
+        # 3. Content Processor - ToolCallingAgent for document/multimedia content processing  
         try:
             content_tools = []
+            
+            # Get custom content processing tools
             try:
                 from tools import get_content_processor_tools
                 content_tools = get_content_processor_tools()
+                print(f"✅ Loaded {len(content_tools)} content processing tools")
             except ImportError:
-                print("⚠️ tools module unavailable - no specialized tools")
+                print("⚠️ Custom content tools unavailable")
                 content_tools = []
+            
+            # Add authentication tool for authenticated content processing
+            if auth_available:
+                content_tools.append(BrowserProfileTool())
+                print("✅ Added authentication for content processor")
 
             content_processor = ToolCallingAgent(
                 name="content_processor", 
-                description="YouTube video transcription, audio processing, document text extraction, and multimedia content analysis specialist",
+                description="Document processing, multimedia analysis, and authenticated content extraction specialist",
                 tools=content_tools,
                 model=self.specialist_model,
                 max_steps=self.config.max_agent_steps,
@@ -835,48 +916,30 @@ class GAIAAgent:
                 logger=logger
             )
             specialist_agents["content_processor"] = content_processor
-            print(f"✅ Content Processor: {len(content_tools)}")
+            print(f"✅ Content Processor: {len(content_tools)} tools")
+            
         except Exception as e:
             print(f"❌ Failed to create content_processor: {e}")
-        
-        # 4. Vision Browser - CodeAgent for interactive web automation and analysis
-        try:
-            from tools import VisionWebBrowserTool, VISION_BROWSER_AVAILABLE
-            
-            if VISION_BROWSER_AVAILABLE:
-                vision_browser_agent = CodeAgent(
-                    name="vision_browser",
-                    description="Interactive web automation, form filling, search execution, and visual analysis specialist for public web content (no cookie/authentication support)",
-                    tools=[VisionWebBrowserTool()],
-                    additional_authorized_imports=[
-                        "selenium", "helium", "PIL", "io", "base64", "requests",
-                        "webdriver_manager", "chromedriver_autoinstaller",
-                        "os", "sys", "time", "tempfile", "pathlib",
-                        "contextlib", "functools", "traceback"
-                    ],
-                    model=self.specialist_model,
-                    max_steps=self.config.max_agent_steps,
-                    add_base_tools=False,
-                    logger=logger
-                )
-                specialist_agents["vision_browser_agent"] = vision_browser_agent
-                print(f"✅ Vision Browser Agent: 1 tool + {len(vision_browser_agent.additional_authorized_imports)} imports")
-            else:
-                print("⚠️ Vision Browser Agent: Not available (dependencies missing)")
-        except ImportError as e:
-            print(f"⚠️ Vision Browser Agent: {e}")
-        except Exception as e:
-            print(f"❌ Failed to create vision_browser_agent: {e}")
 
         # Print final summary
         print(f"🎯 Created {len(specialist_agents)} specialist agents:")
         for name, agent in specialist_agents.items():
-            if hasattr(agent, 'additional_authorized_imports'):
-                print(f"   📊 {name}: {len(agent.additional_authorized_imports)} imports")
-            elif hasattr(agent, 'tools'):
-                print(f"   🔧 {name}: {len(agent.tools)} tools")
-            else:
-                print(f"   ✅ {name}: configured")
+            agent_info = []
+            
+            if hasattr(agent, 'tools') and agent.tools:
+                agent_info.append(f"{len(agent.tools)} tools")
+                
+            if hasattr(agent, 'additional_authorized_imports') and agent.additional_authorized_imports:
+                agent_info.append(f"{len(agent.additional_authorized_imports)} imports")
+                
+            if hasattr(agent, 'step_callbacks') and agent.step_callbacks:
+                agent_info.append("screenshots")
+                
+            if hasattr(agent, '_browser_instructions'):
+                agent_info.append("browser automation")
+            
+            info_str = ", ".join(agent_info) if agent_info else "basic configuration"
+            print(f"   🔧 {name}: {info_str}")
         
         return specialist_agents
         
@@ -899,25 +962,20 @@ class GAIAAgent:
         4. SYNTHESIZE: Combine results and format GAIA answer
 
         SPECIALISTS AVAILABLE:
-        - content_processor: Extracts and analyzes content from any source
-        When delegating, use: "Answer this question: [question] by extracting and analyzing content from multimedia sources"
-        - data_analyst: Performs numerical analysis and calculations
-        When delegating, use: "Answer this question: [question] by analyzing the data"
-        - web_researcher: Discovers and researches information
-        When delegating, use: "Answer this question: [question] by researching information"
-        - vision_browser: Use for interactive web automation on public sites
-        When delegating, use: "Answer this question: [question] by analyzing visual elements"
-        
-        PRIORITY RULES:
-        1. YouTube/video content → content_processor (has cookie support, bypasses restrictions)
-        2. Calculations/data analysis → data_analyst
-        3. Information lookup → web_researcher  
-        4. Interactive web tasks on public sites → vision_browser (no authentication required)
+        - data_analyst: Performs numerical calculations, statistical analysis, and Excel/CSV data processing
+        When delegating, use: "Answer this question: [question] by analyzing the numerical data and performing calculations"
+
+        - web_researcher: Web search, browser automation, authenticated content access, and visual analysis
+        When delegating, use: "Answer this question: [question] by researching information and navigating web content"
+
+        - content_processor: Document processing, multimedia analysis, and authenticated content extraction
+        When delegating, use: "Answer this question: [question] by extracting and analyzing content from documents and multimedia sources"
         
         COORDINATION PRINCIPLES:
         - Handle file preparation so specialists focus on core capabilities
         - Provide clear, task-oriented instructions to specialists
-        - Ensure specialists receive complete context for their tasks""",
+        - Ensure specialists receive complete context for their tasks
+        - Combine multiple specialists for complex workflows (extract → analyze → research)""",
                 tools=[], 
                 managed_agents=list(specialist_agents.values()),
                 additional_authorized_imports=[
@@ -986,59 +1044,147 @@ class GAIAAgent:
         
         # Give specialist relevant content type context
         content_hints = ""
+        authentication_context = ""
         question_lower = question.lower()
 
-        # YouTube/Video content detection (HIGH PRIORITY - has cookie support)
-        if any(indicator in question_lower for indicator in ["youtube.com", "youtu.be", "video"]):
-            content_hints = "\nCONTENT TYPE: YouTube/Video - use content extraction tools with cookie support for restricted content"
+        # Authenticated YouTube/Video content detection
+        if any(indicator in question_lower for indicator in ["youtube.com", "youtu.be"]):
+            if any(restriction in question_lower for restriction in ["age restricted", "private", "sign in", "login"]):
+                content_hints = "\nCONTENT TYPE: Authenticated YouTube Content"
+                authentication_context = "\nAUTHENTICATION: Use browser_profile('youtube') for age-restricted or private content"
+            else:
+                content_hints = "\nCONTENT TYPE: YouTube Content"
+                authentication_context = "\nAUTHENTICATION: Try public access first, use browser_profile('youtube') if needed"
+        
+        # Authenticated LinkedIn content detection
+        elif any(indicator in question_lower for indicator in ["linkedin.com", "linkedin"]):
+            content_hints = "\nCONTENT TYPE: LinkedIn Content"
+            authentication_context = "\nAUTHENTICATION: Use browser_profile('linkedin') for profile/company data access"
+        
+        # Authenticated GitHub content detection
+        elif any(indicator in question_lower for indicator in ["github.com", "github"]):
+            if any(term in question_lower for term in ["private", "organization", "member"]):
+                content_hints = "\nCONTENT TYPE: Private GitHub Content"
+                authentication_context = "\nAUTHENTICATION: Use browser_profile('github') for private repository access"
+            else:
+                content_hints = "\nCONTENT TYPE: GitHub Content"
+                authentication_context = "\nAUTHENTICATION: Public access available, use browser_profile('github') for private content"
+        
+        # General video content (may require authentication)
+        elif any(indicator in question_lower for indicator in ["video", "watch", "stream"]):
+            content_hints = "\nCONTENT TYPE: Video Content"
+            authentication_context = "\nAUTHENTICATION: Consider platform-specific authentication if content is restricted"
         
         # Audio content detection
-        elif any(indicator in question_lower for indicator in ["audio", "sound", "music", "podcast", "listen"]):
-            content_hints = "\nCONTENT TYPE: Audio - use audio transcription and analysis tools"
+        elif any(indicator in question_lower for indicator in ["audio", "sound", "music", "podcast", "listen", "transcript"]):
+            content_hints = "\nCONTENT TYPE: Audio Content - use transcription and analysis tools"
         
-        # Calculation/numerical analysis detection
-        elif any(indicator in question_lower for indicator in ["calculate", "sum", "average", "percentage", "statistics", "analyze data"]):
-            content_hints = "\nCONTENT TYPE: Numerical Analysis - use mathematical and statistical tools"
+        # Data analysis and calculations
+        elif any(indicator in question_lower for indicator in ["calculate", "sum", "average", "percentage", "statistics", "analyze data", "excel", "csv", "chart", "graph"]):
+            content_hints = "\nCONTENT TYPE: Numerical Analysis - use mathematical and statistical tools with direct Python execution"
         
-        # Information discovery detection
-        elif any(indicator in question_lower for indicator in ["find", "search", "look up", "who is", "what is", "when did", "where is"]):
+        # Web research and information discovery
+        elif any(indicator in question_lower for indicator in ["find", "search", "look up", "who is", "what is", "when did", "where is", "research"]):
             content_hints = "\nCONTENT TYPE: Information Discovery - use web search and research tools"
         
-        # Visual interface detection (PUBLIC sites only - no authentication)
-        elif any(indicator in question_lower for indicator in ["search on", "fill form", "submit", "click", "navigate", "screenshot", "visual interface", "interact with"]):
-            content_hints = "\nCONTENT TYPE: Interactive Web Interface - use browser automation for public sites (no authentication required)"
+        # Interactive web automation
+        elif any(indicator in question_lower for indicator in ["search on", "fill form", "submit", "click", "navigate", "screenshot", "interact with", "automation"]):
+            content_hints = "\nCONTENT TYPE: Interactive Web Automation - use browser automation with visual confirmation"
+            authentication_context = "\nAUTHENTICATION: Use appropriate browser_profile() if authentication required"
         
-        # General web URL (NOT YouTube)
-        elif (question.startswith("http") or "www." in question) and "youtube" not in question_lower:
+        # Document processing
+        elif any(indicator in question_lower for indicator in ["pdf", "document", "text", "extract", "read"]):
+            content_hints = "\nCONTENT TYPE: Document Processing - use document extraction and analysis tools"
+        
+        # General web content
+        elif (question.startswith("http") or "www." in question) and not any(platform in question_lower for platform in ["youtube", "linkedin", "github"]):
             content_hints = "\nCONTENT TYPE: Web Page - use web content extraction tools"
         
-        # Give specialist question/answer examples context for guidance
+        # Capability-specific guidance based on detected content type
+        capability_guidance = ""
+        
+        if "youtube" in content_hints.lower() or "video" in content_hints.lower():
+            capability_guidance = "\nCAPABILITY GUIDANCE: content_processor has cookie support for authenticated YouTube access"
+        elif "linkedin" in content_hints.lower() or "github" in content_hints.lower():
+            capability_guidance = "\nCAPABILITY GUIDANCE: web_researcher has browser automation with authentication profiles"
+        elif "numerical" in content_hints.lower() or "calculate" in content_hints.lower():
+            capability_guidance = "\nCAPABILITY GUIDANCE: data_analyst has direct Python execution for calculations and data processing"
+        elif "interactive" in content_hints.lower() or "automation" in content_hints.lower():
+            capability_guidance = "\nCAPABILITY GUIDANCE: web_researcher has helium browser automation with visual confirmation"
+        elif "document" in content_hints.lower() or "audio" in content_hints.lower():
+            capability_guidance = "\nCAPABILITY GUIDANCE: content_processor has multi-format document and media processing"
+        
+        # Enhanced examples context with pattern recognition
         examples_context = ""
         if similar_examples:
             examples_context = "\nSUCCESSFUL PATTERNS (use these to guide your approach and answer formatting):\n"
-            for i, example in enumerate(similar_examples[:2], 1):
+            for i, example in enumerate(similar_examples[:3], 1):  # Increased to 3 examples
                 q = example.get("question", "")[:80]
                 a = example.get("answer", "")
-                examples_context += f"{i}. {q}... → {a}\n"
+                # Add pattern analysis
+                if any(keyword in q.lower() for keyword in ["youtube", "video"]):
+                    pattern_type = "[VIDEO]"
+                elif any(keyword in q.lower() for keyword in ["calculate", "sum", "average"]):
+                    pattern_type = "[CALCULATION]"
+                elif any(keyword in q.lower() for keyword in ["search", "find", "who"]):
+                    pattern_type = "[RESEARCH]"
+                elif any(keyword in q.lower() for keyword in ["document", "pdf", "text"]):
+                    pattern_type = "[DOCUMENT]"
+                else:
+                    pattern_type = "[GENERAL]"
+                
+                examples_context += f"{i}. {pattern_type} {q}... → {a}\n"
         
-        # Build execution context for specialist
-        task = f"""CURRENT TASK CONTEXT
-
-    QUESTION: {question}
-    COMPLEXITY: {complexity}{file_context}{content_hints}{examples_context}
-
-    EXECUTION CONTEXT:
-    You have been selected as the most appropriate specialist to answer this question. Use the content type hints
-    above to guide your tool selection and approach. The successful patterns show the type of precise, factual answers expected.
-
-    GAIA FORMAT REQUIREMENTS:
-    - End with: FINAL ANSWER: [answer]
-    - Format: numbers (no commas), strings (no articles), lists (comma-separated)
-    - Be precise and factual
-
-    Execute using your available tools and capabilities."""
-
-        return task.strip()
+        # Build comprehensive execution context for specialist
+        task_parts = [
+            "CURRENT TASK CONTEXT",
+            "",
+            f"QUESTION: {question}",
+            f"COMPLEXITY: {complexity}"
+        ]
+        
+        if file_context:
+            task_parts.append(file_context)
+        
+        if content_hints:
+            task_parts.append(content_hints)
+        
+        if authentication_context:
+            task_parts.append(authentication_context)
+        
+        if capability_guidance:
+            task_parts.append(capability_guidance)
+        
+        if examples_context:
+            task_parts.append(examples_context)
+        
+        task_parts.extend([
+            "",
+            "EXECUTION CONTEXT:",
+            "You have been selected as the most appropriate specialist to answer this question.",
+            "Use the content type hints and authentication guidance above to select the right approach.",
+            "The successful patterns show the type of precise, factual answers expected.",
+            "",
+            "SPECIALIST CAPABILITIES:",
+            "- If you are data_analyst: Use direct Python execution for calculations and data processing",
+            "- If you are web_researcher: Use browser automation with authentication profiles and visual confirmation", 
+            "- If you are content_processor: Use document/multimedia processing with cookie authentication support",
+            "",
+            "AUTHENTICATION WORKFLOW:",
+            "1. Check if content requires authentication (age-restricted, private, member-only)",
+            "2. Use appropriate browser_profile() for authenticated access when needed",
+            "3. Fall back to public access methods if authentication not available",
+            "4. Handle authentication errors gracefully with alternative approaches",
+            "",
+            "GAIA FORMAT REQUIREMENTS:",
+            "- End with: FINAL ANSWER: [answer]",
+            "- Format: numbers (no commas), strings (no articles), lists (comma-separated)",
+            "- Be precise and factual",
+            "",
+            "Execute using your available tools and capabilities."
+        ])
+        
+        return "\n".join(task_parts)
                    
     # ============================================================================
     # LANGGRAPH WORKFLOW 

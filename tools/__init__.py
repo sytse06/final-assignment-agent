@@ -1,5 +1,5 @@
 # tools/__init__.py
-# Cleaned up tools initialization for GAIA Agent with enhanced diagnostics
+# Updated tools initialization for GAIA Agent with BrowserProfileTool and smolagents integration
 
 import os
 import smolagents
@@ -12,6 +12,7 @@ try:
 except ImportError as e:
     print(f"⚠️ ContentRetrieverTool failed to load: {e}")
     ContentRetrieverTool = None
+
 # Import SpeechToTextTool with proper error handling
 try:
     from smolagents import SpeechToTextTool
@@ -46,29 +47,62 @@ except ImportError as e:
         print(f"⚠️ YouTubeContentTool failed to load: {e}")
         print("💡 Check tools/youtube_content_tool.py for syntax errors")
 
-# Import VisionWebBrowserTool with enhanced error detection
+# Import BrowserProfileTool for authenticated browser automation
 try:
-    from .vision_browser_tool import VisionWebBrowserTool
-    VISION_BROWSER_AVAILABLE = True
-    print("✅ VisionWebBrowserTool loaded")
+    from .BrowserProfileTool import BrowserProfileTool, get_authenticated_browser_instructions
+    BROWSER_PROFILE_AVAILABLE = True
+    print("✅ BrowserProfileTool loaded")
 except ImportError as e:
-    VisionWebBrowserTool = None
-    VISION_BROWSER_AVAILABLE = False
+    BrowserProfileTool = None
+    get_authenticated_browser_instructions = None
+    BROWSER_PROFILE_AVAILABLE = False
     
-    # More specific error messages based on the actual error
+    # Specific error messages
     error_msg = str(e).lower()
-    if "no module named 'tools.vision_browser_tool'" in error_msg:
-        print("⚠️ VisionWebBrowserTool not found: tools/vision_browser_tool.py missing")
-        print("💡 Create tools/vision_browser_tool.py file")
-    elif "helium" in error_msg:
-        print(f"⚠️ VisionWebBrowserTool dependency issue: {e}")
-        print("💡 Install: pip install helium selenium")
+    if "no module named 'tools.browserprofiletool'" in error_msg:
+        print("⚠️ BrowserProfileTool not found: tools/BrowserProfileTool.py missing")
+        print("💡 Create tools/BrowserProfileTool.py file")
+    elif "undetected_chromedriver" in error_msg:
+        print(f"⚠️ BrowserProfileTool dependency issue: {e}")
+        print("💡 Install: pip install undetected-chromedriver selenium")
     elif "selenium" in error_msg:
-        print(f"⚠️ VisionWebBrowserTool dependency issue: {e}")
+        print(f"⚠️ BrowserProfileTool dependency issue: {e}")
         print("💡 Install: pip install selenium")
     else:
-        print(f"⚠️ VisionWebBrowserTool failed to load: {e}")
-        print("💡 Check tools/vision_browser_tool.py for syntax errors")
+        print(f"⚠️ BrowserProfileTool failed to load: {e}")
+        print("💡 Check tools/BrowserProfileTool.py for syntax errors")
+
+# Import smolagents vision browser components
+try:
+    from smolagents.vision_web_browser import (
+        go_back, close_popups, search_item_ctrl_f, 
+        save_screenshot, helium_instructions
+    )
+    SMOLAGENTS_VISION_AVAILABLE = True
+    print("✅ smolagents vision browser components loaded")
+except ImportError as e:
+    go_back = None
+    close_popups = None
+    search_item_ctrl_f = None
+    save_screenshot = None
+    helium_instructions = None
+    SMOLAGENTS_VISION_AVAILABLE = False
+    print(f"⚠️ smolagents vision browser not available: {e}")
+    print("💡 Update smolagents: pip install --upgrade smolagents")
+
+# Import standard smolagents tools
+try:
+    from smolagents import VisitWebpageTool, WikipediaSearchTool
+    SMOLAGENTS_STANDARD_AVAILABLE = True
+    print("✅ smolagents standard tools loaded")
+except ImportError as e:
+    VisitWebpageTool = None
+    WikipediaSearchTool = None
+    SMOLAGENTS_STANDARD_AVAILABLE = False
+    print(f"⚠️ smolagents standard tools not available: {e}")
+
+# DEPRECATED: Remove VisionWebBrowserTool - replaced by BrowserProfileTool + smolagents components
+# The old VisionWebBrowserTool approach has been replaced by the modular approach
 
 # Import LangChain research tools
 try:
@@ -87,12 +121,26 @@ __all__ = [
     # Core GAIA tools
     'ContentRetrieverTool',
     'YouTubeContentTool', 
-    'VisionWebBrowserTool',
+    'BrowserProfileTool',  # NEW: Authentication tool
     'SpeechToTextTool',
+    
+    # smolagents vision browser components
+    'go_back',
+    'close_popups', 
+    'search_item_ctrl_f',
+    'save_screenshot',
+    'helium_instructions',
+    'get_authenticated_browser_instructions',  # NEW: Authentication instructions
+    
+    # smolagents standard tools
+    'VisitWebpageTool',
+    'WikipediaSearchTool',
     
     # Availability flags
     'YOUTUBE_TOOL_AVAILABLE',
-    'VISION_BROWSER_AVAILABLE',
+    'BROWSER_PROFILE_AVAILABLE',  # NEW: Authentication availability
+    'SMOLAGENTS_VISION_AVAILABLE',  # NEW: Vision browser availability
+    'SMOLAGENTS_STANDARD_AVAILABLE',  # NEW: Standard tools availability
     'SPEECH_TO_TEXT_AVAILABLE',
     'LANGCHAIN_TOOLS_AVAILABLE',
     
@@ -106,10 +154,10 @@ __all__ = [
     'get_web_researcher_tools',
     
     # Diagnostic functions
-    'diagnose_vision_tool',
+    'diagnose_browser_profile_tool',  # NEW: Browser profile diagnostics
     'diagnose_youtube_tool',
     'validate_tool_dependencies',
-    'check_vision_status',
+    'check_browser_profile_status',  # NEW: Browser profile status
     'check_youtube_status'
 ]
 
@@ -122,8 +170,12 @@ def get_tool_status():
         # Core tools
         'ContentRetrieverTool': ContentRetrieverTool is not None,
         'YouTubeContentTool': YouTubeContentTool is not None,
-        'VisionWebBrowserTool': VisionWebBrowserTool is not None,
+        'BrowserProfileTool': BrowserProfileTool is not None,  # NEW
         'SpeechToTextTool': SPEECH_TO_TEXT_AVAILABLE,
+        
+        # smolagents components
+        'smolagents_vision_available': SMOLAGENTS_VISION_AVAILABLE,  # NEW
+        'smolagents_standard_available': SMOLAGENTS_STANDARD_AVAILABLE,  # NEW
         
         # Research capabilities
         'research_tools_available': langchain_status.get('research_tools_available', False),
@@ -133,35 +185,35 @@ def get_tool_status():
         'total_core_tools': sum([
             ContentRetrieverTool is not None,
             YouTubeContentTool is not None,
-            VisionWebBrowserTool is not None,
+            BrowserProfileTool is not None,  # NEW
             SPEECH_TO_TEXT_AVAILABLE
         ]),
         'total_research_tools': len(ALL_LANGCHAIN_TOOLS) if LANGCHAIN_TOOLS_AVAILABLE else 0,
         
         # Capability assessment
         'content_processing_capable': ContentRetrieverTool is not None,
-        'web_navigation_capable': VisionWebBrowserTool is not None,
+        'authenticated_browsing_capable': BrowserProfileTool is not None and SMOLAGENTS_VISION_AVAILABLE,  # NEW
         'multimedia_capable': YouTubeContentTool is not None,
         'audio_processing_capable': SPEECH_TO_TEXT_AVAILABLE,
         'research_capable': langchain_status.get('research_tools_available', False)
     }
 
-def diagnose_vision_tool():
-    """Comprehensive diagnosis of VisionWebBrowserTool status"""
-    print("🔍 Diagnosing VisionWebBrowserTool...")
+def diagnose_browser_profile_tool():
+    """Comprehensive diagnosis of BrowserProfileTool status"""
+    print("🔍 Diagnosing BrowserProfileTool...")
     
     # Check file existence
     current_dir = Path(__file__).parent
-    vision_tool_path = current_dir / "vision_browser_tool.py"
+    tool_path = current_dir / "BrowserProfileTool.py"
     
-    print(f"📁 Looking for: {vision_tool_path}")
-    print(f"📁 Absolute path: {vision_tool_path.absolute()}")
+    print(f"📁 Looking for: {tool_path}")
+    print(f"📁 Absolute path: {tool_path.absolute()}")
     
-    if vision_tool_path.exists():
-        print("✅ vision_browser_tool.py file exists")
+    if tool_path.exists():
+        print("✅ BrowserProfileTool.py file exists")
         
         # Check file size and basic content
-        file_size = vision_tool_path.stat().st_size
+        file_size = tool_path.stat().st_size
         print(f"📄 File size: {file_size} bytes")
         
         if file_size == 0:
@@ -170,12 +222,12 @@ def diagnose_vision_tool():
         
         # Try to read the file and check for basic class definition
         try:
-            with open(vision_tool_path, 'r') as f:
+            with open(tool_path, 'r') as f:
                 content = f.read()
-                if 'class VisionWebBrowserTool' in content:
-                    print("✅ VisionWebBrowserTool class found in file")
+                if 'class BrowserProfileTool' in content:
+                    print("✅ BrowserProfileTool class found in file")
                 else:
-                    print("❌ VisionWebBrowserTool class not found in file")
+                    print("❌ BrowserProfileTool class not found in file")
                     print("💡 File content preview:")
                     print(content[:200] + "..." if len(content) > 200 else content)
                     return False
@@ -185,10 +237,11 @@ def diagnose_vision_tool():
         
         # Check dependencies
         try:
-            import helium
-            print("✅ helium dependency available")
+            import undetected_chromedriver as uc
+            print("✅ undetected-chromedriver dependency available")
         except ImportError:
-            print("❌ helium dependency missing")
+            print("❌ undetected-chromedriver dependency missing")
+            print("💡 Install: pip install undetected-chromedriver")
             return False
         
         try:
@@ -196,25 +249,33 @@ def diagnose_vision_tool():
             print("✅ selenium dependency available")
         except ImportError:
             print("❌ selenium dependency missing")
+            print("💡 Install: pip install selenium")
             return False
+        
+        try:
+            import helium
+            print("✅ helium dependency available")
+        except ImportError:
+            print("⚠️ helium dependency missing (optional)")
+            print("💡 Install: pip install helium")
         
         # Try importing the tool
         try:
-            from .vision_browser_tool import VisionWebBrowserTool
-            print("✅ VisionWebBrowserTool import successful")
+            from .BrowserProfileTool import BrowserProfileTool
+            print("✅ BrowserProfileTool import successful")
             
             # Try instantiating
-            tool = VisionWebBrowserTool()
-            print("✅ VisionWebBrowserTool instantiation successful")
+            tool = BrowserProfileTool()
+            print("✅ BrowserProfileTool instantiation successful")
             return True
             
         except Exception as e:
-            print(f"❌ VisionWebBrowserTool import/instantiation failed: {e}")
+            print(f"❌ BrowserProfileTool import/instantiation failed: {e}")
             print(f"💡 Error details: {type(e).__name__}: {e}")
             return False
     else:
-        print("❌ vision_browser_tool.py file does not exist")
-        print(f"💡 Create the file at: {vision_tool_path}")
+        print("❌ BrowserProfileTool.py file does not exist")
+        print(f"💡 Create the file at: {tool_path}")
         
         # Show what files do exist in the tools directory
         tools_files = list(current_dir.glob("*.py"))
@@ -299,27 +360,40 @@ def diagnose_youtube_tool():
         return False
 
 def validate_tool_dependencies():
-    """Enhanced validation with specific error detection for each tool"""
+    """Enhanced validation with authentication and smolagents components"""
     issues = []
     recommendations = []
     
-    # Check helium and selenium availability
-    helium_available = False
-    selenium_available = False
-    
+    # Check authentication dependencies
+    auth_deps_available = True
     try:
-        import helium
-        helium_available = True
-        print("✅ helium package available")
+        import undetected_chromedriver as uc
+        print("✅ undetected-chromedriver available")
     except ImportError:
-        print("❌ helium package not available")
+        print("❌ undetected-chromedriver not available")
+        auth_deps_available = False
     
     try:
         import selenium
-        selenium_available = True
-        print("✅ selenium package available")
+        print("✅ selenium available")
     except ImportError:
-        print("❌ selenium package not available")
+        print("❌ selenium not available")
+        auth_deps_available = False
+    
+    try:
+        import helium
+        print("✅ helium available")
+    except ImportError:
+        print("⚠️ helium not available (optional for enhanced browser automation)")
+    
+    # Check smolagents availability
+    try:
+        import smolagents
+        print("✅ smolagents base package available")
+    except ImportError:
+        print("❌ smolagents not available")
+        issues.append("smolagents package missing")
+        recommendations.append("Install: pip install smolagents")
     
     # Check YouTube tool dependencies
     yt_dlp_available = False
@@ -339,61 +413,39 @@ def validate_tool_dependencies():
     except ImportError:
         print("❌ requests package not available")
     
-    # Check VisionWebBrowserTool with specific diagnosis
-    if VisionWebBrowserTool is None:
-        if not helium_available or not selenium_available:
-            issues.append("VisionWebBrowserTool dependencies missing")
-            missing_deps = []
-            if not helium_available:
-                missing_deps.append("helium")
-            if not selenium_available:
-                missing_deps.append("selenium")
+    # Analyze tool availability
+    if BrowserProfileTool is None and auth_deps_available:
+        issues.append("BrowserProfileTool file missing despite dependencies being available")
+        recommendations.append("Check if tools/BrowserProfileTool.py exists and has no syntax errors")
+    elif BrowserProfileTool is None and not auth_deps_available:
+        issues.append("BrowserProfileTool dependencies missing")
+        missing_deps = []
+        try:
+            import undetected_chromedriver
+        except ImportError:
+            missing_deps.append("undetected-chromedriver")
+        try:
+            import selenium
+        except ImportError:
+            missing_deps.append("selenium")
+        if missing_deps:
             recommendations.append(f"Install missing dependencies: pip install {' '.join(missing_deps)}")
-        else:
-            # Dependencies are available but tool still failed to load
-            issues.append("VisionWebBrowserTool file missing or has errors")
-            recommendations.append("Check if tools/vision_browser_tool.py exists and has no syntax errors")
     
-    # Check YouTubeContentTool with specific diagnosis
-    if YouTubeContentTool is None:
-        if not yt_dlp_available or not requests_available:
-            issues.append("YouTubeContentTool dependencies missing")
-            missing_deps = []
-            if not yt_dlp_available:
-                missing_deps.append("yt-dlp")
-            if not requests_available:
-                missing_deps.append("requests")
-            recommendations.append(f"Install missing dependencies: pip install {' '.join(missing_deps)}")
-        else:
-            # Dependencies are available but tool still failed to load
-            issues.append("YouTubeContentTool file missing or has errors")
-            recommendations.append("Check if tools/youtube_content_tool.py exists and has no syntax errors")
+    if YouTubeContentTool is None and (yt_dlp_available and requests_available):
+        issues.append("YouTubeContentTool file missing despite dependencies being available")
+        recommendations.append("Check if tools/youtube_content_tool.py exists and has no syntax errors")
+    elif YouTubeContentTool is None and not (yt_dlp_available and requests_available):
+        issues.append("YouTubeContentTool dependencies missing")
+        missing_deps = []
+        if not yt_dlp_available:
+            missing_deps.append("yt-dlp")
+        if not requests_available:
+            missing_deps.append("requests")
+        recommendations.append(f"Install missing dependencies: pip install {' '.join(missing_deps)}")
     
-    # Enhanced DuckDuckGo check
-    ddgs_available = False
-    old_package_available = False
-    
-    try:
-        import ddgs
-        ddgs_available = True
-        print("✅ ddgs package available")
-    except ImportError:
-        pass
-    
-    try:
-        import duckduckgo_search
-        old_package_available = True
-        if not ddgs_available:
-            print("⚠️ Using deprecated duckduckgo_search package")
-    except ImportError:
-        pass
-    
-    if not ddgs_available and not old_package_available:
-        issues.append("No DuckDuckGo search package available")
-        recommendations.append("Run: pip install ddgs")
-    elif old_package_available and not ddgs_available:
-        issues.append("Using deprecated 'duckduckgo-search' package")
-        recommendations.append("Run: pip uninstall duckduckgo-search && pip install ddgs")
+    if not SMOLAGENTS_VISION_AVAILABLE:
+        issues.append("smolagents vision browser components not available")
+        recommendations.append("Update smolagents: pip install --upgrade smolagents")
     
     # Check for content processing dependencies
     if ContentRetrieverTool is None:
@@ -405,20 +457,21 @@ def validate_tool_dependencies():
         'recommendations': recommendations,
         'status': 'healthy' if not issues else 'needs_attention',
         'dependency_details': {
-            'helium_available': helium_available,
-            'selenium_available': selenium_available,
+            'undetected_chromedriver_available': auth_deps_available,
+            'helium_available': HELIUM_AVAILABLE,
+            'smolagents_vision_available': SMOLAGENTS_VISION_AVAILABLE,
+            'smolagents_standard_available': SMOLAGENTS_STANDARD_AVAILABLE,
             'yt_dlp_available': yt_dlp_available,
             'requests_available': requests_available,
-            'ddgs_available': ddgs_available,
-            'vision_tool_available': VisionWebBrowserTool is not None,
+            'browser_profile_tool_available': BrowserProfileTool is not None,
             'youtube_tool_available': YouTubeContentTool is not None
         }
     }
 
-def check_vision_status():
-    """Quick status check for vision capabilities"""
-    print("🔍 Vision Tool Status Check:")
-    success = diagnose_vision_tool()
+def check_browser_profile_status():
+    """Quick status check for browser profile capabilities"""
+    print("🔍 Browser Profile Tool Status Check:")
+    success = diagnose_browser_profile_tool()
     
     print(f"\n🔍 Dependency Status:")
     deps = validate_tool_dependencies()
@@ -434,8 +487,10 @@ def check_vision_status():
         for rec in deps['recommendations']:
             print(f"   - {rec}")
     
-    print(f"\n📊 Dependency Details:")
-    for key, value in deps['dependency_details'].items():
+    print(f"\n📊 Browser Profile Details:")
+    profile_deps = {k: v for k, v in deps['dependency_details'].items() 
+                   if 'browser' in k.lower() or k in ['undetected_chromedriver_available', 'helium_available']}
+    for key, value in profile_deps.items():
         status = "✅" if value else "❌"
         print(f"   {key}: {status}")
     
@@ -478,53 +533,80 @@ def get_content_processor_tools():
         tools.append(ContentRetrieverTool())
         print("✓ Added ContentRetrieverTool to content_processor")
 
-    # Speech_to_text processing
+    # Speech to text processing
     if SpeechToTextTool:
         tools.append(SpeechToTextTool())
         print("✓ Added SpeechToTextTool to content_processor")        
     
-    # Multimedia content processing (NEW: YouTube support)
+    # Multimedia content processing (YouTube support)
     if YouTubeContentTool:
         tools.append(YouTubeContentTool())
         print("✓ Added YouTubeContentTool to content_processor")
+    
+    # Authentication for restricted content
+    if BrowserProfileTool:
+        tools.append(BrowserProfileTool())
+        print("✓ Added BrowserProfileTool to content_processor (for authenticated content)")
     
     print(f"📦 Content processor tools: {len(tools)} available")
     return tools
 
 def get_web_researcher_tools():
-    """Get tools specifically for web_researcher specialist - FOCUSED ON SEARCH & DISCOVERY"""
+    """Get tools specifically for web_researcher specialist with authentication and smolagents integration"""
     tools = []
     
     # Add LangChain research tools (PRIMARY for web research)
     if LANGCHAIN_TOOLS_AVAILABLE:
         langchain_tools = get_langchain_tools()
         tools.extend(langchain_tools)
-        print(f"✓ Added {len(langchain_tools)} LangChain research tools to web_researcher (PRIMARY)")
+        print(f"✓ Added {len(langchain_tools)} LangChain research tools to web_researcher")
     
-    # Always add VisitWebpageTool (essential for web research)
-    try:
-        from smolagents import VisitWebpageTool
-        tools.append(VisitWebpageTool())
-        print("✓ Added VisitWebpageTool to web_researcher (essential)")
-    except Exception as e:
-        print(f"⚠️ Failed to add VisitWebpageTool: {e}")
+    # Add standard smolagents tools
+    if SMOLAGENTS_STANDARD_AVAILABLE:
+        if VisitWebpageTool:
+            tools.append(VisitWebpageTool())
+            print("✓ Added VisitWebpageTool to web_researcher")
+        if WikipediaSearchTool:
+            tools.append(WikipediaSearchTool())
+            print("✓ Added WikipediaSearchTool to web_researcher")
     
-    print(f"🔍 Web researcher tools: {len(tools)} available (focused on search & discovery)")
+    # Add smolagents vision browser tools (these are simple tools, not class instances)
+    vision_tools_added = 0
+    if SMOLAGENTS_VISION_AVAILABLE:
+        if go_back:
+            tools.append(go_back)
+            vision_tools_added += 1
+        if close_popups:
+            tools.append(close_popups)
+            vision_tools_added += 1
+        if search_item_ctrl_f:
+            tools.append(search_item_ctrl_f)
+            vision_tools_added += 1
+        
+        if vision_tools_added > 0:
+            print(f"✓ Added {vision_tools_added} smolagents vision browser tools to web_researcher")
+    
+    # Add authentication capability
+    if BrowserProfileTool:
+        tools.append(BrowserProfileTool())
+        print("✓ Added BrowserProfileTool to web_researcher (for authenticated browsing)")
+    
+    print(f"🔍 Web researcher tools: {len(tools)} available")
     return tools
 
 # Print initialization status
-print(f"🔧 GAIA Tools Status: {get_tool_status()}")
+print(f"\n🔧 GAIA Tools Status: {get_tool_status()}")
 
 # Validate dependencies and show recommendations
 dependency_status = validate_tool_dependencies()
 if dependency_status['issues']:
-    print("⚠️ Dependency issues detected:")
+    print("\n⚠️ Dependency issues detected:")
     for issue in dependency_status['issues']:
         print(f"   - {issue}")
     print("💡 Recommendations:")
     for rec in dependency_status['recommendations']:
         print(f"   - {rec}")
 else:
-    print("✅ All tool dependencies validated successfully")
+    print("\n✅ All tool dependencies validated successfully")
 
-print("🔧 Tools package initialized for GAIA Agent")
+print("\n🔧 Tools package initialized for GAIA Agent with authentication and smolagents integration")

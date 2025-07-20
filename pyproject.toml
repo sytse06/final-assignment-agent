@@ -95,6 +95,7 @@ duckduckgo-search = "^8.1.1"
 langchain-anthropic = "^0.3.17"
 chromedriver-autoinstaller = "^0.6.4"
 retrying = "^1.4.0"
+undetected-chromedriver = "^3.5.5"
 
 [tool.poetry.group.dev.dependencies]
 # Testing
