@@ -848,7 +848,7 @@ class GAIAAgent:
                     if tool_name not in existing_names:
                         web_tools.append(tool)
                 
-                print("✅ Added unique smolagents browser tools")
+                print("✅ Added smolagents vision browser tools")
             
             # Add authentication tool (check for duplicates)
             if auth_available:
