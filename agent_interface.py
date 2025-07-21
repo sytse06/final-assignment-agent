@@ -52,7 +52,7 @@ def get_groq_config() -> GAIAConfig:
         enable_csv_logging=True
     )
     
-def get_ollama_config(model_name: str = "devstral-16k") -> GAIAConfig:
+def get_ollama_config(model_name: str = "mistral-small3.2") -> GAIAConfig:
     """Get Ollama configuration with enhanced defaults"""
     return GAIAConfig(
         model_provider="ollama",

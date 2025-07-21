@@ -808,7 +808,7 @@ class GAIAAgent:
                 ],
                 model=self.specialist_model,
                 max_steps=self.config.max_agent_steps,
-                add_base_tools=True,
+                add_base_tools=False,
                 logger=logger
             )
             specialist_agents["data_analyst"] = data_analyst
@@ -922,7 +922,7 @@ class GAIAAgent:
                 tools=content_tools,
                 model=self.specialist_model,
                 max_steps=self.config.max_agent_steps,
-                add_base_tools=True,
+                add_base_tools=False,
                 logger=logger
             )
             specialist_agents["content_processor"] = content_processor
