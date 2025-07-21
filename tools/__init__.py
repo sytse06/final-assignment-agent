@@ -49,13 +49,14 @@ except ImportError as e:
 
 # Import BrowserProfileTool for authenticated browser automation
 try:
-    from .BrowserProfileTool import BrowserProfileTool, get_authenticated_browser_instructions
+    from .BrowserProfileTool import BrowserProfileTool, get_authenticated_browser_instructions, HELIUM_AVAILABLE
     BROWSER_PROFILE_AVAILABLE = True
     print("✅ BrowserProfileTool loaded")
 except ImportError as e:
     BrowserProfileTool = None
     get_authenticated_browser_instructions = None
     BROWSER_PROFILE_AVAILABLE = False
+    HELIUM_AVAILABLE = False
     
     # Specific error messages
     error_msg = str(e).lower()

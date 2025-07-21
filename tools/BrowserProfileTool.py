@@ -1,12 +1,17 @@
 import os
 import tempfile
 import json
+import time
+import random
 from typing import Optional, Dict
 from smolagents import Tool
 
 try:
     import undetected_chromedriver as uc
     from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
     DEPENDENCIES_AVAILABLE = True
 except ImportError:
     DEPENDENCIES_AVAILABLE = False
@@ -16,7 +21,6 @@ try:
     HELIUM_AVAILABLE = True
 except ImportError:
     HELIUM_AVAILABLE = False
-
 class BrowserProfileTool(Tool):
     """
     Browser profile setup tool with multiple cookie authentication strategies.
@@ -51,6 +55,7 @@ Automatically detects and uses available authentication methods.
         self._profile_dir = self._get_profile_directory()
         self._active_browser = None
         self._temp_cookie_files = []
+        self._session_ports = {}
         os.makedirs(self._profile_dir, exist_ok=True)
         
     def _get_profile_directory(self) -> str:
@@ -266,6 +271,76 @@ Automatically detects and uses available authentication methods.
             
         except Exception:
             pass
+
+    def _initialize_standard_browser(self, options, port: int, profile_name: str) -> bool:
+        """Initialize browser for YouTube/GitHub with standard handling"""
+        try:
+            print(f"🔧 Initializing {profile_name} browser (port {port})...")
+            
+            self._active_browser = uc.Chrome(
+                options=options, 
+                version_main=None,
+                port=port
+            )
+            
+            self._active_browser.current_profile = profile_name
+            self._active_browser.implicitly_wait(10)
+            self._session_ports[profile_name] = port
+            
+            # Test connection
+            self._active_browser.get("https://www.google.com")
+            time.sleep(1)
+            
+            # Set up helium integration
+            if HELIUM_AVAILABLE:
+                helium.set_driver(self._active_browser)
+            
+            print(f"✅ {profile_name} browser ready (port {port})")
+            return True
+            
+        except Exception as e:
+            print(f"❌ {profile_name} browser failed: {str(e)}")
+            return False
+    
+    def get_current_browser(self):
+        """Get current browser instance for direct selenium usage"""
+        return self._active_browser
+    
+    def is_browser_alive(self) -> bool:
+        """Check if browser is still alive and responsive"""
+        try:
+            if not self._active_browser:
+                return False
+            
+            # Test with simple operation
+            current_url = self._active_browser.current_url
+            return True
+            
+        except Exception:
+            return False
+    
+    def navigate_safely(self, url: str, max_retries: int = 3) -> bool:
+        """Navigate with retry logic and error handling"""
+        for attempt in range(max_retries):
+            try:
+                if not self.is_browser_alive():
+                    return False
+                
+                self._active_browser.get(url)
+                
+                # Wait for page to load
+                WebDriverWait(self._active_browser, 10).until(
+                    lambda driver: driver.execute_script("return document.readyState") == "complete"
+                )
+                
+                return True
+                
+            except Exception as e:
+                print(f"Navigation attempt {attempt + 1} failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                
+        return False
     
     def _cleanup_browser(self):
         """Clean up browser session"""
