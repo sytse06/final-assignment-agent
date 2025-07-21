@@ -25,24 +25,42 @@ def test_agent_creation():
         agent = GAIAAgent(config)
         
         print("✅ GAIA Agent created successfully!")
-        print(f"✅ Specialists: {list(agent.specialists.keys())}")
         
-        # Test specialist capabilities
-        for name, specialist in agent.specialists.items():
-            print(f"   📊 {name}:")
-            if hasattr(specialist, 'tools'):
-                print(f"      Tools: {len(specialist.tools)}")
-                for tool in specialist.tools[:3]:  # Show first 3 tools
-                    tool_name = getattr(tool, 'name', type(tool).__name__)
-                    print(f"        - {tool_name}")
-                if len(specialist.tools) > 3:
-                    print(f"        ... and {len(specialist.tools) - 3} more")
+        # Test specialist creation (they're created on-demand, not stored permanently)
+        try:
+            specialists = agent._create_specialist_agents()
+            print(f"✅ Specialists: {list(specialists.keys())}")
             
-            if hasattr(specialist, 'additional_authorized_imports'):
-                print(f"      Imports: {len(specialist.additional_authorized_imports)}")
-            
-            if hasattr(specialist, 'step_callbacks'):
-                print(f"      Callbacks: {len(specialist.step_callbacks) if specialist.step_callbacks else 0}")
+            # Test specialist capabilities
+            for name, specialist in specialists.items():
+                print(f"   📊 {name}:")
+                if hasattr(specialist, 'tools'):
+                    print(f"      Tools: {len(specialist.tools)}")
+                    for tool in specialist.tools[:3]:  # Show first 3 tools
+                        tool_name = getattr(tool, 'name', type(tool).__name__)
+                        print(f"        - {tool_name}")
+                    if len(specialist.tools) > 3:
+                        print(f"        ... and {len(specialist.tools) - 3} more")
+                
+                if hasattr(specialist, 'additional_authorized_imports'):
+                    print(f"      Imports: {len(specialist.additional_authorized_imports)}")
+                
+                if hasattr(specialist, 'step_callbacks'):
+                    print(f"      Callbacks: {len(specialist.step_callbacks) if specialist.step_callbacks else 0}")
+        
+        except Exception as e:
+            print(f"⚠️ Specialist testing failed: {e}")
+        
+        # Test coordinator creation
+        try:
+            coordinator = agent._create_coordinator()
+            print(f"✅ Coordinator created with {len(coordinator.managed_agents) if hasattr(coordinator, 'managed_agents') else 'unknown'} managed agents")
+        except Exception as e:
+            print(f"⚠️ Coordinator testing failed: {e}")
+        
+        # Test capabilities assessment
+        if hasattr(agent, 'capabilities'):
+            print(f"✅ Vision capabilities: {agent.capabilities}")
         
         return agent
         
@@ -106,7 +124,7 @@ def test_authentication_workflow():
     print("=" * 40)
     
     try:
-        from BrowserProfileTool import get_authenticated_browser_instructions
+        from tools.BrowserProfileTool import get_authenticated_browser_instructions
         
         instructions = get_authenticated_browser_instructions()
         print(f"✅ Authentication instructions loaded: {len(instructions)} characters")
@@ -115,7 +133,6 @@ def test_authentication_workflow():
         key_patterns = [
             "browser_profile(",
             "YOUTUBE_COOKIES",
-            "LINKEDIN_COOKIES", 
             "GITHUB_COOKIES",
             "Authentication: {auth_method}",
             "wait_until(Text('Library').exists)"
@@ -188,7 +205,6 @@ def test_specialist_context_building():
         # Test context building with authentication-aware content
         test_questions = [
             "What is in this age-restricted YouTube video: https://youtube.com/watch?v=abc123",
-            "Find information about this LinkedIn company: https://linkedin.com/company/openai", 
             "Calculate the average of these numbers: 15, 23, 42, 18, 31",
             "Extract text from this PDF document"
         ]

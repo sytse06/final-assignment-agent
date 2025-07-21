@@ -837,15 +837,25 @@ class GAIAAgent:
                 except Exception as e:
                     print(f"⚠️ Fallback tools failed: {e}")
             
-            # Add smolagents vision browser tools
+            # Add smolagents vision browser tools (check for duplicates)
             if smolagents_available:
-                web_tools.extend([go_back, close_popups, search_item_ctrl_f])
-                print("✅ Added smolagents browser tools")
+                # Get existing tool names to avoid duplicates
+                existing_names = [getattr(tool, 'name', str(tool)) for tool in web_tools]
+                browser_tools = [go_back, close_popups, search_item_ctrl_f]
+                
+                for tool in browser_tools:
+                    tool_name = getattr(tool, 'name', str(tool))
+                    if tool_name not in existing_names:
+                        web_tools.append(tool)
+                
+                print("✅ Added unique smolagents browser tools")
             
-            # Add authentication tool
+            # Add authentication tool (check for duplicates)
             if auth_available:
-                web_tools.append(BrowserProfileTool())
-                print("✅ Added authentication tool")
+                existing_names = [getattr(tool, 'name', str(tool)) for tool in web_tools]
+                if 'BrowserProfileTool' not in existing_names:
+                    web_tools.append(BrowserProfileTool())
+                    print("✅ Added authentication tool")
             
             # Create web researcher agent
             web_researcher_kwargs = {
@@ -874,7 +884,7 @@ class GAIAAgent:
                 
                 # Combine instructions
                 if smolagents_available and auth_available:
-                    from .browser_profile_tool import get_authenticated_browser_instructions
+                    from tools.browser_profile_tool import get_authenticated_browser_instructions
                     combined_instructions = helium_instructions + "\n\n" + get_authenticated_browser_instructions()
                     web_researcher._browser_instructions = combined_instructions
                     print("✅ Combined browser instructions loaded")
