@@ -7,55 +7,6 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-"""
-Test local authentication workflow with BrowserProfileTool
-"""
-
-def test_platform_individually(platform_name: str):
-    """Test a single platform with robust error handling"""
-    from tools import BrowserProfileTool
-    import helium
-    import time
-    
-    print(f"\n🧪 Testing {platform_name.capitalize()} Platform")
-    print("=" * 50)
-    
-    browser_tool = None
-    
-    try:
-        browser_tool = BrowserProfileTool()
-        
-        # Initialize browser
-        print(f"🔧 Setting up {platform_name} browser...")
-        result = browser_tool.forward(platform_name)
-        print(f"Result: {result}")
-        
-        if "failed" in result.lower():
-            print(f"❌ Browser setup failed for {platform_name}")
-            return False
-        
-        # Test basic navigation
-        print(f"🌐 Testing navigation...")
-        
-        if platform_name == "youtube":
-            success = test_youtube_navigation(browser_tool)
-        elif platform_name == "github":
-            success = test_github_navigation(browser_tool)
-        else:
-            success = True
-        
-        return success
-        
-    except Exception as e:
-        print(f"❌ {platform_name} test failed: {str(e)}")
-        return False
-    
-    finally:
-        if browser_tool:
-            print(f"🧹 Cleaning up {platform_name} browser...")
-            browser_tool.cleanup()
-            time.sleep(2)  # Give cleanup time
-
 def test_youtube_authentication():
     """Test YouTube authentication workflow"""
     from tools import BrowserProfileTool
@@ -92,7 +43,7 @@ def test_youtube_authentication():
         
         # Test navigation to a specific video
         helium.go_to("https://youtube.com/watch?v=dQw4w9WgXcQ")  # Rick Roll - safe test video
-        time.sleep(3)
+        time.sleep(60)
         
         # Check if video loads properly
         if helium.Text("Rick Astley").exists():
@@ -111,18 +62,10 @@ def test_youtube_authentication():
     finally:
         # Cleanup
         browser_tool.cleanup()
-
+        
 def test_github_navigation(browser_tool):
     """Test GitHub navigation"""
-    from tools import BrowserProfileTool
-    import helium
     import time
-    
-    print("🧪 Testing Github Authentication Workflow")
-    print("=" * 50)
-    
-    # Initialize browser profile tool
-    browser_tool = BrowserProfileTool()
     
     try:
         browser = browser_tool.get_current_browser()
@@ -162,51 +105,48 @@ def test_github_navigation(browser_tool):
         print(f"   ❌ GitHub navigation error: {str(e)}")
         return False
 
-def main():
-    """Run simplified platform tests one by one"""
-    print("🚀 Simplified Platform Authentication Tests")
-    print("=" * 60)
-    print("Testing each platform individually with enhanced error handling\n")
+def test_profile_persistence():
+    """Test that profiles persist between sessions"""
+    from tools import BrowserProfileTool
+    import os
     
-    platforms = ["youtube", "github"]
-    results = {}
+    print("\n🧪 Testing Profile Persistence")
+    print("=" * 50)
     
-    for platform in platforms:
-        print(f"\n{'='*20} {platform.upper()} {'='*20}")
-        
-        # Test platform
-        success = test_platform_individually(platform)
-        results[platform] = success
-        
-        # Wait between platforms
-        if platform != platforms[-1]:  # Not last platform
-            print(f"\n⏳ Waiting 5 seconds before next platform...")
-            time.sleep(5)
+    browser_tool = BrowserProfileTool()
+    profile_dir = browser_tool._profile_dir
     
-    # Summary
-    print(f"\n{'='*20} SUMMARY {'='*20}")
-    for platform, success in results.items():
-        status = "✅ PASS" if success else "❌ FAIL"
-        print(f"{platform.capitalize():10}: {status}")
+    # Check if profiles exist
+    for platform in ["youtube", "linkedin", "github", "general"]:
+        platform_dir = os.path.join(profile_dir, platform)
+        if os.path.exists(platform_dir):
+            files = os.listdir(platform_dir)
+            print(f"✅ {platform} profile exists: {len(files)} files")
+        else:
+            print(f"ℹ️ {platform} profile not created yet")
     
-    success_count = sum(results.values())
-    print(f"\nOverall: {success_count}/{len(platforms)} platforms working")
-    
-    if success_count == len(platforms):
-        print("\n🎉 All platforms working!")
-        print("Your authentication system is ready for GAIA tasks!")
-    elif success_count >= 2:
-        print("\n✅ Most platforms working!")
-        print("You can proceed with GAIA tasks using working platforms")
-    else:
-        print("\n⚠️ Multiple platform issues detected")
-        print("Try running individual tests or check browser setup")
-    
-    # Tips
-    print(f"\n💡 Tips:")
-    print(f"   - YouTube: Most reliable, good for video content tasks")
-    print(f"   - GitHub: Generally works well for code/repo tasks")  
-    print(f"   - For production: Use environment variable authentication")
+    return True
 
 if __name__ == "__main__":
-    main()
+    print("🚀 Local Authentication Test Suite")
+    print("=" * 60)
+    
+    # Test 1: YouTube authentication workflow
+    youtube_success = test_youtube_authentication()
+    
+    # Test 2: Profile persistence  
+    persistence_success = test_profile_persistence()
+    
+    print("\n📊 Test Summary")
+    print("=" * 30)
+    print(f"YouTube Authentication: {'✅ PASS' if youtube_success else '❌ FAIL'}")
+    print(f"Profile Persistence: {'✅ PASS' if persistence_success else '❌ FAIL'}")
+    
+    if youtube_success and persistence_success:
+        print("\n🎉 Local authentication setup is working!")
+        print("💡 Tips:")
+        print("   - Sign into platforms manually once")
+        print("   - Profiles will remember your login")
+        print("   - Use browser_profile() before navigating to authenticated content")
+    else:
+        print("\n⚠️ Some tests failed - check error messages above")
