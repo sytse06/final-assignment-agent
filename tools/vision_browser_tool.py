@@ -1,4 +1,4 @@
-# tools/vision_web_browser_tool.py
+# tools/vision_browser_tool.py
 
 import time
 from io import BytesIO
@@ -11,7 +11,7 @@ from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import WebDriverException
 
-from smolagents import Tool
+from smolagents import Tool, tool
 
 logger = logging.getLogger(__name__)
 
@@ -309,7 +309,7 @@ def setup_agentic_browser(agent, headless: bool = False) -> str:
     """
     try:
         # Initialize browser
-        browser_tool = VisionWebBrowserTool(headless=headless)
+        browser_tool = VisionBrowserTool(headless=headless)
         browser_tool._ensure_initialized()
         
         # Import helium into agent's environment

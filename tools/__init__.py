@@ -49,7 +49,7 @@ except ImportError as e:
 
 # Import BrowserProfileTool for authenticated browser automation
 try:
-    from .BrowserProfileTool import BrowserProfileTool, get_authenticated_browser_instructions, HELIUM_AVAILABLE
+    from tools.BrowserProfileTool import BrowserProfileTool, get_authenticated_browser_instructions, HELIUM_AVAILABLE
     BROWSER_PROFILE_AVAILABLE = True
     print("✅ BrowserProfileTool loaded")
 except ImportError as e:
@@ -60,7 +60,7 @@ except ImportError as e:
     
     # Specific error messages
     error_msg = str(e).lower()
-    if "no module named 'tools.browserprofiletool'" in error_msg:
+    if "no module named 'tools.BrowserProfileTool'" in error_msg:
         print("⚠️ BrowserProfileTool not found: tools/BrowserProfileTool.py missing")
         print("💡 Create tools/BrowserProfileTool.py file")
     elif "undetected_chromedriver" in error_msg:
@@ -118,8 +118,7 @@ except ImportError as e:
     SMOLAGENTS_STANDARD_AVAILABLE = False
     print(f"⚠️ smolagents standard tools not available: {e}")
 
-# DEPRECATED: Remove VisionWebBrowserTool - replaced by BrowserProfileTool + smolagents components
-# The old VisionWebBrowserTool approach has been replaced by the modular approach
+# DEPRECATED: Remove VisionWebBrowserTool - replaced by BrowserProfileTool +  VisionBrowserTool
 
 # Import LangChain research tools
 try:
@@ -162,8 +161,7 @@ __all__ = [
     # Availability flags
     'YOUTUBE_TOOL_AVAILABLE',
     'BROWSER_PROFILE_AVAILABLE',
-    'VISION_BROWSER_AVAILABLE',  # NEW
-    'SMOLAGENTS_VISION_AVAILABLE',
+    'VISION_BROWSER_AVAILABLE',
     'SMOLAGENTS_STANDARD_AVAILABLE',
     'SPEECH_TO_TEXT_AVAILABLE',
     'LANGCHAIN_TOOLS_AVAILABLE',
@@ -203,7 +201,6 @@ def get_tool_status():
         'helium_tools_count': 2 if VISION_BROWSER_AVAILABLE else 0,
         
         # smolagents components
-        'smolagents_vision_available': SMOLAGENTS_VISION_AVAILABLE,
         'smolagents_standard_available': SMOLAGENTS_STANDARD_AVAILABLE,
         
         # Research capabilities
@@ -215,15 +212,15 @@ def get_tool_status():
             ContentRetrieverTool is not None,
             YouTubeContentTool is not None,
             BrowserProfileTool is not None,
-            VisionBrowserTool is not None,  # NEW
+            VisionBrowserTool is not None,
             SPEECH_TO_TEXT_AVAILABLE
         ]),
         'total_research_tools': len(ALL_LANGCHAIN_TOOLS) if LANGCHAIN_TOOLS_AVAILABLE else 0,
         
         # Capability assessment
         'content_processing_capable': ContentRetrieverTool is not None,
-        'authenticated_browsing_capable': BrowserProfileTool is not None and SMOLAGENTS_VISION_AVAILABLE,
-        'agentic_browsing_capable': VISION_BROWSER_AVAILABLE,  # NEW
+        'authenticated_browsing_capable': BrowserProfileTool is not None,
+        'agentic_browsing_capable': VISION_BROWSER_AVAILABLE,
         'multimedia_capable': YouTubeContentTool is not None,
         'audio_processing_capable': SPEECH_TO_TEXT_AVAILABLE,
         'research_capable': langchain_status.get('research_tools_available', False)
@@ -268,15 +265,6 @@ def get_web_researcher_tools():
         vision_tools = get_vision_browser_tools()  # [close_popups, search_item_ctrl_f]
         tools.extend(vision_tools)
         print(f"✓ Added {len(vision_tools)} vision browser tools to web_researcher")
-    elif SMOLAGENTS_VISION_AVAILABLE:
-        # Fallback to legacy smolagents functions
-        legacy_tools = []
-        if smolagents_close_popups:
-            legacy_tools.append(smolagents_close_popups)
-        if smolagents_search_ctrl_f:
-            legacy_tools.append(smolagents_search_ctrl_f)
-        tools.extend(legacy_tools)
-        print(f"✓ Added {len(legacy_tools)} legacy smolagents vision tools to web_researcher")
     elif SMOLAGENTS_STANDARD_AVAILABLE:
         # Final fallback to basic web tools
         if WikipediaSearchTool:
@@ -622,10 +610,6 @@ def validate_tool_dependencies():
             missing_deps.append("requests")
         recommendations.append(f"Install missing dependencies: pip install {' '.join(missing_deps)}")
     
-    if not SMOLAGENTS_VISION_AVAILABLE:
-        issues.append("smolagents vision browser components not available")
-        recommendations.append("Update smolagents: pip install --upgrade smolagents")
-    
     # Check for content processing dependencies
     if ContentRetrieverTool is None:
         issues.append("ContentRetrieverTool not available")
@@ -639,7 +623,7 @@ def validate_tool_dependencies():
             'vision_browser_deps_available': vision_deps_available,
             'undetected_chromedriver_available': auth_deps_available,
             'helium_available': HELIUM_AVAILABLE,
-            'smolagents_vision_available': SMOLAGENTS_VISION_AVAILABLE,
+            'smolagents_vision_available': False,
             'smolagents_standard_available': SMOLAGENTS_STANDARD_AVAILABLE,
             'yt_dlp_available': yt_dlp_available,
             'requests_available': requests_available,

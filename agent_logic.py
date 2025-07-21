@@ -37,10 +37,6 @@ from smolagents import (
     PythonInterpreterTool,
     SpeechToTextTool
 )
-from smolagents.vision_web_browser import (
-    go_back, close_popups, search_item_ctrl_f, 
-    save_screenshot, helium_instructions
-)
 
 # Import retriever system
 from dev_retriever import load_gaia_retriever
@@ -50,13 +46,13 @@ from agent_logging import AgentLoggingSetup
 
 # Tools import statements
 try:
-    from tools.vision_browser_tool import VisionWebBrowserTool
+    from tools.vision_browser_tool import (VisionBrowserTool)
     VISION_BROWSER_AVAILABLE = True
-    print("✅ VisionWebBrowserTool imported")
+    print("✅ VisionBrowserTool imported")
 except ImportError as e:
-    print(f"⚠️ VisionWebBrowserTool not available: {e}")
+    print(f"⚠️ VisionBrowserTool not available: {e}")
     print("💡 Install dependencies: pip install helium selenium")
-    VisionWebBrowserTool = None
+    VisionBrowserTool = None
     VISION_BROWSER_AVAILABLE = False
 
 try:
@@ -769,19 +765,16 @@ class GAIAAgent:
         
         specialist_agents = {}
         
-        # Import smolagents components and our authentication tool
+        # Import vision browser and authentication tools
         try:
-            from smolagents.vision_web_browser import (
-                go_back, close_popups, search_item_ctrl_f, 
-                save_screenshot, helium_instructions
-            )
-            from smolagents import VisitWebpageTool, WikipediaSearchTool
-            smolagents_available = True
-            print("✅ smolagents vision browser components loaded")
+            from tools.vision_browser_tool import (VisionBrowserTool)
+            VISION_BROWSER_AVAILABLE = True
+            print("✅ VisionBrowserTool imported")
         except ImportError as e:
-            print(f"⚠️ smolagents vision browser not available: {e}")
-            smolagents_available = False
-            save_screenshot = None
+            print(f"⚠️ VisionBrowserTool not available: {e}")
+            print("💡 Install dependencies: pip install helium selenium")
+            VisionBrowserTool = None
+            VISION_BROWSER_AVAILABLE = False
         
         # Import our authentication tool
         try:
@@ -816,81 +809,46 @@ class GAIAAgent:
         except Exception as e:
             print(f"❌ Failed to create data_analyst: {e}")
             
-        # 2. Web Researcher - CodeAgent with browser automation and authentication
+        # 2. Web Researcher - Streamlined CodeAgent with vision browser
         try:
+            # Get tools from the centralized function
             web_tools = []
-            
-            # Get custom web tools
             try:
                 from tools import get_web_researcher_tools
                 web_tools = get_web_researcher_tools()
-                print(f"✅ Loaded {len(web_tools)} custom web tools")
-            except ImportError:
-                print("⚠️ Custom tools module unavailable - using fallback")
-                web_tools = []
-            
-            # Add fallback smolagents tools
-            if len(web_tools) == 0 and smolagents_available:
+                print(f"✅ Loaded {len(web_tools)} web research tools")
+            except Exception as e:
+                print(f"⚠️ Failed to load web tools: {e}")
+                # Minimal fallback
                 try:
-                    web_tools.extend([VisitWebpageTool(), WikipediaSearchTool()])
-                    print(f"✅ Added {len(web_tools)} fallback tools")
-                except Exception as e:
-                    print(f"⚠️ Fallback tools failed: {e}")
-            
-            # Add smolagents vision browser tools (check for duplicates)
-            if smolagents_available:
-                # Get existing tool names to avoid duplicates
-                existing_names = [getattr(tool, 'name', str(tool)) for tool in web_tools]
-                browser_tools = [go_back, close_popups, search_item_ctrl_f]
-                
-                for tool in browser_tools:
-                    tool_name = getattr(tool, 'name', str(tool))
-                    if tool_name not in existing_names:
-                        web_tools.append(tool)
-                
-                print("✅ Added smolagents vision browser tools")
-            
-            # Add authentication tool (check for duplicates)
-            if auth_available:
-                existing_names = [getattr(tool, 'name', str(tool)) for tool in web_tools]
-                if 'BrowserProfileTool' not in existing_names:
-                    web_tools.append(BrowserProfileTool())
-                    print("✅ Added authentication tool")
+                    from smolagents import VisitWebpageTool, WikipediaSearchTool
+                    web_tools = [VisitWebpageTool(), WikipediaSearchTool()]
+                    print(f"✅ Using {len(web_tools)} fallback tools")
+                except Exception:
+                    web_tools = []
+                    print("⚠️ No web tools available")
             
             # Create web researcher agent
-            web_researcher_kwargs = {
-                "name": "web_researcher",
-                "description": "Web search, browser automation, and authenticated content retrieval specialist",
-                "tools": web_tools,
-                "additional_authorized_imports": [
-                    "helium", "undetected_chromedriver", "selenium", "time"
+            web_researcher = CodeAgent(
+                name="web_researcher",
+                description="Web search, browser automation, and authenticated content retrieval specialist",
+                tools=web_tools,
+                additional_authorized_imports=[
+                    "helium", "selenium", "time", "requests"
                 ],
-                "model": self.specialist_model,
-                "max_steps": self.config.max_agent_steps,
-                "add_base_tools": len(web_tools) == 0,
-                "logger": logger
-            }
+                model=self.specialist_model,
+                max_steps=self.config.max_agent_steps,
+                add_base_tools=len(web_tools) == 0,  # Only if no tools loaded
+                logger=logger
+            )
             
-            # Add screenshot callback if available
-            if save_screenshot is not None:
-                web_researcher_kwargs["step_callbacks"] = [save_screenshot]
-            
-            web_researcher = CodeAgent(**web_researcher_kwargs)
-            
-            # Set up helium and browser instructions
+            # Set up helium environment for agentic browser automation
             try:
                 web_researcher.python_executor("from helium import *")
-                print("✅ Helium loaded for web researcher")
-                
-                # Combine instructions
-                if smolagents_available and auth_available:
-                    from tools.browser_profile_tool import get_authenticated_browser_instructions
-                    combined_instructions = helium_instructions + "\n\n" + get_authenticated_browser_instructions()
-                    web_researcher._browser_instructions = combined_instructions
-                    print("✅ Combined browser instructions loaded")
-                    
+                web_researcher.python_executor("import time")
+                print("✅ Helium environment ready for web researcher")
             except Exception as e:
-                print(f"⚠️ Browser setup warning: {e}")
+                print(f"⚠️ Helium setup warning: {e}")
             
             specialist_agents["web_researcher"] = web_researcher
             print(f"✅ Web Researcher: {len(web_tools)} tools")
