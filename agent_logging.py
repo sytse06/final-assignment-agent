@@ -274,18 +274,101 @@ class FileMetadataLogger:
             writer.writerow(row)
 
 # ============================================================================
+# SMOLAGENT LOGGER
+# ============================================================================
+class SmolagStepLogger:
+    """Logger for SmolagAgent detailed steps"""
+    
+    def __init__(self, log_file: str = None):
+        if log_file is None:
+            self.log_file = Path(create_timestamped_filename("gaia_smolagents_steps", "md"))
+        else:
+            if not log_file.startswith("logs/"):
+                self.log_file = Path(create_timestamped_filename(log_file.replace(".md", ""), "md"))
+            else:
+                self.log_file = Path(log_file)
+        
+        self._ensure_file()
+        print(f"🤖 SmolagAgent step logging to: {self.log_file}")
+    
+    def _ensure_file(self):
+        """Create markdown file with header"""
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        if not self.log_file.exists():
+            with open(self.log_file, 'w', encoding='utf-8') as f:
+                f.write("# SmolagAgent Detailed Execution Log\n\n")
+                f.write("Auto-generated detailed execution logs from SmolagAgent runs.\n\n")
+                f.write(f"Generated: {datetime.datetime.now().isoformat()}\n\n")
+                f.write("---\n\n")
+    
+    def log_agent_execution(self, agent_name: str, task: str, messages: List, result: str, duration: float = None):
+        """Log a complete agent execution with chat messages"""
+        
+        try:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                f.write(f"## {agent_name} - {timestamp}\n\n")
+                f.write(f"**Task**: {task}\n\n")
+                if duration:
+                    f.write(f"**Duration**: {duration:.2f}s\n\n")
+                
+                f.write("### Execution Steps\n\n")
+                
+                if messages:
+                    for i, message in enumerate(messages, 1):
+                        try:
+                            if hasattr(message, 'role') and hasattr(message, 'content'):
+                                role = str(message.role).replace('MessageRole.', '').upper()
+                                content = message.content.strip()
+                                
+                                f.write(f"#### Step {i}: {role}\n\n")
+                                
+                                # Smart formatting based on content
+                                if role == 'ASSISTANT':
+                                    if '```' in content or any(keyword in content.lower() for keyword in ['python', 'import', 'def ', 'print(']):
+                                        f.write(f"```python\n{content}\n```\n\n")
+                                    else:
+                                        f.write(f"{content}\n\n")
+                                elif role == 'USER' and any(indicator in content for indicator in ['Tool call result', 'Observation:', 'Result:']):
+                                    f.write(f"```\n{content}\n```\n\n")
+                                else:
+                                    f.write(f"{content}\n\n")
+                            else:
+                                f.write(f"#### Step {i}: Unknown Format\n\n```\n{str(message)}\n```\n\n")
+                        except Exception as msg_error:
+                            f.write(f"#### Step {i}: Error Processing Message\n\n```\nError: {msg_error}\nRaw: {str(message)}\n```\n\n")
+                else:
+                    f.write("*No detailed steps captured*\n\n")
+                
+                f.write(f"### Final Result\n\n")
+                if result:
+                    # Truncate very long results
+                    if len(result) > 1000:
+                        f.write(f"```\n{result[:1000]}...\n[Truncated - {len(result)} total characters]\n```\n\n")
+                    else:
+                        f.write(f"```\n{result}\n```\n\n")
+                else:
+                    f.write("*No result captured*\n\n")
+                
+                f.write("---\n\n")
+                
+        except Exception as e:
+            print(f"❌ Failed to log {agent_name} execution: {e}")
+
+# ============================================================================
 # AGENT LOGGING SETUP
 # ============================================================================
-
 class AgentLoggingSetup:
     """FIXED: Enhanced logging setup compatible with agent_testing.py"""
     
     def __init__(self, debug_mode: bool = True, 
-                 step_log_file: str = None,
-                 question_log_file: str = None,
-                 evaluation_log_file: str = None):
+                step_log_file: str = None,
+                question_log_file: str = None,
+                evaluation_log_file: str = None):
         
-        # Rich console for beautiful output
+        # Rich console for nice output
         self.console = Console(record=True)
         
         # Create SmolAgent logger with error handling
@@ -318,18 +401,23 @@ class AgentLoggingSetup:
         self.context_bridge_enabled = False
         self.coordinator_used = False
         
-        # CSV loggers with enhanced functionality
+        # CSV loggers
         try:
             self.step_logger = StepLogger(step_log_file)
             self.question_logger = QuestionLogger(question_log_file)
             self.evaluation_logger = EvaluationLogger(evaluation_log_file)
-            self.file_metadata_logger = FileMetadataLogger()  # NEW
+            self.file_metadata_logger = FileMetadataLogger()
+            
+            # Add SmolagAgent logger AFTER other loggers
+            self.smolag_logger = SmolagStepLogger()
+            print(f"✅ SmolagAgent logger created: {self.smolag_logger.log_file}")
             
             self.csv_loggers = {
                 'question_file': self.question_logger.log_file,
                 'step_file': self.step_logger.log_file,
                 'evaluation_file': self.evaluation_logger.log_file,
-                'file_metadata_file': self.file_metadata_logger.log_file  # NEW
+                'file_metadata_file': self.file_metadata_logger.log_file,
+                'smolag_steps_file': self.smolag_logger.log_file  # NEW - Now csv_loggers exists
             }
             
         except Exception as e:
@@ -337,14 +425,39 @@ class AgentLoggingSetup:
             self.step_logger = self._create_mock_step_logger()
             self.question_logger = self._create_mock_question_logger()
             self.evaluation_logger = self._create_mock_evaluation_logger()
-            self.file_metadata_logger = self._create_mock_file_metadata_logger()  # NEW
+            self.file_metadata_logger = self._create_mock_file_metadata_logger()
+            self.smolag_logger = self._create_mock_smolag_logger()  # NEW
             self.csv_loggers = {}
         
         self.debug_mode = debug_mode
         
-        print(f"🚀 Enhanced AgentLoggingSetup complete (Testing Framework Compatible):")
+        print(f"AgentLoggingSetup complete (Testing Framework Compatible):")
         for logger_type, file_path in self.csv_loggers.items():
             print(f"   {logger_type}: {file_path}")
+    
+    def log_smolag_execution(self, agent_name: str, task: str, agent_instance, result: str, duration: float = None):
+        """Log SmolagAgent execution details"""
+        if hasattr(self, 'smolag_logger') and self.smolag_logger:
+            try:
+                # Get detailed logs using SmolagAgent's native method
+                messages = []
+                if hasattr(agent_instance, 'write_inner_memory_from_logs'):
+                    messages = agent_instance.write_inner_memory_from_logs()
+                
+                self.smolag_logger.log_agent_execution(
+                    agent_name=agent_name, 
+                    task=task, 
+                    messages=messages, 
+                    result=result, 
+                    duration=duration
+                )
+                
+                if self.debug_mode:
+                    print(f"🤖 Logged {len(messages)} steps for {agent_name}")
+                
+            except Exception as e:
+                if self.debug_mode:
+                    print(f"⚠️ SmolagAgent logging failed for {agent_name}: {e}")
     
     def _create_mock_logger(self):
         """Create a minimal mock logger when SmolAgent logger fails"""
@@ -384,6 +497,12 @@ class AgentLoggingSetup:
             def log_file_metadata(self, **kwargs):
                 pass
         return MockFileMetadataLogger()
+    
+    def _create_mock_smolag_logger(self):
+        class MockSmolagLogger:
+            def log_agent_execution(self, **kwargs):
+                pass
+        return MockSmolagLogger()
     
     # ================================
     # ENHANCED LOGGING METHODS (Fixed for agent_testing.py compatibility)
@@ -627,15 +746,17 @@ class AgentLoggingSetup:
                 "steps": str(getattr(self.step_logger, 'log_file', 'mock')),
                 "questions": str(getattr(self.question_logger, 'log_file', 'mock')), 
                 "evaluation": str(getattr(self.evaluation_logger, 'log_file', 'mock')),
-                "file_metadata": str(getattr(self.file_metadata_logger, 'log_file', 'mock')),  # NEW
-                "framework_version": "testing_framework_compatible"
+                "file_metadata": str(getattr(self.file_metadata_logger, 'log_file', 'mock')),
+                "smolag_steps": str(getattr(self.smolag_logger, 'log_file', 'mock')),  # NEW
+                "framework_version": "smolag_integrated"  # Updated version
             }
         except Exception as e:
             return {
                 "steps": "error",
-                "questions": "error",
+                "questions": "error", 
                 "evaluation": "error",
                 "file_metadata": "error",
+                "smolag_steps": "error",
                 "error": str(e)
             }
 

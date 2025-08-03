@@ -170,6 +170,8 @@ class ContextBridge:
     execution_start: ContextVar[Optional[float]] = ContextVar('execution_start', default=None)
     active_task_id: ContextVar[Optional[str]] = ContextVar('active_task_id', default=None)
     last_error: ContextVar[Optional[str]] = ContextVar('last_error', default=None)
+    smolag_logs: ContextVar[List[Dict]] = ContextVar('smolag_logs', default_factory=list)
+    active_agent: ContextVar[Optional[str]] = ContextVar('active_agent', default=None)
     
     @classmethod
     def start_task_execution(cls, task_id: str):
@@ -177,6 +179,7 @@ class ContextBridge:
         cls.active_task_id.set(task_id)
         cls.execution_start.set(time.time())
         cls.step_counter.set(0)
+        cls.smolag_logs.set([])
         cls.last_error.set(None)
         print(f"🚀 Started execution tracking: {task_id}")
     
@@ -199,11 +202,133 @@ class ContextBridge:
     def get_execution_metrics(cls) -> Dict:
         """Get current execution metrics"""
         start_time = cls.execution_start.get()
+        smolag_logs = cls.smolag_logs.set([])
         return {
             "execution_time": time.time() - start_time if start_time else 0,
             "steps_executed": cls.step_counter.get(0),
             "current_operation": cls.current_operation.get(),
-            "last_error": cls.last_error.get()
+            "last_error": cls.last_error.get(),
+            "smolag_executions": len(smolag_logs),
+            "total_smolag_duration": sum(log.get('duration', 0) for log in smolag_logs)
+        }
+
+    @classmethod
+    def capture_smolag_execution(cls, agent_name: str, agent_instance, logging_setup=None):
+        """NEW: Capture SmolagAgent execution with detailed logging"""
+        cls.active_agent.set(agent_name)
+        
+        # Store original run method
+        if hasattr(agent_instance, '_original_run'):
+            # Already wrapped, don't wrap again
+            return agent_instance
+            
+        original_run = agent_instance.run
+        agent_instance._original_run = original_run  # Mark as wrapped
+        
+        def logged_run(*args, **kwargs):
+            start_time = time.time()
+            cls.track_operation(f"Starting {agent_name} execution")
+            
+            try:
+                # Run the agent
+                result = original_run(*args, **kwargs)
+                
+                end_time = time.time()
+                duration = end_time - start_time
+                
+                # Get task from args
+                task = args[0] if args else 'Unknown task'
+                task_preview = task[:100] + "..." if len(str(task)) > 100 else str(task)
+                
+                # Get detailed logs using SmolagAgent's native method
+                detailed_logs = []
+                try:
+                    if hasattr(agent_instance, 'write_inner_memory_from_logs'):
+                        detailed_logs = agent_instance.write_inner_memory_from_logs()
+                        print(f"🤖 Captured {len(detailed_logs)} detailed steps from {agent_name}")
+                    else:
+                        print(f"⚠️ {agent_name} doesn't support write_inner_memory_from_logs()")
+                except Exception as e:
+                    print(f"⚠️ Failed to capture detailed logs from {agent_name}: {e}")
+                
+                # Log to file using agent_logging system
+                if logging_setup and hasattr(logging_setup, 'log_smolag_execution'):
+                    try:
+                        logging_setup.log_smolag_execution(
+                            agent_name=agent_name,
+                            task=task_preview,
+                            agent_instance=agent_instance,
+                            result=str(result)[:200] + "..." if len(str(result)) > 200 else str(result),
+                            duration=duration
+                        )
+                    except Exception as e:
+                        print(f"⚠️ Failed to log {agent_name} execution: {e}")
+                
+                # Store in context for metrics
+                current_logs = cls.smolag_logs.get([])
+                current_logs.append({
+                    'agent_name': agent_name,
+                    'timestamp': start_time,
+                    'task': task_preview,
+                    'result': result,
+                    'duration': duration,
+                    'detailed_logs': detailed_logs,
+                    'step_count': len(detailed_logs)
+                })
+                cls.smolag_logs.set(current_logs)
+                
+                cls.track_operation(f"Completed {agent_name} execution ({duration:.1f}s, {len(detailed_logs)} steps)")
+                return result
+                
+            except Exception as e:
+                end_time = time.time()
+                duration = end_time - start_time
+                error_msg = f"{agent_name} execution failed: {str(e)}"
+                
+                cls.track_error(error_msg)
+                
+                # Still log the failed execution
+                current_logs = cls.smolag_logs.get([])
+                current_logs.append({
+                    'agent_name': agent_name,
+                    'timestamp': start_time,
+                    'task': args[0] if args else 'Unknown task',
+                    'result': f"ERROR: {str(e)}",
+                    'duration': duration,
+                    'detailed_logs': [],
+                    'step_count': 0,
+                    'error': True
+                })
+                cls.smolag_logs.set(current_logs)
+                
+                raise  # Re-raise the exception
+        
+        # Replace the run method
+        agent_instance.run = logged_run
+        print(f"✅ Enhanced logging enabled for {agent_name}")
+        return agent_instance
+    
+    @classmethod
+    def get_smolag_summary(cls) -> Dict:
+        """NEW: Get summary of all SmolagAgent executions"""
+        smolag_logs = cls.smolag_logs.get([])
+        
+        if not smolag_logs:
+            return {"message": "No SmolagAgent executions recorded"}
+        
+        total_duration = sum(log.get('duration', 0) for log in smolag_logs)
+        total_steps = sum(log.get('step_count', 0) for log in smolag_logs)
+        agents_used = list(set(log['agent_name'] for log in smolag_logs))
+        errors = [log for log in smolag_logs if log.get('error', False)]
+        
+        return {
+            "total_executions": len(smolag_logs),
+            "total_duration": total_duration,
+            "total_steps": total_steps,
+            "agents_used": agents_used,
+            "error_count": len(errors),
+            "average_duration": total_duration / len(smolag_logs) if smolag_logs else 0,
+            "executions": smolag_logs
         }
     
     @classmethod
@@ -211,14 +336,23 @@ class ContextBridge:
         """Clear execution tracking"""
         task_id = cls.active_task_id.get()
         metrics = cls.get_execution_metrics()
+        smolag_summary = cls.get_smolag_summary()
         
         cls.active_task_id.set(None)
         cls.execution_start.set(None)
         cls.step_counter.set(0)
         cls.current_operation.set(None)
         cls.last_error.set(None)
+        cls.smolag_logs.set([])  # NEW: Clear SmolagAgent logs
+        cls.active_agent.set(None)
         
-        print(f"🏁 Execution complete: {task_id}, {metrics['steps_executed']} steps, {metrics['execution_time']:.2f}s")
+        print(f"🏁 Execution complete: {task_id}")
+        print(f"   📊 Workflow: {metrics['steps_executed']} steps, {metrics['execution_time']:.2f}s")
+        print(f"   🤖 SmolagAgents: {smolag_summary.get('total_executions', 0)} runs, {smolag_summary.get('total_steps', 0)} steps")
+        
+        return {
+            "workflow_metrics": metrics,
+            "smolag_summary": smolag_summary
 
 def track(operation: str, config):
     """Simple tracking helper"""
@@ -912,13 +1046,31 @@ class GAIAAgent:
         return specialist_agents
         
     def _create_coordinator(self) -> CodeAgent:
-            """Create coordinator using smolagents hierarchical pattern with file-first strategy"""
+            """Create coordinator using smolagents hierarchical pattern and specialists"""
             logger = self.logging.logger if self.logging and hasattr(self.logging, 'logger') else None
             
             # Define specialists
             specialist_agents = self._create_specialist_agents()
             
-            # Enhanced coordinator with direct file access via CodeAgent imports
+            print("🔧 Enabling detailed logging for specialists...")
+            logged_specialists = {}
+            
+            for name, agent in specialist_agents.items():
+                try:
+                    # Wrap with ContextBridge logging
+                    logged_agent = ContextBridge.capture_smolag_execution(
+                        agent_name=name, 
+                        agent_instance=agent, 
+                        logging_setup=self.logging  # Pass logging setup for file output
+                    )
+                    logged_specialists[name] = logged_agent
+                    print(f"   ✅ {name}: Smolagents logging enabled")
+                    
+                except Exception as e:
+                    print(f"   ⚠️ {name}: Logging setup failed ({e}), using basic agent")
+                    logged_specialists[name] = agent
+            
+            # Enhanced coordinator with logged specialists
             coordinator = CodeAgent(
                 name="gaia_coordinator",
                 description="""GAIA task coordinator managing four specialist agents.
@@ -969,7 +1121,19 @@ class GAIAAgent:
                 logger=logger
             )
             
-            return coordinator
+                try:
+                    coordinator = ContextBridge.capture_smolag_execution(
+                        agent_name="coordinator", 
+                        agent_instance=coordinator, 
+                        logging_setup=self.logging
+                    )
+                    print("✅ Coordinator: Enhanced logging enabled")
+                    
+                except Exception as e:
+                    print(f"⚠️ Coordinator: Logging setup failed ({e}), using basic coordinator")
+                
+                print(f"🎯 Coordinator created with {len(logged_specialists)} enhanced specialists")
+                return coordinator
 
     def _build_specialist_context(self, state: GAIAState) -> str:
         """Build task context for specialist execution"""
@@ -1975,6 +2139,8 @@ class GAIAAgent:
             # Get metrics from context bridge
             execution_metrics = result.get("execution_metrics", {})
             total_steps = execution_metrics.get("steps_executed", 0)
+            smolag_summary = ContextBridge.get_smolag_summary()
+            total_steps = execution_metrics.get("steps_executed", context_metrics.get("steps_executed", 0))
             
             # Calculate performance metrics
             total_time = time.time() - total_start_time
@@ -1983,64 +2149,100 @@ class GAIAAgent:
                 "total_execution_time": total_time,
                 "total_steps": total_steps,
                 "step_source": "context_bridge",
-                "execution_metrics": execution_metrics
+                "execution_metrics": execution_metrics,
+                "context_metrics": context_metrics,
+                "smolag_summary": smolag_summary
             }
             
             success = result.get("execution_successful", True)
             final_answer = result.get("final_answer", str(result)) if isinstance(result, dict) else str(result)
             
-            # Enhanced logging
-            if self.logging:
-                self.logging.log_question_result(
-                    task_id=task_id,
-                    question=question,
-                    final_answer=final_answer,
-                    total_steps=total_steps,
-                    success=success
-                )
+        # Enhanced logging with SmolagAgent details
+        if self.logging:
+            self.logging.log_question_result(
+                task_id=task_id,
+                question=question,
+                final_answer=final_answer,
+                total_steps=total_steps,
+                success=success
+            )
+        
+        # NEW: Print summary of SmolagAgent activity
+        if smolag_summary.get("total_executions", 0) > 0:
+            print(f"\n🤖 SmolagAgent Summary:")
+            print(f"   📊 Executions: {smolag_summary['total_executions']}")
+            print(f"   🕐 Duration: {smolag_summary['total_duration']:.1f}s")
+            print(f"   📋 Steps: {smolag_summary['total_steps']}")
+            print(f"   🎯 Agents: {', '.join(smolag_summary['agents_used'])}")
             
-            return {
-                "task_id": task_id,
-                "question": question,
-                "final_answer": final_answer,
-                "raw_answer": result.get("raw_answer", ""),
-                "steps": result.get("steps", []),
-                "complexity": result.get("complexity", "unknown"),
-                "similar_examples": result.get("similar_examples", []),
-                "execution_successful": success,
-                "total_steps": total_steps,
-                "performance_metrics": performance_metrics,
-                "selected_agent": result.get("selected_agent", "unknown"),
-                "file_info": {  # File information from state
-                    "file_name": result.get("file_name", ""),
-                    "file_path": result.get("file_path", ""),
-                    "has_file": result.get("has_file", False)
-                }
-            }
-            
-        except Exception as e:
-            total_time = time.time() - total_start_time
-            error_msg = f"Processing failed: {str(e)}"
-            
-            if self.logging:
-                self.logging.log_question_result(
-                    task_id=task_id,
-                    question=question,
-                    final_answer=error_msg,
-                    total_steps=0,
-                    success=False
-                )
-            
-            return {
-                "task_id": task_id,
-                "question": question,
-                "final_answer": error_msg,
-                "execution_successful": False,
-                "total_steps": 0,
-                "performance_metrics": {"error": True, "total_execution_time": total_time},
-                "selected_agent": "error",
-                "file_info": {"file_name": "", "file_path": "", "has_file": False}
-            }
+            if self.logging and hasattr(self.logging, 'smolag_logger'):
+                print(f"   📝 Detailed logs: {self.logging.smolag_logger.log_file}")
+        
+        # Clear tracking for next question
+        final_metrics = ContextBridge.clear_tracking()
+        
+        return {
+            "task_id": task_id,
+            "question": question,
+            "final_answer": final_answer,
+            "raw_answer": result.get("raw_answer", ""),
+            "steps": result.get("steps", []),
+            "complexity": result.get("complexity", "unknown"),
+            "similar_examples": result.get("similar_examples", []),
+            "execution_successful": success,
+            "total_steps": total_steps,
+            "performance_metrics": performance_metrics,
+            "selected_agent": result.get("selected_agent", "unknown"),
+            "file_info": {
+                "file_name": result.get("file_name", ""),
+                "file_path": result.get("file_path", ""),
+                "has_file": result.get("has_file", False)
+            },
+            # NEW: Enhanced SmolagAgent information
+            "smolag_executions": smolag_summary.get("total_executions", 0),
+            "smolag_duration": smolag_summary.get("total_duration", 0),
+            "smolag_steps": smolag_summary.get("total_steps", 0),
+            "agents_used": smolag_summary.get("agents_used", []),
+            "detailed_logs_available": bool(self.logging and hasattr(self.logging, 'smolag_logger'))
+        }
+        
+    except Exception as e:
+        total_time = time.time() - total_start_time
+        error_msg = f"Processing failed: {str(e)}"
+        
+        # Still get SmolagAgent summary even on error
+        try:
+            smolag_summary = ContextBridge.get_smolag_summary()
+        except:
+            smolag_summary = {"message": "No SmolagAgent data available"}
+        
+        if self.logging:
+            self.logging.log_question_result(
+                task_id=task_id,
+                question=question,
+                final_answer=error_msg,
+                total_steps=0,
+                success=False
+            )
+        
+        # Clear tracking
+        ContextBridge.clear_tracking()
+        
+        return {
+            "task_id": task_id,
+            "question": question,
+            "final_answer": error_msg,
+            "execution_successful": False,
+            "total_steps": 0,
+            "performance_metrics": {"error": True, "total_execution_time": total_time},
+            "selected_agent": "error",
+            "file_info": {"file_name": "", "file_path": "", "has_file": False},
+            "smolag_executions": smolag_summary.get("total_executions", 0),
+            "smolag_duration": smolag_summary.get("total_duration", 0),
+            "smolag_steps": smolag_summary.get("total_steps", 0),
+            "agents_used": smolag_summary.get("agents_used", []),
+            "error_details": str(e)
+        }
 
 def safe_regex_search(pattern: str, text: str, flags=0):
     """Safe regex search with error handling"""
