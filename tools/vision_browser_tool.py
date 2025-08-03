@@ -9,11 +9,15 @@ import helium
 import PIL.Image
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.by import By
 from selenium.common.exceptions import WebDriverException
 
 from smolagents import Tool, tool
 
 logger = logging.getLogger(__name__)
+
+# Global driver
+driver = None
 
 # Helium instructions for agentic browser automation
 HELIUM_INSTRUCTIONS = """
@@ -75,7 +79,7 @@ When you have modals or cookie banners on screen, you should get rid of them bef
 class VisionBrowserTool(Tool):
     """
     Vision-enabled browser tool that provides both:
-    Agentic helium environment setup for CodeAgent direct access
+    agentic helium environment setup for CodeAgent direct access
     """
     
     name = "vision_browser"
@@ -94,15 +98,16 @@ class VisionBrowserTool(Tool):
     
     output_type = "string"
     
-    def __init__(self, headless: bool = False, window_size: tuple = (1000, 1350)):
+    def __init__(self, headless: bool = True, window_size: tuple = (1000, 1350)):
         super().__init__()
         self.headless = headless
         self.window_size = window_size
-        self.driver: Optional[webdriver.Chrome] = None
         self.is_initialized = False
     
     def forward(self, action: str, parameters: Dict[str, Any] = None) -> str:
         """Execute browser action."""
+        global driver
+        
         if parameters is None:
             parameters = {}
         
@@ -129,6 +134,8 @@ class VisionBrowserTool(Tool):
     
     def _setup_agentic_environment(self) -> str:
         """Initialize browser and return helium instructions for agentic use."""
+        global driver
+        
         self._ensure_initialized()
         
         current_url = "about:blank"
@@ -146,6 +153,8 @@ class VisionBrowserTool(Tool):
     
     def _ensure_initialized(self):
         """Ensure browser is initialized."""
+        global driver
+        
         if self.is_initialized and self.driver:
             try:
                 _ = self.driver.current_url
@@ -157,6 +166,8 @@ class VisionBrowserTool(Tool):
     
     def _initialize_browser(self):
         """Initialize Chrome browser with helium."""
+        global driver
+        
         try:
             chrome_options = webdriver.ChromeOptions()
             chrome_options.add_argument("--force-device-scale-factor=1")
@@ -239,6 +250,7 @@ class VisionBrowserTool(Tool):
     
     def cleanup(self):
         """Clean up browser."""
+        global driver
         try:
             if self.driver and self.is_initialized:
                 helium.kill_browser()
@@ -251,6 +263,8 @@ class VisionBrowserTool(Tool):
 @tool
 def close_popups() -> str:
     """Close any visible modal or pop-up using ESC key. Use this instead of trying to click X buttons."""
+    global driver
+    
     try:
         from selenium import webdriver
         from selenium.webdriver.common.keys import Keys
@@ -273,6 +287,8 @@ def search_item_ctrl_f(text: str, nth_result: int = 1) -> str:
         text: Text to search for
         nth_result: Which occurrence to jump to (default: 1)
     """
+    global driver
+    
     try:
         import helium
         from selenium.webdriver.common.by import By
@@ -307,6 +323,8 @@ def setup_agentic_browser(agent, headless: bool = False) -> str:
         instructions = setup_agentic_browser(web_researcher)
         result = agent.run(f"{task}\n\n{instructions}")
     """
+    global driver
+    
     try:
         # Initialize browser
         browser_tool = VisionBrowserTool(headless=headless)
