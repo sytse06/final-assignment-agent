@@ -92,7 +92,8 @@ class VisionBrowserTool(Tool):
         },
         "parameters": {
             "type": "object", 
-            "description": "Parameters for the action (e.g., {'url': 'https://example.com'})"
+            "description": "Parameters for the action (e.g., {'url': 'https://example.com'})",
+            "nullable": True
         }
     }
     
@@ -140,7 +141,8 @@ class VisionBrowserTool(Tool):
         
         current_url = "about:blank"
         try:
-            current_url = self.driver.current_url
+            current_url = driver.current_url
+            
         except:
             pass
         
@@ -155,9 +157,9 @@ class VisionBrowserTool(Tool):
         """Ensure browser is initialized."""
         global driver
         
-        if self.is_initialized and self.driver:
+        if self.is_initialized and driver:
             try:
-                _ = self.driver.current_url
+                _ = driver.current_url
                 return
             except WebDriverException:
                 pass
@@ -178,7 +180,7 @@ class VisionBrowserTool(Tool):
             if self.headless:
                 chrome_options.add_argument("--headless")
             
-            self.driver = helium.start_chrome(headless=self.headless, options=chrome_options)
+            driver = helium.start_chrome(headless=self.headless, options=chrome_options)
             self.is_initialized = True
             
         except Exception as e:
@@ -195,8 +197,8 @@ class VisionBrowserTool(Tool):
         try:
             helium.go_to(url)
             time.sleep(2)
-            current_url = self.driver.current_url
-            title = self.driver.title
+            current_url = driver.current_url
+            title = driver.title
             return f"✅ Navigated to {current_url} - Title: {title}"
         except Exception as e:
             return f"❌ Navigation failed: {e}"
@@ -233,7 +235,7 @@ class VisionBrowserTool(Tool):
     def _close_popups(self) -> str:
         """Close popups using ESC key."""
         try:
-            webdriver.ActionChains(self.driver).send_keys(Keys.ESCAPE).perform()
+            webdriver.ActionChains(driver).send_keys(Keys.ESCAPE).perform()
             time.sleep(1)
             return "✅ Closed popups with ESC"
         except Exception as e:
@@ -242,8 +244,8 @@ class VisionBrowserTool(Tool):
     def _get_page_info(self) -> str:
         """Get current page info."""
         try:
-            url = self.driver.current_url
-            title = self.driver.title
+            url = driver.current_url
+            title = driver.title
             return f"📄 {title} | {url}"
         except Exception as e:
             return f"❌ Get page info failed: {e}"
@@ -252,9 +254,9 @@ class VisionBrowserTool(Tool):
         """Clean up browser."""
         global driver
         try:
-            if self.driver and self.is_initialized:
+            if driver and self.is_initialized:
                 helium.kill_browser()
-                self.driver = None
+                driver = None
                 self.is_initialized = False
         except Exception:
             pass
