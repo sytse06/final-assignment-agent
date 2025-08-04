@@ -304,64 +304,413 @@ class SmolagStepLogger:
         if not self.log_file.exists():
             with open(self.log_file, 'w', encoding='utf-8') as f:
                 f.write("# SmolagAgent Detailed Execution Log\n\n")
-                f.write("Auto-generated detailed execution logs from SmolagAgent runs.\n\n")
+                f.write("Enhanced logging with ActionStep detail capture.\n\n")
                 f.write(f"Generated: {datetime.datetime.now().isoformat()}\n\n")
                 f.write("---\n\n")
     
-    def log_agent_execution(self, agent_name: str, task: str, messages: List, result: str, duration: float = None):
-        """Log a complete agent execution with chat messages"""
+    def log_agent_execution(self, agent_name: str, task: str, agent_instance, result: str, duration: float = None):
+        """CORE FIX: Log agent execution with proper step extraction"""
         
         try:
             with open(self.log_file, 'a', encoding='utf-8') as f:
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 f.write(f"## {agent_name} - {timestamp}\n\n")
-                f.write(f"**Task**: {task}\n\n")
+                f.write(f"**Task**: {task[:200]}{'...' if len(task) > 200 else ''}\n\n")
                 if duration:
                     f.write(f"**Duration**: {duration:.2f}s\n\n")
                 
+                # CRITICAL FIX: Proper step extraction with multiple methods
+                detailed_steps = self._extract_detailed_steps_multi_method(agent_instance)
+                
                 f.write("### Execution Steps\n\n")
                 
-                if messages:
-                    for i, message in enumerate(messages, 1):
-                        try:
-                            if hasattr(message, 'role') and hasattr(message, 'content'):
-                                role = str(message.role).replace('MessageRole.', '').upper()
-                                content = message.content.strip()
-                                
-                                f.write(f"#### Step {i}: {role}\n\n")
-                                
-                                # Smart formatting based on content
-                                if role == 'ASSISTANT':
-                                    if '```' in content or any(keyword in content.lower() for keyword in ['python', 'import', 'def ', 'print(']):
-                                        f.write(f"```python\n{content}\n```\n\n")
-                                    else:
-                                        f.write(f"{content}\n\n")
-                                elif role == 'USER' and any(indicator in content for indicator in ['Tool call result', 'Observation:', 'Result:']):
-                                    f.write(f"```\n{content}\n```\n\n")
-                                else:
-                                    f.write(f"{content}\n\n")
-                            else:
-                                f.write(f"#### Step {i}: Unknown Format\n\n```\n{str(message)}\n```\n\n")
-                        except Exception as msg_error:
-                            f.write(f"#### Step {i}: Error Processing Message\n\n```\nError: {msg_error}\nRaw: {str(message)}\n```\n\n")
+                if detailed_steps and len(detailed_steps) > 0:
+                    print(f"✅ Extracted {len(detailed_steps)} detailed steps from {agent_name}")
+                    self._write_detailed_steps(f, detailed_steps)
                 else:
-                    f.write("*No detailed steps captured*\n\n")
+                    print(f"⚠️ No detailed steps extracted from {agent_name}, using fallback")
+                    self._write_fallback_information(f, agent_instance)
                 
                 f.write(f"### Final Result\n\n")
                 if result:
-                    # Truncate very long results
-                    if len(result) > 1000:
-                        f.write(f"```\n{result[:1000]}...\n[Truncated - {len(result)} total characters]\n```\n\n")
-                    else:
-                        f.write(f"```\n{result}\n```\n\n")
+                    result_preview = result[:1000] + "..." if len(result) > 1000 else result
+                    f.write(f"```\n{result_preview}\n```\n\n")
                 else:
                     f.write("*No result captured*\n\n")
                 
                 f.write("---\n\n")
                 
         except Exception as e:
-            print(f"❌ Failed to log {agent_name} execution: {e}")
+            print(f"❌ Enhanced logging failed for {agent_name}: {e}")
+    
+    def _extract_detailed_steps_multi_method(self, agent_instance) -> List[Dict]:
+        """CORE FIX: Extract detailed steps using multiple extraction methods"""
+        
+        detailed_steps = []
+        extraction_success = False
+        
+        # Method 1: write_inner_memory_from_logs() - Primary SmolagAgent method
+        try:
+            if hasattr(agent_instance, 'write_inner_memory_from_logs'):
+                memory_logs = agent_instance.write_inner_memory_from_logs()
+                if memory_logs and len(memory_logs) > 0:
+                    parsed_steps = self._parse_memory_logs(memory_logs)
+                    detailed_steps.extend(parsed_steps)
+                    print(f"📝 Method 1 (write_inner_memory_from_logs): {len(parsed_steps)} steps")
+                    extraction_success = True
+        except Exception as e:
+            print(f"⚠️ Method 1 failed: {e}")
+        
+        # Method 2: Direct logs attribute access
+        if not extraction_success:
+            try:
+                if hasattr(agent_instance, 'logs') and agent_instance.logs:
+                    log_steps = self._parse_agent_logs(agent_instance.logs)
+                    if log_steps:
+                        detailed_steps.extend(log_steps)
+                        print(f"📝 Method 2 (direct logs): {len(log_steps)} steps")
+                        extraction_success = True
+            except Exception as e:
+                print(f"⚠️ Method 2 failed: {e}")
+        
+        # Method 3: Chat history extraction
+        if not extraction_success:
+            try:
+                if hasattr(agent_instance, 'chat_history') and agent_instance.chat_history:
+                    chat_steps = self._parse_chat_history(agent_instance.chat_history)
+                    if chat_steps:
+                        detailed_steps.extend(chat_steps)
+                        print(f"📝 Method 3 (chat_history): {len(chat_steps)} steps")
+                        extraction_success = True
+            except Exception as e:
+                print(f"⚠️ Method 3 failed: {e}")
+        
+        # Method 4: Step logs or execution history
+        if not extraction_success:
+            try:
+                step_logs = None
+                if hasattr(agent_instance, 'step_logs') and agent_instance.step_logs:
+                    step_logs = agent_instance.step_logs
+                elif hasattr(agent_instance, 'execution_history') and agent_instance.execution_history:
+                    step_logs = agent_instance.execution_history
+                
+                if step_logs:
+                    step_log_data = self._parse_step_logs(step_logs)
+                    if step_log_data:
+                        detailed_steps.extend(step_log_data)
+                        print(f"📝 Method 4 (step_logs): {len(step_log_data)} steps")
+                        extraction_success = True
+            except Exception as e:
+                print(f"⚠️ Method 4 failed: {e}")
+        
+        if not extraction_success:
+            print(f"⚠️ All extraction methods failed for agent type: {type(agent_instance).__name__}")
+        
+        return detailed_steps
+    
+    def _parse_memory_logs(self, memory_logs) -> List[Dict]:
+        """Parse write_inner_memory_from_logs() output"""
+        steps = []
+        
+        for i, log_entry in enumerate(memory_logs):
+            try:
+                step = {
+                    'step_number': i + 1,
+                    'type': 'memory_log',
+                    'description': self._extract_description(log_entry),
+                    'reasoning': self._extract_reasoning(log_entry),
+                    'tool_calls': self._extract_tool_calls(log_entry),
+                    'observations': self._extract_observations(log_entry),
+                    'duration': self._extract_duration(log_entry),
+                    'raw_content': str(log_entry)[:200] + "..." if len(str(log_entry)) > 200 else str(log_entry)
+                }
+                steps.append(step)
+            except Exception as e:
+                print(f"⚠️ Error parsing memory log {i}: {e}")
+                # Still add a basic step
+                steps.append({
+                    'step_number': i + 1,
+                    'type': 'memory_log_error',
+                    'description': f'Memory log {i + 1} (parse error)',
+                    'reasoning': str(log_entry)[:100],
+                    'tool_calls': [],
+                    'observations': f'Parse error: {str(e)}',
+                    'duration': None,
+                    'raw_content': str(log_entry)[:200]
+                })
+        
+        return steps
+    
+    def _parse_agent_logs(self, logs) -> List[Dict]:
+        """Parse agent.logs attribute"""
+        steps = []
+        
+        for i, log_entry in enumerate(logs):
+            try:
+                step = {
+                    'step_number': i + 1,
+                    'type': 'agent_log',
+                    'description': self._extract_description(log_entry),
+                    'reasoning': self._extract_reasoning(log_entry),
+                    'tool_calls': self._extract_tool_calls(log_entry),
+                    'observations': self._extract_observations(log_entry),
+                    'duration': self._extract_duration(log_entry),
+                    'timestamp': getattr(log_entry, 'timestamp', None),
+                    'raw_content': str(log_entry)[:200]
+                }
+                steps.append(step)
+            except Exception as e:
+                print(f"⚠️ Error parsing agent log {i}: {e}")
+        
+        return steps
+    
+    def _parse_chat_history(self, chat_history) -> List[Dict]:
+        """Parse chat_history attribute"""
+        steps = []
+        
+        for i, message in enumerate(chat_history):
+            try:
+                role = getattr(message, 'role', 'unknown')
+                content = getattr(message, 'content', str(message))
+                
+                step = {
+                    'step_number': i + 1,
+                    'type': 'chat_message',
+                    'description': f'{role} message',
+                    'reasoning': content if len(content) < 500 else content[:500] + "...",
+                    'tool_calls': self._extract_tool_calls_from_content(content),
+                    'observations': content if 'observation' in content.lower() else '',
+                    'duration': None,
+                    'role': role,
+                    'raw_content': content[:200]
+                }
+                steps.append(step)
+            except Exception as e:
+                print(f"⚠️ Error parsing chat message {i}: {e}")
+        
+        return steps
+    
+    def _parse_step_logs(self, step_logs) -> List[Dict]:
+        """Parse step_logs or execution_history"""
+        steps = []
+        
+        for i, step_log in enumerate(step_logs):
+            try:
+                step = {
+                    'step_number': i + 1,
+                    'type': 'step_log',
+                    'description': self._extract_description(step_log),
+                    'reasoning': self._extract_reasoning(step_log),
+                    'tool_calls': self._extract_tool_calls(step_log),
+                    'observations': self._extract_observations(step_log),
+                    'duration': self._extract_duration(step_log),
+                    'raw_content': str(step_log)[:200]
+                }
+                steps.append(step)
+            except Exception as e:
+                print(f"⚠️ Error parsing step log {i}: {e}")
+        
+        return steps
+    
+    def _extract_description(self, entry) -> str:
+        """Extract step description from entry"""
+        if isinstance(entry, dict):
+            return (entry.get('description') or 
+                   entry.get('action') or 
+                   entry.get('type') or 
+                   'Dict step')
+        elif hasattr(entry, 'description'):
+            return entry.description
+        elif hasattr(entry, 'action'):
+            return entry.action
+        else:
+            return f'{type(entry).__name__} step'
+    
+    def _extract_reasoning(self, entry) -> str:
+        """Extract reasoning/thinking from entry"""
+        if isinstance(entry, dict):
+            return (entry.get('reasoning') or 
+                   entry.get('llm_output') or 
+                   entry.get('thinking') or 
+                   entry.get('content') or '')
+        elif hasattr(entry, 'reasoning'):
+            return str(entry.reasoning)
+        elif hasattr(entry, 'llm_output'):
+            return str(entry.llm_output)
+        elif hasattr(entry, 'thinking'):
+            return str(entry.thinking)
+        elif hasattr(entry, 'content'):
+            return str(entry.content)
+        else:
+            return str(entry)[:200]
+    
+    def _extract_tool_calls(self, entry) -> List[Dict]:
+        """Extract tool calls from entry"""
+        tool_calls = []
+        
+        # Try multiple attribute names
+        raw_calls = None
+        if isinstance(entry, dict):
+            raw_calls = entry.get('tool_calls') or entry.get('tools')
+        elif hasattr(entry, 'tool_calls'):
+            raw_calls = entry.tool_calls
+        elif hasattr(entry, 'tools'):
+            raw_calls = entry.tools
+        
+        if raw_calls:
+            for call in raw_calls:
+                try:
+                    if isinstance(call, dict):
+                        tool_calls.append({
+                            'name': call.get('name', 'unknown'),
+                            'parameters': call.get('parameters', {}),
+                            'result': str(call.get('result', 'No result'))[:200]
+                        })
+                    else:
+                        tool_calls.append({
+                            'name': getattr(call, 'name', 'unknown'),
+                            'parameters': getattr(call, 'parameters', {}),
+                            'result': str(getattr(call, 'result', 'No result'))[:200]
+                        })
+                except Exception:
+                    tool_calls.append({
+                        'name': 'parse_error',
+                        'parameters': {},
+                        'result': str(call)[:100]
+                    })
+        
+        return tool_calls
+    
+    def _extract_tool_calls_from_content(self, content: str) -> List[Dict]:
+        """Extract tool calls from text content"""
+        tool_calls = []
+        content_lower = content.lower()
+        
+        # Simple pattern matching for common tools
+        tool_patterns = {
+            'python_executor': ['```python', 'python_executor', 'execute code'],
+            'web_search': ['search', 'google', 'web search', 'find information'],
+            'calculator': ['calculate', 'math', 'compute', 'arithmetic'],
+            'file_processor': ['read file', 'process file', 'open file', 'load data'],
+            'browser': ['navigate', 'click', 'browser', 'website', 'visit']
+        }
+        
+        for tool_name, keywords in tool_patterns.items():
+            if any(keyword in content_lower for keyword in keywords):
+                tool_calls.append({
+                    'name': tool_name,
+                    'parameters': {'inferred_from_content': True},
+                    'result': 'Tool usage detected from content'
+                })
+        
+        return tool_calls
+    
+    def _extract_observations(self, entry) -> str:
+        """Extract observations from entry"""
+        if isinstance(entry, dict):
+            return str(entry.get('observations') or entry.get('observation') or '')
+        elif hasattr(entry, 'observations'):
+            return str(entry.observations)
+        elif hasattr(entry, 'observation'):
+            return str(entry.observation)
+        else:
+            return ''
+    
+    def _extract_duration(self, entry) -> Optional[float]:
+        """Extract duration from entry"""
+        if isinstance(entry, dict):
+            return entry.get('duration')
+        elif hasattr(entry, 'duration'):
+            return entry.duration
+        else:
+            return None
+    
+    def _write_detailed_steps(self, f, detailed_steps):
+        """Write detailed step information with proper formatting"""
+        
+        for step in detailed_steps:
+            step_num = step.get('step_number', 0)
+            description = step.get('description', 'Unknown step')
+            
+            f.write(f"**Step {step_num}: {description}**\n\n")
+            
+            # Duration
+            duration = step.get('duration')
+            if duration:
+                f.write(f"- **Duration**: {duration:.2f}s\n")
+            
+            # Tool calls
+            tool_calls = step.get('tool_calls', [])
+            if tool_calls:
+                f.write(f"- **Tools Used**: ")
+                tool_names = [call.get('name', 'unknown') for call in tool_calls]
+                f.write(f"{', '.join(tool_names)}\n")
+                
+                for call in tool_calls:
+                    name = call.get('name', 'unknown')
+                    params = call.get('parameters', {})
+                    result = call.get('result', 'No result')
+                    
+                    f.write(f"  - `{name}`")
+                    if params and params != {'inferred_from_content': True}:
+                        f.write(f" with {params}")
+                    f.write(f" → {result}\n")
+            
+            # Reasoning
+            reasoning = step.get('reasoning', '')
+            if reasoning and len(reasoning.strip()) > 0:
+                reasoning_preview = reasoning[:300] + "..." if len(reasoning) > 300 else reasoning
+                f.write(f"- **Reasoning**: {reasoning_preview}\n")
+            
+            # Observations
+            observations = step.get('observations', '')
+            if observations and len(observations.strip()) > 0:
+                obs_preview = observations[:200] + "..." if len(observations) > 200 else observations
+                f.write(f"- **Observations**: {obs_preview}\n")
+            
+            # Type info for debugging
+            step_type = step.get('type', 'unknown')
+            f.write(f"- **Type**: {step_type}\n")
+            
+            f.write("\n")
+    
+    def _write_fallback_information(self, f, agent_instance):
+        """Write fallback information when step extraction fails"""
+        f.write("**Step Extraction Status**: Unable to extract detailed steps\n\n")
+        
+        # Agent information
+        f.write("**Agent Information**:\n")
+        f.write(f"- **Type**: {type(agent_instance).__name__}\n")
+        
+        if hasattr(agent_instance, 'name'):
+            f.write(f"- **Name**: {agent_instance.name}\n")
+        
+        if hasattr(agent_instance, 'description'):
+            f.write(f"- **Description**: {agent_instance.description}\n")
+        
+        # Available attributes
+        f.write("**Available Attributes**:\n")
+        attrs = [attr for attr in dir(agent_instance) if not attr.startswith('_')]
+        logging_attrs = [attr for attr in attrs if any(keyword in attr.lower() 
+                        for keyword in ['log', 'step', 'history', 'memory', 'chat'])]
+        
+        if logging_attrs:
+            f.write(f"- **Logging-related**: {', '.join(logging_attrs)}\n")
+        else:
+            f.write("- **No logging-related attributes found**\n")
+        
+        # Tools information
+        if hasattr(agent_instance, 'tools') and agent_instance.tools:
+            tool_names = []
+            for tool in agent_instance.tools:
+                if hasattr(tool, 'name'):
+                    tool_names.append(tool.name)
+                else:
+                    tool_names.append(str(tool))
+            f.write(f"- **Tools**: {', '.join(tool_names)}\n")
+        
+        f.write("\n**Note**: Consider checking SmolagAgent version and logging configuration.\n\n")
 
 # ============================================================================
 # AGENT LOGGING SETUP
