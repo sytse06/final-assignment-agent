@@ -5,7 +5,7 @@ import csv
 import datetime
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from rich.console import Console
 from smolagents import AgentLogger, LogLevel
 import json
@@ -128,7 +128,11 @@ class QuestionLogger:
     def log_question(self, task_id: str, question: str, final_answer: str, 
                     total_steps: int, success: bool, complexity: str = None, 
                     routing_path: str = None, execution_time: float = None,
-                    model_used: str = None, similar_examples_count: int = None):
+                    model_used: str = None, similar_examples_count: int = None,
+                    # NEW: Add missing parameters that log_question_result passes
+                    selected_agent: str = None, has_file: bool = False, 
+                    file_category: str = None, context_bridge_used: bool = False,
+                    coordinator_used: bool = False, file_metadata_available: bool = False):
         """Log completed question result with enhanced metadata"""
         row = [
             datetime.datetime.now().isoformat(),
@@ -142,6 +146,8 @@ class QuestionLogger:
             execution_time or 0.0,
             model_used or "unknown",
             similar_examples_count or 0
+            # Note: The additional parameters are accepted but not logged to maintain CSV compatibility
+            # This prevents the "unexpected keyword argument" error
         ]
         
         with open(self.log_file, 'a', newline='', encoding='utf-8') as f:
