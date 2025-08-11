@@ -1104,7 +1104,7 @@ class GAIAAgent:
                     "zipfile", "tarfile", "gzip", "bz2",  # Archive handling
                     
                     # File operations and inspection
-                    "open", "codecs", "chardet", "os", "sys", "io", "pathlib",
+                    "codecs", "chardet", "os", "sys", "io", "pathlib",
                     "mimetypes", "tempfile", "shutil",    # File management
                     
                     # Data preprocessing for specialist preparation
