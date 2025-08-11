@@ -674,24 +674,62 @@ class AgentLoggingSetup:
             print(f"   {logger_type}: {file_path}")
     
     def log_smolag_execution(self, agent_name: str, task: str, agent_instance, result: str, duration: float = None):
-        """Log SmolagAgent execution details"""
+        """Log SmolagAgent execution details using proper memory system"""
         if hasattr(self, 'smolag_logger') and self.smolag_logger:
             try:
-                # Get detailed logs using SmolagAgent's native method
-                messages = []
-                if hasattr(agent_instance, 'write_inner_memory_from_logs'):
-                    messages = agent_instance.write_inner_memory_from_logs()
+                # Use the proper memory system to get detailed steps
+                detailed_steps = []
+                step_count = 0
                 
+                if hasattr(agent_instance, 'memory') and hasattr(agent_instance.memory, 'steps'):
+                    steps = agent_instance.memory.steps
+                    step_count = len(steps)
+                    
+                    # Extract meaningful information from each step
+                    for step in steps:
+                        step_info = {
+                            'step_type': type(step).__name__,
+                            'step_number': getattr(step, 'step_number', None),
+                        }
+                        
+                        # ActionStep details
+                        if hasattr(step, 'model_output') and step.model_output:
+                            step_info['model_output'] = str(step.model_output)[:200] + "..." if len(str(step.model_output)) > 200 else str(step.model_output)
+                        
+                        if hasattr(step, 'tool_calls') and step.tool_calls:
+                            step_info['tool_calls'] = [tc.name for tc in step.tool_calls]
+                        
+                        if hasattr(step, 'code_action') and step.code_action:
+                            step_info['code_action'] = step.code_action[:100] + "..." if len(step.code_action) > 100 else step.code_action
+                        
+                        if hasattr(step, 'observations') and step.observations:
+                            step_info['observations'] = step.observations[:200] + "..." if len(step.observations) > 200 else step.observations
+                        
+                        # PlanningStep details
+                        if hasattr(step, 'plan') and step.plan:
+                            step_info['plan'] = step.plan[:200] + "..." if len(step.plan) > 200 else step.plan
+                        
+                        # TaskStep details
+                        if hasattr(step, 'task') and step.task:
+                            step_info['task'] = step.task[:200] + "..." if len(step.task) > 200 else step.task
+                        
+                        # Timing information
+                        if hasattr(step, 'timing') and step.timing:
+                            step_info['duration'] = getattr(step.timing, 'duration', None)
+                        
+                        detailed_steps.append(step_info)
+                
+                # Call log_agent_execution with the parameters it actually accepts
                 self.smolag_logger.log_agent_execution(
                     agent_name=agent_name, 
                     task=task, 
-                    messages=messages, 
+                    agent_instance=agent_instance,
                     result=result, 
                     duration=duration
                 )
                 
                 if self.debug_mode:
-                    print(f"🤖 Logged {len(messages)} steps for {agent_name}")
+                    print(f"🤖 Logged {agent_name}: {step_count} memory steps, {len(detailed_steps)} detailed steps")
                 
             except Exception as e:
                 if self.debug_mode:

@@ -8448,14 +8448,14 @@ files = [
 
 [[package]]
 name = "smolagents"
-version = "1.19.0"
+version = "1.21.1"
 description = "🤗 smolagents: a barebones library for agents. Agents write python code to call tools or orchestrate other agents."
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "smolagents-1.19.0-py3-none-any.whl", hash = "sha256:e33be79a85059613a771e29af8f24f1ed2f0d0d84c02bb1c503d655f1de5f4d3"},
-    {file = "smolagents-1.19.0.tar.gz", hash = "sha256:e05426d59950f6ee4d082b5704f3831c17dbef11fa739a1dfaae0ccbaee175fc"},
+    {file = "smolagents-1.21.1-py3-none-any.whl", hash = "sha256:9490bc16a1efd326132daef4add6c09099aa5d652777332239f62d3b75f55761"},
+    {file = "smolagents-1.21.1.tar.gz", hash = "sha256:bd8a26868cb294949aa8ced954f90f1f1ece96f417fc60c6be1ac6d2f762f130"},
 ]
 
 [package.dependencies]
@@ -8480,13 +8480,13 @@ docker = ["docker (>=7.1.0)", "websocket-client"]
 e2b = ["e2b-code-interpreter (>=1.0.3)", "python-dotenv (>=1.0.1)"]
 gradio = ["gradio (>=5.14.0)"]
 litellm = ["litellm (>=1.60.2)"]
-mcp = ["mcp", "mcpadapt (>=0.1.8)"]
+mcp = ["mcp", "mcpadapt (>=0.1.11)"]
 mlx-lm = ["mlx-lm"]
 openai = ["openai (>=1.58.1)"]
 quality = ["ruff (>=0.9.0)"]
 telemetry = ["arize-phoenix", "openinference-instrumentation-smolagents (>=0.1.4)", "opentelemetry-exporter-otlp", "opentelemetry-sdk"]
-test = ["Wikipedia-API (>=0.8.1)", "ipython (>=8.31.0)", "pandas (>=2.2.3)", "pytest (>=8.1.0)", "pytest-datadir", "python-dotenv (>=1.0.1)", "rank-bm25", "smolagents[all]"]
-toolkit = ["duckduckgo-search (>=6.3.7)", "markdownify (>=0.14.1)"]
+test = ["Wikipedia-API (>=0.8.1)", "ipython (>=8.31.0)", "mlx[cpu]", "pandas (>=2.2.3)", "pytest (>=8.1.0)", "pytest-datadir", "pytest-timeout", "python-dotenv (>=1.0.1)", "rank-bm25", "smolagents[all]"]
+toolkit = ["ddgs (>=9.0.0)", "markdownify (>=0.14.1)"]
 torch = ["numpy (>=1.21.2)", "torch", "torchvision"]
 transformers = ["accelerate", "smolagents[torch]", "transformers (>=4.0.0)"]
 vision = ["helium", "selenium"]
